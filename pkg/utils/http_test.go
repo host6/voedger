@@ -233,3 +233,54 @@ func TestHTTP(t *testing.T) {
 
 	<-done
 }
+
+func TestFederationFunc(t *testing.T) {
+	require := require.New(t)
+
+	listener, err := net.Listen("tcp", ServerAddress(0))
+	require.NoError(err)
+	var handler func(w http.ResponseWriter, r *http.Request)
+	server := &http.Server{
+		Addr: ":0",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			handler(w, r)
+		}),
+	}
+	done := make(chan interface{})
+	go func() {
+		defer close(done)
+		if err := server.Serve(listener); err != nil && err != http.ErrServerClosed {
+			require.NoError(err)
+		}
+	}()
+
+	port := listener.Addr().(*net.TCPAddr).Port
+	federationURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+	require.NoError(err)
+
+	t.Run("basic", func(t *testing.T) {
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			body, err := io.ReadAll(r.Body)
+			require.NoError(err)
+			require.Equal(`{"fld":"val"}`, string(body))
+			w.Write([]byte(`{
+				"NewIDs":{"1":2},
+				"sections":[{"type":"","elements":[[[["hello, world"]]]]}],
+				"CurrentWLogOffset":13,
+				"Result":{"Int":42,"Str":"Str","sys.Container":"","sys.QName":"app1pkg.TestCmdResult"}
+			}`))
+		}
+		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`)
+		require.NoError(err)
+		resp.Println()
+		require.Equal(int64(13), resp.CurrentWLogOffset)
+		require.Equal("hello, world", resp.SectionRow()[0].(string))
+		require.Equal(map[string]interface{}{
+			"Int":           float64(42),
+			"Str":           "Str",
+			"sys.Container": "",
+			"sys.QName":     "app1pkg.TestCmdResult",
+		}, resp.CmdResult)
+		require.Equal(int64(2), resp.NewID())
+	})
+}
