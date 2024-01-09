@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
@@ -283,4 +284,119 @@ func TestFederationFunc(t *testing.T) {
 		}, resp.CmdResult)
 		require.Equal(int64(2), resp.NewID())
 	})
+
+	t.Run("unexpected error", func(t *testing.T) {
+		cases := []struct {
+			name        string
+			handler     func(body string, w http.ResponseWriter, r *http.Request)
+			expectedErr error
+			opts        []ReqOptFunc
+		}{
+			{
+				name: "basic error",
+				handler: func(body string, w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"sys.SomeErrorQName","Data":"additional data"}}`))
+				},
+				expectedErr: FuncError{
+					SysError: SysError{
+						HTTPStatus: 500,
+						QName:      appdef.NewQName("sys", "SomeErrorQName"),
+						Message:    "something gone wrong",
+						Data:       "additional data",
+					},
+					ExpectedHTTPCodes: []int{http.StatusOK},
+				},
+			},
+			{
+				name: "wrong QName",
+				handler: func(body string, w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"errored QName","Data":"additional data"}}`))
+				},
+				expectedErr: FuncError{
+					SysError: SysError{
+						HTTPStatus: 500,
+						QName:      appdef.NewQName("<err>", "errored QName"),
+						Message:    "something gone wrong",
+						Data:       "additional data",
+					},
+					ExpectedHTTPCodes: []int{http.StatusOK},
+				},
+			},
+			{
+				name: "wrong response JSON",
+				handler: func(body string, w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(`wrong JSON`))
+				},
+				expectedErr: errors.New("invalid character 'w' looking for beginning of value"),
+			},
+			{
+				name: "non-OK status is expected",
+				handler: func(body string, w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"errored QName","Data":"additional data"}}`))
+				},
+				expectedErr: FuncError{
+					SysError: SysError{
+						HTTPStatus: http.StatusOK,
+					},
+					ExpectedHTTPCodes: []int{http.StatusInternalServerError},
+				},
+				opts: []ReqOptFunc{WithExpectedCode(http.StatusInternalServerError)},
+			},
+		}
+
+		for _, c := range cases {
+			t.Run(c.name, func(t *testing.T) {
+				handler = func(w http.ResponseWriter, r *http.Request) {
+					body, err := io.ReadAll(r.Body)
+					require.NoError(err)
+					c.handler(string(body), w, r)
+				}
+				resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, c.opts...)
+				var fe FuncError
+				if errors.As(err, &fe) {
+					require.Equal(c.expectedErr, err)
+				} else {
+					require.Equal(c.expectedErr.Error(), err.Error())
+				}
+				log.Println(err.Error())
+				require.Nil(resp)
+			})
+		}
+	})
+
+	t.Run("expected error", func(t *testing.T) {
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			_, err := io.ReadAll(r.Body)
+			require.NoError(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"sys.SomeErrorQName","Data":"additional data"}}`))
+		}
+		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError))
+		require.NoError(err)
+		resp.Println()
+		resp.RequireContainsError(t, "something")
+		resp.RequireError(t, "something gone wrong")
+	})
+
+	t.Run("sections", func(t *testing.T) {
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			_, err := io.ReadAll(r.Body)
+			require.NoError(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(`{"sections":[{"type":"","elements":[[[["Hello", "world"]]],[[["next"]]]]}]}`))
+		}
+		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError))
+		require.NoError(err)
+		resp.Println()
+		require.Equal("Hello", resp.SectionRow()[0].(string))
+		require.Equal("world", resp.SectionRow()[1].(string))
+		require.Equal("next", resp.SectionRow(1)[0].(string))
+	})
+
+
+
 }

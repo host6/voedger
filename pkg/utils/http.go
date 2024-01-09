@@ -26,6 +26,7 @@ import (
 	"github.com/untillpro/goutils/logger"
 	"golang.org/x/exp/slices"
 
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -411,10 +412,16 @@ func FederationFunc(federationUrl *url.URL, relativeURL string, body string, opt
 			}
 		}
 		sysErrorMap := m["sys.Error"].(map[string]interface{})
+		errQName, err := appdef.ParseQName(sysErrorMap["QName"].(string))
+		if err != nil {
+			errQName = appdef.NewQName("<err>", sysErrorMap["QName"].(string))
+		}
 		return nil, FuncError{
 			SysError: SysError{
 				HTTPStatus: int(sysErrorMap["HTTPStatus"].(float64)),
 				Message:    sysErrorMap["Message"].(string),
+				QName:      errQName,
+				Data:       sysErrorMap["Data"].(string),
 			},
 			ExpectedHTTPCodes: httpResp.expectedHTTPCodes,
 		}
