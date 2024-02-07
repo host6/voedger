@@ -78,10 +78,7 @@ func ProvideCluster(vvmCtx context.Context, vvmConfig *VVMConfig, vvmIdx VVMIdxT
 		return nil, nil, err
 	}
 	iAppStorageUncachingProviderFactory := provideIAppStorageUncachingProviderFactory(iAppStorageFactory)
-	iAppStorageProvider, err := provideCachingAppStorageProvider(vvmConfig, storageCacheSizeType, iMetrics, vvmName, iAppStorageUncachingProviderFactory)
-	if err != nil {
-		return nil, nil, err
-	}
+	iAppStorageProvider := provideCachingAppStorageProvider(vvmConfig, storageCacheSizeType, iMetrics, vvmName, iAppStorageUncachingProviderFactory)
 	iAppStructsProvider := istructsmem.Provide(appConfigsType, bucketsFactoryType, iAppTokensFactory, iAppStorageProvider)
 	iAppPartitions, cleanup, err := appparts.New(iAppStructsProvider)
 	if err != nil {
@@ -402,10 +399,12 @@ func provideChannelGroups(cfg *VVMConfig) (res []iprocbusmem.ChannelGroup) {
 }
 
 func provideCachingAppStorageProvider(vvmCfg *VVMConfig, storageCacheSize StorageCacheSizeType, metrics2 imetrics.IMetrics,
-	vvmName commandprocessor.VVMName, uncachingProivder IAppStorageUncachingProviderFactory) (istorage.IAppStorageProvider, error) {
+	vvmName commandprocessor.VVMName, uncachingProivder IAppStorageUncachingProviderFactory) istorage.IAppStorageProvider {
+	if vvmCfg.StorageProvider != nil {
+		return vvmCfg.StorageProvider
+	}
 	aspNonCaching := uncachingProivder()
-	res := istoragecache.Provide(int(storageCacheSize), aspNonCaching, metrics2, string(vvmName))
-	return res, nil
+	return istoragecache.Provide(int(storageCacheSize), aspNonCaching, metrics2, string(vvmName))
 }
 
 // синхронный актуализатор один на приложение из-за storages, которые у каждого приложения свои

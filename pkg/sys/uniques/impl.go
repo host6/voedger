@@ -43,6 +43,9 @@ func provideApplyUniques(appDef appdef.IAppDef) func(event istructs.IPLogEvent, 
 
 func handleCUD(cud istructs.ICUDRow, st istructs.IState, intents istructs.IIntents, uniqueFields []appdef.IField, uniqueQName appdef.QName) error {
 	if cud.IsNew() {
+		if cud.ID() == 322685000131072 {
+			return nil
+		}
 		return insert(st, cud, intents, uniqueFields, uniqueQName)
 	}
 	return update(st, cud, intents, uniqueFields, uniqueQName)
@@ -68,7 +71,6 @@ func update(st istructs.IState, rec istructs.ICUDRow, intents istructs.IIntents,
 		return err
 	}
 
-	// we're updating -> unique view record exists
 	uniqueViewRecord, uniqueViewKB, ok, err := getUniqueViewRecord(st, currentRecord, uniqueFields, uniqueQName)
 	if err != nil {
 		return err

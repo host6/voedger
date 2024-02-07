@@ -362,10 +362,12 @@ func provideChannelGroups(cfg *VVMConfig) (res []iprocbusmem.ChannelGroup) {
 }
 
 func provideCachingAppStorageProvider(vvmCfg *VVMConfig, storageCacheSize StorageCacheSizeType, metrics imetrics.IMetrics,
-	vvmName commandprocessor.VVMName, uncachingProivder IAppStorageUncachingProviderFactory) (istorage.IAppStorageProvider, error) {
+	vvmName commandprocessor.VVMName, uncachingProivder IAppStorageUncachingProviderFactory) istorage.IAppStorageProvider {
+	if vvmCfg.StorageProvider != nil {
+		return vvmCfg.StorageProvider
+	}
 	aspNonCaching := uncachingProivder()
-	res := istoragecache.Provide(int(storageCacheSize), aspNonCaching, metrics, string(vvmName))
-	return res, nil
+	return istoragecache.Provide(int(storageCacheSize), aspNonCaching, metrics, string(vvmName))
 }
 
 // синхронный актуализатор один на приложение из-за storages, которые у каждого приложения свои

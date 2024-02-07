@@ -28,21 +28,21 @@ const (
 	TestEmail       = "123@123.com"
 	TestEmail2      = "124@124.com"
 	TestServicePort = 10000
-	app1PkgName     = "app1pkg"
+	App1PkgName     = "app1pkg"
 )
 
 var (
-	QNameApp1_TestWSKind                     = appdef.NewQName(app1PkgName, "test_ws")
-	QNameTestView                            = appdef.NewQName(app1PkgName, "View")
-	QNameApp1_TestEmailVerificationDoc       = appdef.NewQName(app1PkgName, "Doc")
-	QNameApp1_DocConstraints                 = appdef.NewQName(app1PkgName, "DocConstraints")
-	QNameApp1_DocConstraintsString           = appdef.NewQName(app1PkgName, "DocConstraintsString")
-	QNameApp1_DocConstraintsFewUniques       = appdef.NewQName(app1PkgName, "DocConstraintsFewUniques")
-	QNameApp1_DocConstraintsOldAndNewUniques = appdef.NewQName(app1PkgName, "DocConstraintsOldAndNewUniques")
-	QNameCmdRated                            = appdef.NewQName(app1PkgName, "RatedCmd")
-	QNameQryRated                            = appdef.NewQName(app1PkgName, "RatedQry")
-	QNameODoc1                               = appdef.NewQName(app1PkgName, "odoc1")
-	QNameODoc2                               = appdef.NewQName(app1PkgName, "odoc2")
+	QNameApp1_TestWSKind                     = appdef.NewQName(App1PkgName, "test_ws")
+	QNameTestView                            = appdef.NewQName(App1PkgName, "View")
+	QNameApp1_TestEmailVerificationDoc       = appdef.NewQName(App1PkgName, "Doc")
+	QNameApp1_DocConstraints                 = appdef.NewQName(App1PkgName, "DocConstraints")
+	QNameApp1_DocConstraintsString           = appdef.NewQName(App1PkgName, "DocConstraintsString")
+	QNameApp1_DocConstraintsFewUniques       = appdef.NewQName(App1PkgName, "DocConstraintsFewUniques")
+	QNameApp1_DocConstraintsOldAndNewUniques = appdef.NewQName(App1PkgName, "DocConstraintsOldAndNewUniques")
+	QNameCmdRated                            = appdef.NewQName(App1PkgName, "RatedCmd")
+	QNameQryRated                            = appdef.NewQName(App1PkgName, "RatedQry")
+	QNameODoc1                               = appdef.NewQName(App1PkgName, "odoc1")
+	QNameODoc2                               = appdef.NewQName(App1PkgName, "odoc2")
 	TestSMTPCfg                              = smtp.Cfg{
 		Username: "username@gmail.com",
 	}
@@ -124,7 +124,7 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 	cfg.FunctionRateLimits.AddWorkspaceLimit(QNameQryRated, maxRateLimit4PerHour)
 
 	cfg.Resources.Add(istructsmem.NewQueryFunction(
-		appdef.NewQName(app1PkgName, "MockQry"),
+		appdef.NewQName(App1PkgName, "MockQry"),
 		func(_ context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 			input := args.ArgumentObject.AsString(field_Input)
 			return MockQryExec(input, callback)
@@ -132,16 +132,16 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 	))
 
 	cfg.Resources.Add(istructsmem.NewCommandFunction(
-		appdef.NewQName(app1PkgName, "MockCmd"),
+		appdef.NewQName(App1PkgName, "MockCmd"),
 		func(args istructs.ExecCommandArgs) (err error) {
 			input := args.ArgumentObject.AsString(field_Input)
 			return MockCmdExec(input)
 		},
 	))
 
-	testCmdResult := appdef.NewQName(app1PkgName, "TestCmdResult")
+	testCmdResult := appdef.NewQName(App1PkgName, "TestCmdResult")
 	cfg.Resources.Add(istructsmem.NewCommandFunction(
-		appdef.NewQName(app1PkgName, "TestCmd"),
+		appdef.NewQName(App1PkgName, "TestCmd"),
 		func(args istructs.ExecCommandArgs) (err error) {
 			key, err := args.State.KeyBuilder(state.Result, testCmdResult)
 			if err != nil {
@@ -170,12 +170,12 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 	))
 
 	cfg.Resources.Add(istructsmem.NewCommandFunction(
-		appdef.NewQName(app1PkgName, "CmdODocOne"),
+		appdef.NewQName(App1PkgName, "CmdODocOne"),
 		istructsmem.NullCommandExec,
 	))
 
 	cfg.Resources.Add(istructsmem.NewCommandFunction(
-		appdef.NewQName(app1PkgName, "CmdODocTwo"),
+		appdef.NewQName(App1PkgName, "CmdODocTwo"),
 		istructsmem.NullCommandExec,
 	))
 

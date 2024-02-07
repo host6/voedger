@@ -138,6 +138,7 @@ type VVMConfig struct {
 	FederationURL       *url.URL
 	ActualizerStateOpts []state.ActualizerStateOptFunc
 	SecretsReader       isecrets.ISecretReader
+	StorageProvider     istorage.IAppStorageProvider // not nil in tests only
 }
 
 type resultSenderErrorFirst struct {

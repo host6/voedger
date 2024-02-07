@@ -6,18 +6,28 @@ package sys_it
 
 import (
 	"bytes"
+	"embed"
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
+	"runtime/debug"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/apps"
+	"github.com/voedger/voedger/pkg/extensionpoints"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/istructsmem"
+	"github.com/voedger/voedger/pkg/parser"
+	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/uniques"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	it "github.com/voedger/voedger/pkg/vit"
+	"github.com/voedger/voedger/pkg/vvm"
 )
 
 func getUniqueNumber(vit *it.VIT) (int, string) {
@@ -319,3 +329,4 @@ func TestBasicUsage_UNIQUEFIELD(t *testing.T) {
 	body = fmt.Sprintf(`{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.DocConstraintsOldAndNewUniques","Int":%d,"Str":"%s"}}]}`, num, string(newBts))
 	vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect409(it.QNameApp1_DocConstraintsOldAndNewUniques.String()))
 }
+
