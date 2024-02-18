@@ -15,11 +15,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/iblobstorage"
-	"github.com/voedger/voedger/pkg/istorage"
-	"github.com/voedger/voedger/pkg/istorageimpl"
-	istructs "github.com/voedger/voedger/pkg/istructs"
-	coreutils "github.com/voedger/voedger/pkg/utils"
+	"github.com/voedger/voedger/pkg/istorage/mem"
+	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
+	"github.com/voedger/voedger/pkg/istructs"
 )
 
 var (
@@ -42,11 +42,11 @@ func TestBasicUsage(t *testing.T) {
 	)
 	require := require.New(t)
 
-	asf := istorage.ProvideMem()
+	asf := mem.Provide()
 	asp := istorageimpl.Provide(asf)
 	storage, err := asp.AppStorage(istructs.AppQName_test1_app1)
 	require.NoError(err)
-	blobber := Provide(storage, coreutils.TimeFunc(func() time.Time { return time.Now() }))
+	blobber := Provide(storage, time.Now)
 	ctx := context.TODO()
 	reader := provideTestData()
 
@@ -72,7 +72,7 @@ func TestBasicUsage(t *testing.T) {
 	t.Run("Read blob status, return must be without errors", func(t *testing.T) {
 		bs, err := blobber.QueryBLOBState(ctx, key)
 		require.NoError(err)
-		require.Equal(bs.Status, iblobstorage.BLOBStatus_Completed)
+		require.Equal(iblobstorage.BLOBStatus_Completed, bs.Status)
 	})
 
 	t.Run("Read blob that present in storage and compare with reference", func(t *testing.T) {
@@ -116,11 +116,11 @@ func TestQuotaExceed(t *testing.T) {
 		}
 	)
 	require := require.New(t)
-	asf := istorage.ProvideMem()
+	asf := mem.Provide()
 	asp := istorageimpl.Provide(asf)
 	storage, err := asp.AppStorage(istructs.AppQName_test1_app1)
 	require.NoError(err)
-	blobber := Provide(storage, coreutils.TimeFunc(func() time.Time { return time.Now() }))
+	blobber := Provide(storage, time.Now)
 	reader := provideTestData()
 	ctx := context.Background()
 	// Quota (maxSize -1 = 19265) assigned to reader less then filesize logo.png (maxSize)

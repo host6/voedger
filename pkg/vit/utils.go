@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"math"
 	"mime"
 	"net/url"
 	"strconv"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/untillpro/goutils/logger"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/registry"
@@ -144,7 +146,7 @@ func (vit *VIT) waitForWorkspace(wsName string, owner *Principal, respGetter fun
 		wsidIdx       = 5
 		wsErrIdx      = 6
 	)
-	deadline := time.Now().Add(workspaceInitAwaitTimeout)
+	deadline := time.Now().Add(getWorkspaceInitAwaitTimeout())
 	logger.Verbose("workspace", wsName, "awaiting started")
 	for time.Now().Before(deadline) {
 		body := fmt.Sprintf(`
@@ -180,6 +182,7 @@ func (vit *VIT) waitForWorkspace(wsName string, owner *Principal, respGetter fun
 					TemplateName:   resp.SectionRow()[tmplNameIdx].(string),
 					TemplateParams: resp.SectionRow()[tmplParamsIdx].(string),
 					ClusterID:      istructs.MainClusterID,
+					ownerLoginName: owner.Name,
 				},
 				WSID:    wsid,
 				WSError: wsError,
@@ -197,8 +200,8 @@ func (vit *VIT) WaitForWorkspace(wsName string, owner *Principal) (ws *AppWorksp
 	})
 }
 
-func (vit *VIT) WaitForChildWorkspace(parentWS *AppWorkspace, wsName string, owner *Principal) (ws *AppWorkspace) {
-	return vit.waitForWorkspace(wsName, owner, func(owner *Principal, body string) *coreutils.FuncResponse {
+func (vit *VIT) WaitForChildWorkspace(parentWS *AppWorkspace, wsName string) (ws *AppWorkspace) {
+	return vit.waitForWorkspace(wsName, parentWS.Owner, func(owner *Principal, body string) *coreutils.FuncResponse {
 		return vit.PostWS(parentWS, "q.sys.QueryChildWorkspaceByName", body)
 	})
 }
@@ -217,7 +220,7 @@ func (vit *VIT) SignIn(login Login, optFuncs ...signInOptFunc) (prn *Principal) 
 	for _, opt := range optFuncs {
 		opt(opts)
 	}
-	deadline := time.Now().Add(workspaceInitAwaitTimeout)
+	deadline := time.Now().Add(getWorkspaceInitAwaitTimeout())
 	for time.Now().Before(deadline) {
 		body := fmt.Sprintf(`
 			{
@@ -254,7 +257,8 @@ func (vit *VIT) SignIn(login Login, optFuncs ...signInOptFunc) (prn *Principal) 
 	return nil
 }
 
-func (vit *VIT) InitChildWorkspace(wsd WSParams, owner *Principal) {
+// owner could be *vit.Principal or *vit.AppWorkspace
+func (vit *VIT) InitChildWorkspace(wsd WSParams, ownerIntf interface{}) {
 	vit.T.Helper()
 	body := fmt.Sprintf(`{
 		"args": {
@@ -267,10 +271,17 @@ func (vit *VIT) InitChildWorkspace(wsd WSParams, owner *Principal) {
 		}
 	}`, wsd.Name, wsd.Kind.String(), wsd.InitDataJSON, wsd.TemplateName, wsd.TemplateParams, wsd.ClusterID)
 
-	vit.PostProfile(owner, "c.sys.InitChildWorkspace", body)
+	switch owner := ownerIntf.(type) {
+	case *Principal:
+		vit.PostProfile(owner, "c.sys.InitChildWorkspace", body)
+	case *AppWorkspace:
+		vit.PostWS(owner, "c.sys.InitChildWorkspace", body)
+	default:
+		panic("ownerIntf could be vit.*Principal or vit.*AppWorkspace only")
+	}
 }
 
-func DummyWSParams(wsName string) WSParams {
+func SimpleWSParams(wsName string) WSParams {
 	return WSParams{
 		Name:         wsName,
 		Kind:         QNameApp1_TestWSKind,
@@ -383,13 +394,21 @@ func (vit *VIT) GetAny(entity string, ws *AppWorkspace) istructs.RecordID {
 
 func NewLogin(name, pwd string, appQName istructs.AppQName, subjectKind istructs.SubjectKindType, clusterID istructs.ClusterID) Login {
 	pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, name, istructs.MainClusterID)
-	return Login{name, pwd, pseudoWSID, appQName, subjectKind, clusterID, map[appdef.QName]map[string]interface{}{}}
+	return Login{name, pwd, pseudoWSID, appQName, subjectKind, clusterID, map[appdef.QName]func(verifiedValues map[string]string) map[string]interface{}{}}
 }
 
-func TestDeadline(nonTestDeadline time.Duration) time.Time {
+func TestDeadline() time.Time {
 	deadline := time.Now().Add(5 * time.Second)
 	if coreutils.IsDebug() {
 		deadline = deadline.Add(time.Hour)
 	}
 	return deadline
+}
+
+func getWorkspaceInitAwaitTimeout() time.Duration {
+	if coreutils.IsDebug() {
+		// so long for Test_Race_RestaurantIntenseUsage with -race
+		return math.MaxInt
+	}
+	return defaultWorkspaceAwaitTimeout
 }

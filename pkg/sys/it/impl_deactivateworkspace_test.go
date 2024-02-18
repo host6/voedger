@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -28,7 +29,7 @@ func TestBasicUsage_InitiateDeactivateWorkspace(t *testing.T) {
 	wsName := vit.NextName()
 
 	prn1 := vit.GetPrincipal(istructs.AppQName_test1_app1, it.TestEmail)
-	wsp := it.DummyWSParams(wsName)
+	wsp := it.SimpleWSParams(wsName)
 
 	ws := vit.CreateWorkspace(wsp, prn1)
 
@@ -52,7 +53,7 @@ func TestBasicUsage_InitiateDeactivateWorkspace(t *testing.T) {
 }
 
 func waitForDeactivate(vit *it.VIT, ws *it.AppWorkspace) {
-	deadline := it.TestDeadline(5 * time.Second)
+	deadline := it.TestDeadline()
 	for time.Now().Before(deadline) {
 		resp := vit.PostWSSys(ws, "q.sys.Collection", `{"args":{"Schema":"sys.WorkspaceDescriptor"},"elements":[{"fields":["Status"]}]}`)
 		if int32(resp.SectionRow()[0].(float64)) == int32(authnz.WorkspaceStatus_Inactive) {
@@ -71,7 +72,7 @@ func TestDeactivateJoinedWorkspace(t *testing.T) {
 	wsName1 := vit.NextName()
 	prn1 := vit.GetPrincipal(istructs.AppQName_test1_app1, it.TestEmail)
 	prn2 := vit.GetPrincipal(istructs.AppQName_test1_app1, it.TestEmail2)
-	wsp := it.DummyWSParams(wsName1)
+	wsp := it.SimpleWSParams(wsName1)
 
 	newWS := vit.CreateWorkspace(wsp, prn1)
 
@@ -112,10 +113,10 @@ func TestDeactivateJoinedWorkspace(t *testing.T) {
 	viewWorkspaceIDIdx := map[string]interface{}{}
 	require.NoError(json.Unmarshal([]byte(resp.SectionRow()[0].(string)), &viewWorkspaceIDIdx))
 	idOfCDocWorkspaceID := int64(viewWorkspaceIDIdx["IDOfCDocWorkspaceID"].(float64))
-	body = fmt.Sprintf(`{"args":{"ID": %d},"elements":[{"fields": ["Result"]}]}`, int64(idOfCDocWorkspaceID))
+	body = fmt.Sprintf(`{"args":{"ID": %d},"elements":[{"fields": ["Result"]}]}`, idOfCDocWorkspaceID)
 	resp = vit.PostApp(istructs.AppQName_test1_app1, wsidOfCDocWorkspaceID, "q.sys.GetCDoc", body, coreutils.WithAuthorizeBy(sysToken.Token))
 	jsonBytes := []byte(resp.SectionRow()[0].(string))
 	cdocWorkspaceID := map[string]interface{}{}
-	require.Nil(json.Unmarshal(jsonBytes, &cdocWorkspaceID))
+	require.NoError(json.Unmarshal(jsonBytes, &cdocWorkspaceID))
 	require.False(cdocWorkspaceID[appdef.SystemField_IsActive].(bool))
 }

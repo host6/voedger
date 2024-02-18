@@ -84,6 +84,11 @@ var (
 	qNameQryGetUPLocationInvoiceParties             = appdef.NewQName(airPackage, "GetUPLocationInvoiceParties")
 	qNameQryGetLocationDailyUPReport                = appdef.NewQName(airPackage, "GetLocationDailyUPReport")
 	qNameQryGetResellerDailyUPReport                = appdef.NewQName(airPackage, "GetResellerDailyUPReport")
+	qNameCDocReseller                               = appdef.NewQName(airPackage, "Reseller")
+	qNameQryListIssuedSubscriptionInvoices          = appdef.NewQName(airPackage, "ListIssuedSubscriptionInvoices")
+	qNameQryListIssuedSubscriptionResellers         = appdef.NewQName(airPackage, "ListIssuedSubscriptionResellers")
+	qNameQryListPaidSubscriptionInvoices            = appdef.NewQName(airPackage, "ListPaidSubscriptionInvoices")
+	qNameQryListPaidSubscriptionResellers           = appdef.NewQName(airPackage, "ListPaidSubscriptionResellers")
 
 	// Air roles
 	qNameRoleResellersAdmin         = appdef.NewQName(airPackage, "ResellersAdmin")
@@ -104,7 +109,7 @@ const (
 	untillPackage               = "untill"
 	untillChargebeeAgentLogin   = "untillchargebeeagent"
 
-	// registryPackage -> import cycle: collection->iauthnzimpl->registry->workspace->collection
+	// avoiding import cycle: collection->iauthnzimpl->registry->workspace->collection
 	registryPackage = "registry"
 )
 

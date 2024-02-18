@@ -10,9 +10,10 @@ import (
 	"net/http"
 	"time"
 
-	ibus "github.com/untillpro/airs-ibus"
 	"github.com/untillpro/goutils/logger"
 	"golang.org/x/crypto/acme/autocert"
+
+	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/iprocbusmem"
@@ -20,7 +21,7 @@ import (
 )
 
 // port == 443 -> httpsService + ACMEService, otherwise -> HTTPService only, ACMEService is nil
-func Provide(hvmCtx context.Context, rp RouterParams, aBusTimeout time.Duration, broker in10n.IN10nBroker, quotas in10n.Quotas, bp *BlobberParams, autocertCache autocert.Cache,
+func Provide(hvmCtx context.Context, rp RouterParams, aBusTimeout time.Duration, broker in10n.IN10nBroker, bp *BlobberParams, autocertCache autocert.Cache,
 	bus ibus.IBus, appsWSAmount map[istructs.AppQName]istructs.AppWSAmount) (httpSrv IHTTPService, acmeSrv IACMEService) {
 	httpService := &httpService{
 		RouterParams:  rp,

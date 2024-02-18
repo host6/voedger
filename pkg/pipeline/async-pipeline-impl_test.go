@@ -1,6 +1,6 @@
-/*
- * Copyright (c) 2021-present unTill Pro, Ltd.
- */
+// Copyright (c) 2021-present Voedger Authors.
+// This source code is licensed under the MIT license found in the
+// LICENSE file in the root directory of this source tree.
 
 package pipeline
 
@@ -55,7 +55,7 @@ func TestAsyncPipeline_SendAsync(t *testing.T) {
 				})),
 		)
 
-		require.Nil(t, pipeline.SendAsync(testWorkpiece{
+		require.NoError(t, pipeline.SendAsync(testWorkpiece{
 			func() {
 				wg.Done()
 			},
@@ -103,14 +103,16 @@ func TestAsyncPipeline_OnError(t *testing.T) {
 	)
 	defer pipeline.Close()
 
-	require.Nil(t, pipeline.SendAsync(newTestWork()))
-	err := (<-handledErrs).(IErrorPipeline)
-	require.Equal(t, "test error", err.Error())
-	require.Equal(t, "doAsync, outWork==nil", err.GetPlace())
-	require.Equal(t, "operator1", err.GetOpName())
+	require.NoError(t, pipeline.SendAsync(newTestWork()))
+	var errInPipeline IErrorPipeline
+	require.ErrorAs(t, <-handledErrs, &errInPipeline)
+	require.Equal(t, "test error", errInPipeline.Error())
+	require.Equal(t, "doAsync, outWork==nil", errInPipeline.GetPlace())
+	require.Equal(t, "operator1", errInPipeline.GetOpName())
 
-	err = (<-handledErrs).(IErrorPipeline)
-	require.Equal(t, "test error", err.Error())
-	require.Equal(t, "doAsync, outWork==nil", err.GetPlace())
-	require.Equal(t, "operator1", err.GetOpName())
+	//var errInPipeline IErrorPipeline
+	require.ErrorAs(t, <-handledErrs, &errInPipeline)
+	require.Equal(t, "test error", errInPipeline.Error())
+	require.Equal(t, "doAsync, outWork==nil", errInPipeline.GetPlace())
+	require.Equal(t, "operator1", errInPipeline.GetOpName())
 }

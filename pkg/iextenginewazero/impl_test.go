@@ -13,7 +13,18 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tetratelabs/wazero/sys"
+
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iextengine"
+	"github.com/voedger/voedger/pkg/iratesce"
+	"github.com/voedger/voedger/pkg/istorage/mem"
+	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
+
+	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/istructsmem"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
+	"github.com/voedger/voedger/pkg/itokensjwt"
+	"github.com/voedger/voedger/pkg/projectors"
 	"github.com/voedger/voedger/pkg/state"
 )
 
@@ -48,7 +59,7 @@ func Test_BasicUsage(t *testing.T) {
 	// Invoke command
 	//
 	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, exampleCommand), extIO))
-	require.Equal(1, len(extIO.intents))
+	require.Len(extIO.intents, 1)
 	v := extIO.intents[0].value.(*mockValueBuilder)
 
 	require.Equal("test@gmail.com", v.items["from"])
@@ -62,7 +73,7 @@ func Test_BasicUsage(t *testing.T) {
 	projectorMode = true // state will return different Event
 	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, updateSubscriptionProjector), extIO))
 
-	require.Equal(1, len(extIO.intents))
+	require.Len(extIO.intents, 1)
 	v = extIO.intents[0].value.(*mockValueBuilder)
 
 	require.Equal("test@gmail.com", v.items["from"])
@@ -158,7 +169,7 @@ func Test_Allocs_AutoGC(t *testing.T) {
 
 	requireMemStatEx(t, wasmEngine, expectedAllocs, expectedFrees, expectedHeapSize, WasmPreallocatedBufferSize)
 
-	calculatedHeapInUse := uint32(WasmPreallocatedBufferSize)
+	calculatedHeapInUse := WasmPreallocatedBufferSize
 	for calculatedHeapInUse < expectedHeapSize-16 {
 		require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend), extIO))
 		require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrReset), extIO))
@@ -203,7 +214,7 @@ func Test_NoGc_MemoryOverflow(t *testing.T) {
 	var expectedAllocs = uint32(1)
 	var expectedFrees = uint32(0)
 
-	requireMemStatEx(t, wasmEngine, expectedAllocs, expectedFrees, uint32(WasmPreallocatedBufferSize), uint32(WasmPreallocatedBufferSize))
+	requireMemStatEx(t, wasmEngine, expectedAllocs, expectedFrees, WasmPreallocatedBufferSize, WasmPreallocatedBufferSize)
 
 	calculatedHeapInUse := WasmPreallocatedBufferSize
 	err = nil
@@ -315,15 +326,15 @@ func Test_RecoverEngine(t *testing.T) {
 	require.NoError(err)
 	defer extEngine.Close(ctx)
 
-	require.Nil(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
-	require.Nil(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
-	require.Nil(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
-	require.NotNil(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
+	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
+	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
+	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
+	require.Error(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
 
-	require.Nil(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
-	require.Nil(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
-	require.Nil(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
-	require.NotNil(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
+	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
+	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
+	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
+	require.Error(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, arrAppend2), extIO))
 }
 
 func Test_Read(t *testing.T) {
@@ -385,15 +396,164 @@ func Test_NoAllocs(t *testing.T) {
 	require.NoError(err)
 
 	requireMemStatEx(t, wasmEngine, 1, 0, WasmPreallocatedBufferSize, WasmPreallocatedBufferSize)
-	require.Equal(2, len(extIO.intents))
+	require.Len(extIO.intents, 2)
 	v0 := extIO.intents[0].value.(*mockValueBuilder)
 
 	require.Equal("test@gmail.com", v0.items["from"])
 	require.Equal(int32(668), v0.items["port"])
 	bytes := (v0.items["key"]).([]byte)
-	require.Equal(5, len(bytes))
+	require.Len(bytes, 5)
 
 	v1 := extIO.intents[1].value.(*mockValueBuilder)
 	require.Equal(int32(12346), v1.items["offs"])
 	require.Equal("sys.InvitationAccepted", v1.items["qname"])
+}
+
+func Test_WithState(t *testing.T) {
+
+	require := require.New(t)
+	ctx := context.Background()
+
+	testView := appdef.NewQName("pkg", "TestView")
+	const extension = "incrementProjector"
+	const cc = "cc"
+	const pk = "pk"
+	const vv = "vv"
+	const intentsLimit = 5
+	const bundlesLimit = 5
+	const ws = istructs.WSID(1)
+
+	// build app
+	app := appStructs(
+		func(appDef appdef.IAppDefBuilder) {
+			projectors.ProvideViewDef(appDef, testView, func(view appdef.IViewBuilder) {
+				view.KeyBuilder().PartKeyBuilder().AddField(pk, appdef.DataKind_int32)
+				view.KeyBuilder().ClustColsBuilder().AddField(cc, appdef.DataKind_int32)
+				view.ValueBuilder().AddField(vv, appdef.DataKind_int32, true)
+			})
+		},
+		func(cfg *istructsmem.AppConfigType) {})
+	state := state.ProvideAsyncActualizerStateFactory()(context.Background(), app, nil, state.SimpleWSIDFunc(ws), nil, nil, intentsLimit, bundlesLimit)
+
+	// build packages
+	moduleUrl := testModuleURL("./_testdata/basicusage/pkg.wasm")
+	packages := []iextengine.ExtensionPackage{
+		{
+			QualifiedName:  testPkg,
+			ModuleUrl:      moduleUrl,
+			ExtensionNames: []string{extension},
+		},
+	}
+
+	// build extension engine
+	factory := ProvideExtensionEngineFactory(true)
+	engines, err := factory.New(ctx, packages, &iextengine.ExtEngineConfig{}, 1)
+	if err != nil {
+		panic(err)
+	}
+	extEngine := engines[0]
+	defer extEngine.Close(ctx)
+
+	// Invoke extension
+	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, extension), state))
+	ready, err := state.ApplyIntents()
+	require.NoError(err)
+	require.False(ready)
+
+	// Invoke extension again
+	require.NoError(extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, extension), state))
+	ready, err = state.ApplyIntents()
+	require.NoError(err)
+	require.False(ready)
+
+	// Flush bundles with intents
+	require.NoError(state.FlushBundles())
+
+	// Test view
+	kb := app.ViewRecords().KeyBuilder(testView)
+	kb.PartitionKey().PutInt32(pk, 1)
+	kb.ClusteringColumns().PutInt32(cc, 1)
+	value, err := app.ViewRecords().Get(ws, kb)
+
+	require.NoError(err)
+	require.NotNil(value)
+	require.Equal(int32(2), value.AsInt32(vv))
+}
+
+func Test_StatePanic(t *testing.T) {
+
+	testView := appdef.NewQName("pkg", "TestView")
+	const cc = "cc"
+	const pk = "pk"
+	const vv = "vv"
+	const intentsLimit = 5
+	const bundlesLimit = 5
+	const ws = istructs.WSID(1)
+
+	app := appStructs(
+		func(appDef appdef.IAppDefBuilder) {
+			projectors.ProvideViewDef(appDef, testView, func(view appdef.IViewBuilder) {
+				view.KeyBuilder().PartKeyBuilder().AddField(pk, appdef.DataKind_int32)
+				view.KeyBuilder().ClustColsBuilder().AddField(cc, appdef.DataKind_int32)
+				view.ValueBuilder().AddField(vv, appdef.DataKind_int32, true)
+			})
+		},
+		func(cfg *istructsmem.AppConfigType) {})
+	state := state.ProvideAsyncActualizerStateFactory()(context.Background(), app, nil, state.SimpleWSIDFunc(ws), nil, nil, intentsLimit, bundlesLimit)
+
+	const extname = "wrongFieldName"
+
+	require := require.New(t)
+	ctx := context.Background()
+
+	moduleUrl := testModuleURL("./_testdata/panics/pkg.wasm")
+	packages := []iextengine.ExtensionPackage{
+		{
+			QualifiedName:  testPkg,
+			ModuleUrl:      moduleUrl,
+			ExtensionNames: []string{extname},
+		},
+	}
+	factory := ProvideExtensionEngineFactory(true)
+	engines, err := factory.New(ctx, packages, &iextengine.ExtEngineConfig{}, 1)
+	if err != nil {
+		panic(err)
+	}
+	extEngine := engines[0]
+	defer extEngine.Close(ctx)
+	//
+	// Invoke extension
+	//
+	err = extEngine.Invoke(context.Background(), iextengine.NewExtQName(testPkg, extname), state)
+	require.ErrorContains(err, "int32-type field «wrong» is not found")
+}
+
+type (
+	appDefCallback func(appDef appdef.IAppDefBuilder)
+	appCfgCallback func(cfg *istructsmem.AppConfigType)
+)
+
+func appStructs(prepareAppDef appDefCallback, prepareAppCfg appCfgCallback) istructs.IAppStructs {
+	appDef := appdef.New()
+	if prepareAppDef != nil {
+		prepareAppDef(appDef)
+	}
+	cfgs := make(istructsmem.AppConfigsType, 1)
+	cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+	if prepareAppCfg != nil {
+		prepareAppCfg(cfg)
+	}
+
+	asf := mem.Provide()
+	storageProvider := istorageimpl.Provide(asf)
+	prov := istructsmem.Provide(
+		cfgs,
+		iratesce.TestBucketsFactory,
+		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
+		storageProvider)
+	structs, err := prov.AppStructs(istructs.AppQName_test1_app1)
+	if err != nil {
+		panic(err)
+	}
+	return structs
 }

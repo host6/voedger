@@ -44,7 +44,7 @@ func (provider *appStructsProviderType) AppStructs(appName istructs.AppQName) (s
 
 	appCfg, ok := provider.configs[appName]
 	if !ok {
-		return nil, istructs.ErrAppNotFound
+		return nil, fmt.Errorf("%w: %v", istructs.ErrAppNotFound, appName)
 	}
 
 	provider.locker.Lock()
@@ -118,6 +118,11 @@ func (app *appStructsType) Records() istructs.IRecords {
 // istructs.IAppStructs.ViewRecords
 func (app *appStructsType) ViewRecords() istructs.IViewRecords {
 	return &app.viewRecords
+}
+
+// istructs.IAppStructs.ObjectBuilder
+func (app *appStructsType) ObjectBuilder(name appdef.QName) istructs.IObjectBuilder {
+	return newObject(app.config, name, nil)
 }
 
 // istructs.IAppStructs.Resources

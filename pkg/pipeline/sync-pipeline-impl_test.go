@@ -1,7 +1,6 @@
-/*
- * Copyright (c) 2021-present unTill Pro, Ltd.
- */
-
+// Copyright (c) 2021-present Voedger Authors.
+// This source code is licensed under the MIT license found in the
+// LICENSE file in the root directory of this source tree.
 package pipeline
 
 import (
@@ -23,13 +22,13 @@ func TestSyncPipeline_DoSync(t *testing.T) {
 
 		err := pipeline.SendSync(newTestWork())
 
-		require.NotNil(t, err)
+		require.Error(t, err)
 		require.Equal(t, "test failure", err.Error())
-		perr, cast := err.(IErrorPipeline)
-		require.Equal(t, "fail-here", perr.GetOpName())
-		require.Equal(t, "doSync", perr.GetPlace())
-		require.True(t, cast)
-		require.NotNil(t, perr.GetWork())
+		var pErr IErrorPipeline
+		require.ErrorAs(t, err, &pErr)
+		require.Equal(t, "fail-here", pErr.GetOpName())
+		require.Equal(t, "doSync", pErr.GetPlace())
+		require.NotNil(t, pErr.GetWork())
 	})
 	t.Run("Should catch and rethrow error", func(t *testing.T) {
 		pipeline := NewSyncPipeline(context.Background(), "my-pipeline",
@@ -46,8 +45,9 @@ func TestSyncPipeline_DoSync(t *testing.T) {
 		defer pipeline.Close()
 
 		err := pipeline.SendSync(newTestWork())
-		require.NotNil(t, err)
-		perr := err.(IErrorPipeline)
+		require.Error(t, err)
+		var perr IErrorPipeline
+		require.ErrorAs(t, err, &perr)
 		require.Equal(t, "nested error 'rethrown' while handling 'test failure'", perr.Error())
 		require.Equal(t, "catch-and-rethrow", perr.GetOpName())
 		require.Equal(t, "catch-onErr", perr.GetPlace())
@@ -70,17 +70,20 @@ func TestSyncPipeline_DoSync(t *testing.T) {
 		pipeline := NewSyncPipeline(ctx, "my-pipeline",
 			WireSyncOperator("noop", &NOOP{}))
 
-		require.Nil(t, pipeline.DoSync(ctx, v))
+		require.NoError(t, pipeline.DoSync(ctx, v))
+	})
+	t.Run("Should panic on nil work", func(t *testing.T) {
+		pipeline := NewSyncPipeline(context.Background(), "my-pipeline",
+			WireFunc("panic-onNil", nil))
+
+		require.PanicsWithValue(t, "critical error in operator 'panic-onNil': nil work in processSyncOp. Pipeline 'my-pipeline' [operator: panic-onNil]", func() {
+			_ = pipeline.SendSync(nil)
+		})
 	})
 }
 
 func TestSyncPipeline_Close(t *testing.T) {
-	pipeline := &SyncPipeline{
-		stdin:  make(chan interface{}, 1),
-		stdout: make(chan interface{}, 1),
-	}
-	pipeline.stdout <- newTestWork()
-	close(pipeline.stdout)
+	pipeline := &SyncPipeline{}
 
 	require.NotPanics(t, func() {
 		pipeline.Close()

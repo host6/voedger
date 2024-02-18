@@ -31,6 +31,12 @@ WORKSPACE SomeWorkspace(
         Email varchar,
         Password varchar
     );
+    TABLE OneMoreTable INHERITS CDoc(
+        A varchar,
+        B varchar,
+        C int32,
+        UNIQUE (B, A)
+    );
     TABLE SomeTable INHERITS CDoc( -- NodeRemoved: removed in new.sql
         A varchar,
         B varchar
@@ -38,7 +44,8 @@ WORKSPACE SomeWorkspace(
     TABLE AnotherOneTable INHERITS CDoc(
         A varchar,
         B varchar,
-        C varchar
+        C varchar,
+        UNIQUE (A, B)
     );
     TYPE SomeType(
         A varchar,
@@ -57,12 +64,16 @@ WORKSPACE SomeWorkspace(
         E int,
         PRIMARY KEY ((A), B)
     ) AS RESULT OF Proj1;
+    TABLE O_Doc INHERITS ODoc (
+        Fld1 int32
+    );
     EXTENSION ENGINE BUILTIN (
         PROJECTOR Proj1 AFTER EXECUTE ON (Orders) INTENTS (View(SomeView));
         COMMAND Orders();
         COMMAND CreateLogin(CreateLoginParams, UNLOGGED CreateLoginUnloggedParams) RETURNS void;
         COMMAND SomeCommand(SomeType, UNLOGGED SomeType) RETURNS SomeType;
         QUERY SomeQuery(SomeType) RETURNS SomeType;
+        COMMAND CmdODoc(O_Doc);
     )
 );
 

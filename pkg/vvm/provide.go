@@ -16,8 +16,9 @@ import (
 	"time"
 
 	"github.com/google/wire"
-	ibus "github.com/untillpro/airs-ibus"
 	"golang.org/x/crypto/acme/autocert"
+
+	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/apppartsctl"
@@ -38,8 +39,8 @@ import (
 	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istorage"
+	"github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istoragecache"
-	"github.com/voedger/voedger/pkg/istorageimpl"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -113,7 +114,7 @@ func ProvideCluster(vvmCtx context.Context, vvmConfig *VVMConfig, vvmIdx VVMIdxT
 		provideQueryProcessors,
 		provideAppServiceFactory,
 		provideAppPartitionFactory,
-		provideSyncActualizerFactory,
+		//provideSyncActualizerFactory,
 		provideAsyncActualizersFactory,
 		provideRouterServiceFactory,
 		provideOperatorAppServices,
@@ -145,6 +146,7 @@ func ProvideCluster(vvmCtx context.Context, vvmConfig *VVMConfig, vvmIdx VVMIdxT
 		dbcertcache.ProvideDbCache,
 		imetrics.Provide,
 		projectors.ProvideSyncActualizerFactory,
+		projectors.NewSyncActualizerFactoryFactory,
 		projectors.ProvideAsyncActualizerFactory,
 		iprocbusmem.Provide,
 		provideRouterServices,
@@ -163,7 +165,7 @@ func ProvideCluster(vvmCtx context.Context, vvmConfig *VVMConfig, vvmIdx VVMIdxT
 		provideIAppStorageUncachingProviderFactory,
 		provideAppPartsCtlPipelineService,
 		apppartsctl.New,
-		appparts.New,
+		appparts.NewWithActualizer,
 		builtinapps.Apps,
 		// wire.Value(vvmConfig.NumCommandProcessors) -> (wire bug?) value github.com/untillpro/airs-bp3/vvm.CommandProcessorsCount can't be used: vvmConfig is not declared in package scope
 		wire.FieldsOf(&vvmConfig,
@@ -190,8 +192,8 @@ func provideAppPartsCtlPipelineService(ctl apppartsctl.IAppPartitionsController)
 }
 
 func provideIAppStorageUncachingProviderFactory(factory istorage.IAppStorageFactory) IAppStorageUncachingProviderFactory {
-	return func() (provider istorage.IAppStorageProvider) {
-		return istorageimpl.Provide(factory)
+	return func() istorage.IAppStorageProvider {
+		return provider.Provide(factory)
 	}
 }
 
@@ -240,20 +242,20 @@ func provideBucketsFactory(timeFunc coreutils.TimeFunc) irates.BucketsFactoryTyp
 }
 
 func provideSecretKeyJWT(sr isecrets.ISecretReader) (itokensjwt.SecretKeyType, error) {
-	return sr.ReadSecret(SecretKeyJWTName)
+	return sr.ReadSecret(itokensjwt.SecretKeyJWTName)
 }
 
-func provideAppsWSAmounts(vvmApps VVMApps, asp istructs.IAppStructsProvider) map[istructs.AppQName]istructs.AppWSAmount {
+func provideAppsWSAmounts(vvmApps VVMApps, asp istructs.IAppStructsProvider) (map[istructs.AppQName]istructs.AppWSAmount, error) {
 	res := map[istructs.AppQName]istructs.AppWSAmount{}
 	for _, appQName := range vvmApps {
 		as, err := asp.AppStructs(appQName)
 		if err != nil {
 			// notest
-			panic(err)
+			return nil, err
 		}
 		res[appQName] = as.WSAmount()
 	}
-	return res
+	return res, nil
 }
 
 func provideMetricsServicePort(msp MetricsServicePortInitial, vvmIdx VVMIdxType) metrics.MetricsServicePort {
@@ -376,42 +378,42 @@ func (s *switchByAppName) Switch(work interface{}) (branchName string, err error
 	return work.(interface{ AppQName() istructs.AppQName }).AppQName().String(), nil
 }
 
-func provideSyncActualizerFactory(vvmApps VVMApps, structsProvider istructs.IAppStructsProvider, n10nBroker in10n.IN10nBroker, mpq MaxPrepareQueriesType, actualizerFactory projectors.SyncActualizerFactory, secretReader isecrets.ISecretReader) commandprocessor.SyncActualizerFactory {
-	return func(vvmCtx context.Context, partitionID istructs.PartitionID) pipeline.ISyncOperator {
-		actualizers := []pipeline.SwitchOperatorOptionFunc{}
-		for _, appQName := range vvmApps {
-			appStructs, err := structsProvider.AppStructs(appQName)
-			if err != nil {
-				panic(err)
-			}
-			if len(appStructs.SyncProjectors()) == 0 {
-				actualizers = append(actualizers, pipeline.SwitchBranch(appQName.String(), &pipeline.NOOP{}))
-				continue
-			}
-			conf := projectors.SyncActualizerConf{
-				Ctx: vvmCtx,
-				//TODO это правильно, что постоянную appStrcuts возвращаем? Каждый раз не надо запрашивать у appStructsProvider?
-				AppStructs:   func() istructs.IAppStructs { return appStructs },
-				SecretReader: secretReader,
-				Partition:    partitionID,
-				WorkToEvent: func(work interface{}) istructs.IPLogEvent {
-					return work.(interface{ Event() istructs.IPLogEvent }).Event()
-				},
-				N10nFunc: func(view appdef.QName, wsid istructs.WSID, offset istructs.Offset) {
-					n10nBroker.Update(in10n.ProjectionKey{
-						App:        appStructs.AppQName(),
-						Projection: view,
-						WS:         wsid,
-					}, offset)
-				},
-				IntentsLimit: builtin.MaxCUDs,
-			}
-			actualizer := actualizerFactory(conf, appStructs.SyncProjectors()[0], appStructs.SyncProjectors()[1:]...)
-			actualizers = append(actualizers, pipeline.SwitchBranch(appQName.String(), actualizer))
-		}
-		return pipeline.SwitchOperator(&switchByAppName{}, actualizers[0], actualizers[1:]...)
-	}
-}
+// func provideSyncActualizerFactory(vvmApps VVMApps, structsProvider istructs.IAppStructsProvider, n10nBroker in10n.IN10nBroker, mpq MaxPrepareQueriesType, actualizerFactory projectors.SyncActualizerFactory, secretReader isecrets.ISecretReader) commandprocessor.SyncActualizerFactory {
+// 	return func(vvmCtx context.Context, partitionID istructs.PartitionID) pipeline.ISyncOperator {
+// 		actualizers := []pipeline.SwitchOperatorOptionFunc{}
+// 		for _, appQName := range vvmApps {
+// 			appStructs, err := structsProvider.AppStructs(appQName)
+// 			if err != nil {
+// 				panic(err)
+// 			}
+// 			if len(appStructs.SyncProjectors()) == 0 {
+// 				actualizers = append(actualizers, pipeline.SwitchBranch(appQName.String(), &pipeline.NOOP{}))
+// 				continue
+// 			}
+// 			conf := projectors.SyncActualizerConf{
+// 				Ctx: vvmCtx,
+// 				//TODO это правильно, что постоянную appStrcuts возвращаем? Каждый раз не надо запрашивать у appStructsProvider?
+// 				AppStructs:   func() istructs.IAppStructs { return appStructs },
+// 				SecretReader: secretReader,
+// 				Partition:    partitionID,
+// 				WorkToEvent: func(work interface{}) istructs.IPLogEvent {
+// 					return work.(interface{ Event() istructs.IPLogEvent }).Event()
+// 				},
+// 				N10nFunc: func(view appdef.QName, wsid istructs.WSID, offset istructs.Offset) {
+// 					n10nBroker.Update(in10n.ProjectionKey{
+// 						App:        appStructs.AppQName(),
+// 						Projection: view,
+// 						WS:         wsid,
+// 					}, offset)
+// 				},
+// 				IntentsLimit: builtin.MaxCUDs,
+// 			}
+// 			actualizer := actualizerFactory(conf, appStructs.SyncProjectors()[0], appStructs.SyncProjectors()[1:]...)
+// 			actualizers = append(actualizers, pipeline.SwitchBranch(appQName.String(), actualizer))
+// 		}
+// 		return pipeline.SwitchOperator(&switchByAppName{}, actualizers[0], actualizers[1:]...)
+// 	}
+// }
 
 func provideBlobberAppStruct(asp istructs.IAppStructsProvider) (BlobberAppStruct, error) {
 	return asp.AppStructs(istructs.AppQName_sys_blobber)
@@ -445,7 +447,7 @@ func provideRouterServices(vvmCtx context.Context, rp router.RouterParams, busTi
 		RetryAfterSecondsOn503: DefaultRetryAfterSecondsOn503,
 		BLOBMaxSize:            bms,
 	}
-	httpSrv, acmeSrv := router.Provide(vvmCtx, rp, time.Duration(busTimeout), broker, quotas, bp, autocertCache, bus, appsWSAmounts)
+	httpSrv, acmeSrv := router.Provide(vvmCtx, rp, time.Duration(busTimeout), broker, bp, autocertCache, bus, appsWSAmounts)
 	vvmPortSource.getter = func() VVMPortType {
 		return VVMPortType(httpSrv.GetPort())
 	}
@@ -473,20 +475,18 @@ func provideCommandChannelFactory(sch ServiceChannelFactory) CommandChannelFacto
 	}
 }
 
-func provideQueryProcessors(qpCount QueryProcessorsCount, qc QueryChannel, bus ibus.IBus, asp istructs.IAppStructsProvider, qpFactory queryprocessor.ServiceFactory,
-	imetrics imetrics.IMetrics, vvm commandprocessor.VVMName, mpq MaxPrepareQueriesType, authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer,
-	appCfgs istructsmem.AppConfigsType) OperatorQueryProcessors {
+func provideQueryProcessors(qpCount QueryProcessorsCount, qc QueryChannel, appParts appparts.IAppPartitions, qpFactory queryprocessor.ServiceFactory,
+	imetrics imetrics.IMetrics, vvm commandprocessor.VVMName, mpq MaxPrepareQueriesType, authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer) OperatorQueryProcessors {
 	forks := make([]pipeline.ForkOperatorOptionFunc, qpCount)
-	resultSenderFactory := func(ctx context.Context, sender interface{}) queryprocessor.IResultSenderClosable {
+	resultSenderFactory := func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable {
 		return &resultSenderErrorFirst{
 			ctx:    ctx,
 			sender: sender,
-			bus:    bus,
 		}
 	}
 	for i := 0; i < int(qpCount); i++ {
-		forks[i] = pipeline.ForkBranch(pipeline.ServiceOperator(qpFactory(iprocbus.ServiceChannel(qc), resultSenderFactory, asp, int(mpq), imetrics,
-			string(vvm), authn, authz, appCfgs)))
+		forks[i] = pipeline.ForkBranch(pipeline.ServiceOperator(qpFactory(iprocbus.ServiceChannel(qc), resultSenderFactory, appParts, int(mpq), imetrics,
+			string(vvm), authn, authz)))
 	}
 	return pipeline.ForkOperator(pipeline.ForkSame, forks[0], forks[1:]...)
 }

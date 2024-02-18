@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/sys/sqlquery"
 	coreutils "github.com/voedger/voedger/pkg/utils"
@@ -147,9 +148,6 @@ func TestSqlQuery_plog(t *testing.T) {
 	t.Run("Should read one event by Offset", func(t *testing.T) {
 		require := require.New(t)
 		body := fmt.Sprintf(`{"args":{"Query":"select * from sys.plog where Offset > %d"},"elements":[{"fields":["Result"]}]}`, lastPLogOffset-1)
-		if lastPLogOffset-1 <= 0 {
-			fmt.Println("!!!!!!!!!!!!!!!!!!!!!!!!!")
-		}
 		resp := vit.PostWS(ws, "q.sys.SqlQuery", body)
 
 		m := map[string]interface{}{}
@@ -334,8 +332,8 @@ func TestSqlQuery_records(t *testing.T) {
 		body = fmt.Sprintf(`{"args":{"Query":"select name, sys.IsActive from app1pkg.payments where id in (%d,%d)"}, "elements":[{"fields":["Result"]}]}`, eftId, cashId)
 		resp := vit.PostWS(ws, "q.sys.SqlQuery", body)
 
-		require.Equal(resp.SectionRow()[0], `{"name":"EFT","sys.IsActive":true}`)
-		require.Equal(resp.SectionRow(1)[0], `{"name":"Cash","sys.IsActive":true}`)
+		require.Equal(`{"name":"EFT","sys.IsActive":true}`, resp.SectionRow()[0])
+		require.Equal(`{"name":"Cash","sys.IsActive":true}`, resp.SectionRow(1)[0])
 	})
 	t.Run("Should return error when column name not supported", func(t *testing.T) {
 		body = `{"args":{"Query":"select * from app1pkg.payments where something = 1"}}`
@@ -380,10 +378,10 @@ func TestSqlQuery_records(t *testing.T) {
 		resp.RequireError(t, fmt.Sprintf("record with ID '%d' has mismatching QName 'app1pkg.pos_emails'", emailId))
 	})
 	t.Run("Should return error when record not found", func(t *testing.T) {
-		body = `{"args":{"Query":"select * from app1pkg.payments where id = 123456789"}}`
+		body = fmt.Sprintf(`{"args":{"Query":"select * from app1pkg.payments where id = %d"}}`, istructs.NonExistingRecordID)
 		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
 
-		resp.RequireError(t, "record with ID '123456789' not found")
+		resp.RequireError(t, fmt.Sprintf("record with ID '%d' not found", istructs.NonExistingRecordID))
 	})
 	t.Run("Should return error when field not found in def", func(t *testing.T) {
 		body = fmt.Sprintf(`{"args":{"Query":"select abracadabra from app1pkg.pos_emails where id = %d"}}`, emailId)
@@ -393,10 +391,10 @@ func TestSqlQuery_records(t *testing.T) {
 	})
 	t.Run("Should read singleton", func(t *testing.T) {
 		require := require.New(t)
-		body = `{"args":{"Query":"select sys.QName from app1pkg.WSKind"},"elements":[{"fields":["Result"]}]}`
+		body = `{"args":{"Query":"select sys.QName from app1pkg.test_ws"},"elements":[{"fields":["Result"]}]}`
 		restaurant := vit.PostWS(ws, "q.sys.SqlQuery", body).SectionRow(0)
 
-		require.Equal(`{"sys.QName":"app1pkg.WSKind"}`, restaurant[0])
+		require.Equal(`{"sys.QName":"app1pkg.test_ws"}`, restaurant[0])
 	})
 }
 

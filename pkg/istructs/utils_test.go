@@ -17,6 +17,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/appdef"
 )
 
@@ -219,7 +220,6 @@ func TestAppQName_Compare(t *testing.T) {
 	q1_1 := NewAppQName("sys", "registry")
 	q1_2 := NewAppQName("sys", "registry")
 	require.Equal(q1_1, q1_2)
-	require.True(q1_1 == q1_2)
 
 	q2 := appdef.NewQName("sys", "registry2")
 	require.NotEqual(q1_1, q2)
@@ -256,7 +256,7 @@ func TestAppQName_UnmarshalInvalidString(t *testing.T) {
 		q := NewAppQName("a", "b")
 
 		err = q.UnmarshalJSON(nil)
-		require.NotNil(err)
+		require.Error(err)
 		log.Println(err)
 		require.Equal(NullAppQName, q)
 	})
@@ -265,7 +265,7 @@ func TestAppQName_UnmarshalInvalidString(t *testing.T) {
 		q := NewAppQName("a", "b")
 
 		err = q.UnmarshalJSON([]byte("\"\""))
-		require.NotNil(err)
+		require.Error(err)
 		require.Equal(NullAppQName, q)
 
 		log.Println(err)
@@ -275,7 +275,7 @@ func TestAppQName_UnmarshalInvalidString(t *testing.T) {
 		q := NewAppQName("a", "b")
 
 		err = q.UnmarshalJSON([]byte("\"bcd\""))
-		require.NotNil(err)
+		require.Error(err)
 		require.Equal(NullAppQName, q)
 
 		log.Println(err)
@@ -285,14 +285,14 @@ func TestAppQName_UnmarshalInvalidString(t *testing.T) {
 		q := NewAppQName("a", "b")
 
 		err = q.UnmarshalJSON([]byte("\"c..d\""))
-		require.NotNil(err)
+		require.Error(err)
 		log.Println(err)
 	})
 
 	t.Run("json unquoted", func(t *testing.T) {
 		q := NewAppQName("a", "b")
 		err = q.UnmarshalJSON([]byte("c.d"))
-		require.NotNil(err)
+		require.Error(err)
 		log.Println(err)
 	})
 
@@ -321,7 +321,32 @@ func TestRecordID_IsTemp(t *testing.T) {
 
 func TestNullObject(t *testing.T) {
 	require := require.New(t)
-	null := NewNullObject()
+	builder := NewNullObjectBuilder()
+
+	require.NotNil(builder)
+
+	require.NotPanics(func() {
+		builder.PutInt32("int32", 1)
+		builder.PutInt64("int64", 1)
+		builder.PutFloat32("float32", 1)
+		builder.PutFloat64("float64", 1)
+		builder.PutBytes("bytes", []byte{0})
+		builder.PutString("string", "")
+		builder.PutQName("QName", appdef.NullQName)
+		builder.PutBool("bool", true)
+		builder.PutRecordID("RecordID", NullRecordID)
+		builder.PutNumber("float64", 1)
+		builder.PutChars("string", "ABC")
+		builder.PutNumber("int64", 1)
+
+		builder.PutFromJSON(map[string]interface{}{"int32": 1})
+		builder.FillFromJSON(map[string]interface{}{"int32": 1, "child": []any{map[string]interface{}{"int32": 1}}})
+	})
+
+	require.NotNil(builder.ChildBuilder("child"))
+
+	null, err := builder.Build()
+	require.NoError(err)
 
 	require.Nil(null.AsBytes(appdef.NullName))
 	require.Equal(float32(0), null.AsFloat32(appdef.NullName))
@@ -331,7 +356,7 @@ func TestNullObject(t *testing.T) {
 	require.Equal("", null.AsString(appdef.NullName))
 
 	require.Equal(appdef.NullQName, null.AsQName(appdef.NullName))
-	require.Equal(false, null.AsBool(appdef.NullName))
+	require.False(null.AsBool(appdef.NullName))
 	require.Equal(NullRecordID, null.AsRecordID(appdef.NullName))
 
 	require.Equal(appdef.NullQName, null.QName())
@@ -351,9 +376,7 @@ func TestNullObject(t *testing.T) {
 		require.Equal("", r.Container())
 		require.Equal(NullRecordID, r.ID())
 		require.Equal(NullRecordID, r.Parent())
-
 	})
-
 }
 
 func TestRateLimitKind_String(t *testing.T) {
@@ -437,9 +460,27 @@ func TestRateLimitKind_MarshalText(t *testing.T) {
 		b, err := rlk.MarshalText()
 		require.NoError(err)
 		if rlk == RateLimitKind_FakeLast {
-			require.Equal(fmt.Sprint(i), string(b))
+			require.Equal(strconv.Itoa(i), string(b))
 		} else {
 			require.Equal(rlk.String(), string(b))
 		}
+	}
+}
+
+func TestAppQName_IsSys(t *testing.T) {
+	tests := []struct {
+		aqn  AppQName
+		want bool
+	}{
+		{NullAppQName, false},
+		{AppQName_sys_registry, true},
+		{AppQName_untill_airs_bp, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.aqn.String(), func(t *testing.T) {
+			if got := tt.aqn.IsSys(); got != tt.want {
+				t.Errorf("AppQName.IsSys() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

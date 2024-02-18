@@ -27,17 +27,13 @@ func (s *appSecretsStorage) Get(key istructs.IStateKeyBuilder) (value istructs.I
 		return nil, fmt.Errorf("'%s': %w", Field_Secret, ErrNotFound)
 	}
 	bb, e := s.secretReader.ReadSecret(k.data[Field_Secret].(string))
-	if errors.Is(e, fs.ErrNotExist) || e == isecrets.ErrSecretNameIsBlank {
+	if errors.Is(e, fs.ErrNotExist) || errors.Is(e, isecrets.ErrSecretNameIsBlank) {
 		return nil, nil
 	}
 	if e != nil {
 		return nil, e
 	}
 	return &appSecretValue{
-		content:    string(bb),
-		toJSONFunc: s.toJSON,
+		content: string(bb),
 	}, nil
-}
-func (s *appSecretsStorage) toJSON(sv istructs.IStateValue, _ ...interface{}) (string, error) {
-	return fmt.Sprintf(`{"Body":"%s"}`, sv.(*appSecretValue).content), nil
 }

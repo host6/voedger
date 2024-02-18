@@ -16,11 +16,13 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
+	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/iauthnzimpl"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/iratesce"
-	"github.com/voedger/voedger/pkg/istorage"
-	"github.com/voedger/voedger/pkg/istorageimpl"
+	"github.com/voedger/voedger/pkg/istorage/mem"
+	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -30,22 +32,22 @@ import (
 	queryprocessor "github.com/voedger/voedger/pkg/processors/query"
 	"github.com/voedger/voedger/pkg/projectors"
 	"github.com/voedger/voedger/pkg/state"
+	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 )
 
-var provider istructs.IAppStructsProvider
 var cocaColaDocID istructs.RecordID
 var collectionQuery appdef.IQuery
 var getCDocQuery appdef.IQuery
 var stateQuery appdef.IQuery
-var testCfgs istructsmem.AppConfigsType
 
 const maxPrepareQueries = 10
 
-func appConfigs(t *testing.T) (istructsmem.AppConfigsType, istorage.IAppStorageProvider) {
+func buildAppParts(t *testing.T) (appParts appparts.IAppPartitions, cleanup func()) {
 	require := require.New(t)
+
 	cfgs := make(istructsmem.AppConfigsType, 1)
-	asf := istorage.ProvideMem()
-	appStorageProvider := istorageimpl.Provide(asf)
+	asp := istorageimpl.Provide(mem.Provide())
+
 	// конфиг приложения airs-bp
 	adb := appdef.New()
 	cfg := cfgs.AddConfig(test.appQName, adb)
@@ -61,7 +63,8 @@ func appConfigs(t *testing.T) (istructsmem.AppConfigsType, istorage.IAppStorageP
 		adb.AddWRecord(istructs.QNameWRecord)
 		adb.AddProjector(QNameProjectorCollection).
 			AddEvent(istructs.QNameCRecord, appdef.ProjectorEventKind_Insert, appdef.ProjectorEventKind_Update).
-			AddIntent(state.View, QNameCollectionView)
+			AddIntent(state.View, QNameCollectionView).
+			SetSync(true)
 	}
 	{
 		// fill IAppDef with funcs. That is done here manually because we o not use sys.sql here
@@ -154,8 +157,15 @@ func appConfigs(t *testing.T) (istructsmem.AppConfigsType, istorage.IAppStorageP
 	getCDocQuery = appDef.Query(qNameQueryGetCDoc)
 	stateQuery = appDef.Query(qNameQueryState)
 
-	testCfgs = cfgs
-	return cfgs, appStorageProvider
+	provider := istructsmem.Provide(cfgs, iratesce.TestBucketsFactory,
+		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), asp)
+
+	appParts, cleanup, err = appparts.New(provider)
+	require.NoError(err)
+	appParts.DeployApp(test.appQName, appDef, test.appPartsCount, test.appEngines)
+	appParts.DeployAppPartitions(test.appQName, []istructs.PartitionID{test.partition})
+
+	return appParts, cleanup
 }
 
 // Test executes 3 operations with CUDs:
@@ -166,14 +176,17 @@ func appConfigs(t *testing.T) (istructsmem.AppConfigsType, istorage.IAppStorageP
 // Then projection values checked.
 func TestBasicUsage_Collection(t *testing.T) {
 	require := require.New(t)
-	appConfigs, asp := appConfigs(t)
-	provider := istructsmem.Provide(appConfigs, iratesce.TestBucketsFactory,
-		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), asp)
-	as, err := provider.AppStructs(test.appQName)
-	require.NoError(err)
+
+	appParts, cleanup := buildAppParts(t)
+	defer cleanup()
 
 	// Command processor
-	actualizer := provideSyncActualizer(context.Background(), as, istructs.PartitionID(1))
+	appPart, err := appParts.Borrow(test.appQName, test.partition, cluster.ProcessorKind_Command)
+	require.NoError(err)
+	defer appPart.Release()
+	as := appPart.AppStructs()
+
+	actualizer := provideSyncActualizer(context.Background(), as, test.partition)
 	processor := pipeline.NewSyncPipeline(context.Background(), "partition processor", pipeline.WireSyncOperator("actualizer", actualizer))
 	defer actualizer.Close()
 
@@ -202,7 +215,7 @@ func TestBasicUsage_Collection(t *testing.T) {
 			updateArticleCUD(event, as, cocaColaDocID, test.cocaColaNumber2, "Coca-cola")
 			updateArPriceCUD(event, as, cocaColaNormalPriceElementId, normalPriceID, 2.2)
 		}))
-		require.Nil(processor.SendSync(event))
+		require.NoError(processor.SendSync(event))
 	}
 
 	{ // CUDs: insert fanta
@@ -211,7 +224,7 @@ func TestBasicUsage_Collection(t *testing.T) {
 			newArPriceCUD(event, 7, 8, normalPriceID, 2.1)
 			newArPriceCUD(event, 7, 9, happyHourPriceID, 1.7)
 		}))
-		require.Nil(processor.SendSync(event))
+		require.NoError(processor.SendSync(event))
 	}
 	fantaDocID := idGen.idmap[7]
 	fantaNormalPriceElementId := idGen.idmap[8]
@@ -233,11 +246,15 @@ func TestBasicUsage_Collection(t *testing.T) {
 
 func Test_updateChildRecord(t *testing.T) {
 	require := require.New(t)
-	appConfigs, asp := appConfigs(t)
-	provider := istructsmem.Provide(appConfigs, iratesce.TestBucketsFactory,
-		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), asp)
-	as, err := provider.AppStructs(test.appQName)
+
+	appParts, cleanup := buildAppParts(t)
+	defer cleanup()
+
+	// Command processor
+	appPart, err := appParts.Borrow(test.appQName, test.partition, cluster.ProcessorKind_Command)
 	require.NoError(err)
+	defer appPart.Release()
+	as := appPart.AppStructs()
 
 	// ID and Offset generators
 	idGen := newIdsGenerator()
@@ -289,21 +306,22 @@ update coca-cola:
 	update exception for happy_hour:
 		- holiday: 0.9
 */
-func Test_Collection_3levels(t *testing.T) {
+
+func cp_Collection_3levels(t *testing.T, appParts appparts.IAppPartitions) {
 	var err error
 	require := require.New(t)
 
-	appConfigs, asp := appConfigs(t)
-	provider = istructsmem.Provide(appConfigs, iratesce.TestBucketsFactory,
-		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), asp)
-	as, err := provider.AppStructs(test.appQName)
+	// Command processor
+	appPart, err := appParts.Borrow(test.appQName, test.partition, cluster.ProcessorKind_Command)
 	require.NoError(err)
+	defer appPart.Release()
+	as := appPart.AppStructs()
 
 	// ID and Offset generators
 	idGen := newIdsGenerator()
 
 	// Command processor
-	actualizer := provideSyncActualizer(context.Background(), as, istructs.PartitionID(1))
+	actualizer := provideSyncActualizer(context.Background(), as, test.partition)
 	processor := pipeline.NewSyncPipeline(context.Background(), "partition processor", pipeline.WireSyncOperator("actualizer", actualizer))
 	defer actualizer.Close()
 
@@ -312,7 +330,7 @@ func Test_Collection_3levels(t *testing.T) {
 	holiday, newyear, eventPeriods := insertPeriods(require, as, &idGen)
 
 	for _, event := range []istructs.IPLogEvent{eventPrices, eventDepartments, eventPeriods} {
-		require.Nil(processor.SendSync(event))
+		require.NoError(processor.SendSync(event))
 	}
 
 	// insert coca-cola
@@ -326,7 +344,7 @@ func Test_Collection_3levels(t *testing.T) {
 				newArPriceExceptionCUD(event, 3, 5, newyear, 0.8)
 			}
 		}))
-		require.Nil(processor.SendSync(event))
+		require.NoError(processor.SendSync(event))
 	}
 
 	cocaColaDocID = idGen.idmap[1]
@@ -349,7 +367,7 @@ func Test_Collection_3levels(t *testing.T) {
 				newArPriceExceptionCUD(event, 8, 11, holiday, 1.1)
 			}
 		}))
-		require.Nil(processor.SendSync(event))
+		require.NoError(processor.SendSync(event))
 	}
 
 	fantaDocID := idGen.idmap[6]
@@ -365,7 +383,7 @@ func Test_Collection_3levels(t *testing.T) {
 			newArPriceExceptionCUD(event, cocaColaNormalPriceElementId, 15, holiday, 1.8)
 			updateArPriceExceptionCUD(event, as, cocaColaHappyHourExceptionHolidayElementId, holiday, 0.9)
 		}))
-		require.Nil(processor.SendSync(event))
+		require.NoError(processor.SendSync(event))
 	}
 	cocaColaNormalExceptionHolidayElementId := idGen.idmap[15]
 	require.NotEqual(istructs.NullRecordID, cocaColaNormalExceptionHolidayElementId)
@@ -399,10 +417,21 @@ func Test_Collection_3levels(t *testing.T) {
 	}
 }
 
+func Test_Collection_3levels(t *testing.T) {
+	appParts, cleanup := buildAppParts(t)
+	defer cleanup()
+
+	cp_Collection_3levels(t, appParts)
+}
+
 func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 	require := require.New(t)
+
+	appParts, cleanup := buildAppParts(t)
+	defer cleanup()
+
 	// Fill the collection projection
-	Test_Collection_3levels(t)
+	cp_Collection_3levels(t, appParts)
 
 	request := []byte(`{
 						"args":{
@@ -428,16 +457,20 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, time.Now)
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
-	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender interface{}) queryprocessor.IResultSenderClosable { return out },
-		provider, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz, testCfgs)
+	queryProcessor := queryprocessor.ProvideServiceFactory()(
+		serviceChannel,
+		func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable { return out },
+		appParts,
+		maxPrepareQueries,
+		imetrics.Provide(), "vvm", authn, authz)
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.workspace, nil, request, collectionQuery, "", sysToken)
+	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, request, collectionQuery, "", sysToken)
 	<-out.done
 
 	out.requireNoError(require)
-	require.Equal(2, len(out.resultRows)) // 2 rows
+	require.Len(out.resultRows, 2) // 2 rows
 
 	json, err := json.Marshal(out.resultRows)
 	require.NoError(err)
@@ -445,11 +478,11 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 
 	{
 		row := 0
-		require.Equal(2, len(out.resultRows[row])) // 2 elements in a row
+		require.Len(out.resultRows[row], 2) // 2 elements in a row
 		{
 			elem := 0
-			require.Equal(1, len(out.resultRows[row][elem]))    // 1 element row in 1st element
-			require.Equal(3, len(out.resultRows[row][elem][0])) // 3 cell in a row element
+			require.Len(out.resultRows[row][elem], 1)    // 1 element row in 1st element
+			require.Len(out.resultRows[row][elem][0], 3) // 3 cell in a row element
 			name := out.resultRows[row][elem][0][0]
 			number := out.resultRows[row][elem][0][1]
 			department := out.resultRows[row][elem][0][2]
@@ -459,10 +492,10 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 		}
 		{
 			elem := 1
-			require.Equal(2, len(out.resultRows[row][elem])) // 2 element rows in 2nd element
+			require.Len(out.resultRows[row][elem], 2) // 2 element rows in 2nd element
 			{
 				elemRow := 0
-				require.Equal(2, len(out.resultRows[row][elem][elemRow])) // 2 cells in a row element
+				require.Len(out.resultRows[row][elem][elemRow], 2) // 2 cells in a row element
 				price := out.resultRows[row][elem][elemRow][0]
 				pricename := out.resultRows[row][elem][elemRow][1]
 				require.Equal(float32(2.0), price)
@@ -470,7 +503,7 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 			}
 			{
 				elemRow := 1
-				require.Equal(2, len(out.resultRows[row][elem][elemRow])) // 2 cells in a row element
+				require.Len(out.resultRows[row][elem][elemRow], 2) // 2 cells in a row element
 				price := out.resultRows[row][elem][elemRow][0]
 				pricename := out.resultRows[row][elem][elemRow][1]
 				require.Equal(float32(1.5), price)
@@ -480,11 +513,11 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 	}
 	{
 		row := 1
-		require.Equal(2, len(out.resultRows[row])) // 2 elements in a row
+		require.Len(out.resultRows[row], 2) // 2 elements in a row
 		{
 			elem := 0
-			require.Equal(1, len(out.resultRows[row][elem]))    // 1 element row in 1st element
-			require.Equal(3, len(out.resultRows[row][elem][0])) // 3 cell in a row element
+			require.Len(out.resultRows[row][elem], 1)    // 1 element row in 1st element
+			require.Len(out.resultRows[row][elem][0], 3) // 3 cell in a row element
 			name := out.resultRows[row][elem][0][0]
 			number := out.resultRows[row][elem][0][1]
 			department := out.resultRows[row][elem][0][2]
@@ -494,10 +527,10 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 		}
 		{
 			elem := 1
-			require.Equal(2, len(out.resultRows[row][elem])) // 2 element rows in 2nd element
+			require.Len(out.resultRows[row][elem], 2) // 2 element rows in 2nd element
 			{
 				elemRow := 0
-				require.Equal(2, len(out.resultRows[row][elem][elemRow])) // 2 cells in a row element
+				require.Len(out.resultRows[row][elem][elemRow], 2) // 2 cells in a row element
 				price := out.resultRows[row][elem][elemRow][0]
 				pricename := out.resultRows[row][elem][elemRow][1]
 				require.Equal(float32(2.1), price)
@@ -505,7 +538,7 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 			}
 			{
 				elemRow := 1
-				require.Equal(2, len(out.resultRows[row][elem][elemRow])) // 2 cells in a row element
+				require.Len(out.resultRows[row][elem][elemRow], 2) // 2 cells in a row element
 				price := out.resultRows[row][elem][elemRow][0]
 				pricename := out.resultRows[row][elem][elemRow][1]
 				require.Equal(float32(1.6), price)
@@ -517,8 +550,12 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 
 func TestBasicUsage_QueryFunc_CDoc(t *testing.T) {
 	require := require.New(t)
+
+	appParts, cleanup := buildAppParts(t)
+	defer cleanup()
+
 	// Fill the collection projection
-	Test_Collection_3levels(t)
+	cp_Collection_3levels(t, appParts)
 
 	request := fmt.Sprintf(`{
 		"args":{
@@ -538,21 +575,21 @@ func TestBasicUsage_QueryFunc_CDoc(t *testing.T) {
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, time.Now)
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
-	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender interface{}) queryprocessor.IResultSenderClosable {
+	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable {
 		return out
-	}, provider, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz, testCfgs)
+	}, appParts, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz)
 
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.workspace, nil, []byte(request), getCDocQuery, "", sysToken)
+	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, []byte(request), getCDocQuery, "", sysToken)
 	<-out.done
 
 	out.requireNoError(require)
-	require.Equal(1, len(out.resultRows))          // 1 row
-	require.Equal(1, len(out.resultRows[0]))       // 1 element in a row
-	require.Equal(1, len(out.resultRows[0][0]))    // 1 row element in an element
-	require.Equal(1, len(out.resultRows[0][0][0])) // 1 cell in a row element
+	require.Len(out.resultRows, 1)          // 1 row
+	require.Len(out.resultRows[0], 1)       // 1 element in a row
+	require.Len(out.resultRows[0][0], 1)    // 1 row element in an element
+	require.Len(out.resultRows[0][0][0], 1) // 1 cell in a row element
 
 	value := out.resultRows[0][0][0][0]
 	expected := `{
@@ -643,8 +680,12 @@ func TestBasicUsage_QueryFunc_CDoc(t *testing.T) {
 
 func TestBasicUsage_State(t *testing.T) {
 	require := require.New(t)
+
+	appParts, cleanup := buildAppParts(t)
+	defer cleanup()
+
 	// Fill the collection projection
-	Test_Collection_3levels(t)
+	cp_Collection_3levels(t, appParts)
 
 	serviceChannel := make(iprocbus.ServiceChannel)
 	out := newTestSender()
@@ -653,22 +694,22 @@ func TestBasicUsage_State(t *testing.T) {
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, time.Now)
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
-	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender interface{}) queryprocessor.IResultSenderClosable {
+	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable {
 		return out
-	}, provider, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz, testCfgs)
+	}, appParts, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz)
 
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.workspace, nil, []byte(`{"args":{"After":0},"elements":[{"fields":["State"]}]}`),
+	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, []byte(`{"args":{"After":0},"elements":[{"fields":["State"]}]}`),
 		stateQuery, "", sysToken)
 	<-out.done
 
 	out.requireNoError(require)
-	require.Equal(1, len(out.resultRows))          // 1 row
-	require.Equal(1, len(out.resultRows[0]))       // 1 element in a row
-	require.Equal(1, len(out.resultRows[0][0]))    // 1 row element in an element
-	require.Equal(1, len(out.resultRows[0][0][0])) // 1 cell in a row element
+	require.Len(out.resultRows, 1)          // 1 row
+	require.Len(out.resultRows[0], 1)       // 1 element in a row
+	require.Len(out.resultRows[0][0], 1)    // 1 row element in an element
+	require.Len(out.resultRows[0][0][0], 1) // 1 cell in a row element
 	expected := `{
 		"test.article_price_exceptions":{
 			"322685000131081":{
@@ -808,8 +849,12 @@ func TestBasicUsage_State(t *testing.T) {
 
 func TestState_withAfterArgument(t *testing.T) {
 	require := require.New(t)
+
+	appParts, cleanup := buildAppParts(t)
+	defer cleanup()
+
 	// Fill the collection projection
-	Test_Collection_3levels(t)
+	cp_Collection_3levels(t, appParts)
 
 	serviceChannel := make(iprocbus.ServiceChannel)
 	out := newTestSender()
@@ -818,22 +863,22 @@ func TestState_withAfterArgument(t *testing.T) {
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, time.Now)
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
-	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender interface{}) queryprocessor.IResultSenderClosable {
+	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable {
 		return out
-	}, provider, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz, testCfgs)
+	}, appParts, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz)
 
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.workspace, nil, []byte(`{"args":{"After":5},"elements":[{"fields":["State"]}]}`),
+	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, []byte(`{"args":{"After":5},"elements":[{"fields":["State"]}]}`),
 		stateQuery, "", sysToken)
 	<-out.done
 
 	out.requireNoError(require)
-	require.Equal(1, len(out.resultRows))          // 1 row
-	require.Equal(1, len(out.resultRows[0]))       // 1 element in a row
-	require.Equal(1, len(out.resultRows[0][0]))    // 1 row element in an element
-	require.Equal(1, len(out.resultRows[0][0][0])) // 1 cell in a row element
+	require.Len(out.resultRows, 1)          // 1 row
+	require.Len(out.resultRows[0], 1)       // 1 element in a row
+	require.Len(out.resultRows[0][0], 1)    // 1 row element in an element
+	require.Len(out.resultRows[0][0][0], 1) // 1 cell in a row element
 	expected := `
 	{
 		"test.article_price_exceptions":{
@@ -1013,14 +1058,17 @@ func newModify(app istructs.IAppStructs, gen *idsGeneratorType, cb eventCallback
 
 func Test_Idempotency(t *testing.T) {
 	require := require.New(t)
-	appConfigs, asp := appConfigs(t)
-	provider := istructsmem.Provide(appConfigs, iratesce.TestBucketsFactory,
-		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), asp)
-	as, err := provider.AppStructs(test.appQName)
-	require.NoError(err)
+
+	appParts, cleanup := buildAppParts(t)
+	defer cleanup()
 
 	// create command processor
-	actualizer := provideSyncActualizer(context.Background(), as, istructs.PartitionID(1))
+	appPart, err := appParts.Borrow(test.appQName, test.partition, cluster.ProcessorKind_Command)
+	require.NoError(err)
+	defer appPart.Release()
+
+	as := appPart.AppStructs()
+	actualizer := provideSyncActualizer(context.Background(), as, test.partition)
 	processor := pipeline.NewSyncPipeline(context.Background(), "partition processor", pipeline.WireSyncOperator("actualizer", actualizer))
 	defer actualizer.Close()
 
@@ -1033,24 +1081,24 @@ func Test_Idempotency(t *testing.T) {
 	event1 := createEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
 		newArticleCUD(event, 1, coldDrinks, test.cocaColaNumber, "Coca-cola")
 	}))
-	require.Nil(as.Records().Apply(event1))
+	require.NoError(as.Records().Apply(event1))
 	cocaColaDocID = idGen.idmap[1]
-	require.Nil(processor.SendSync(event1))
+	require.NoError(processor.SendSync(event1))
 
 	// CUDs: modify coca-cola number and normal price
 	event2 := createEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
 		updateArticleCUD(event, as, cocaColaDocID, test.cocaColaNumber2, "Coca-cola")
 	}))
-	require.Nil(as.Records().Apply(event2))
-	require.Nil(processor.SendSync(event2))
+	require.NoError(as.Records().Apply(event2))
+	require.NoError(processor.SendSync(event2))
 
 	// simulate sending event with the same offset
 	idGen.decOffset()
 	event2copy := createEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
 		updateArticleCUD(event, as, cocaColaDocID, test.cocaColaNumber, "Coca-cola")
 	}))
-	require.Nil(as.Records().Apply(event2copy))
-	require.Nil(processor.SendSync(event2copy))
+	require.NoError(as.Records().Apply(event2copy))
+	require.NoError(processor.SendSync(event2copy))
 
 	// Check expected projection values
 	{ // coca-cola

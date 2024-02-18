@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	it "github.com/voedger/voedger/pkg/vit"
@@ -252,7 +253,7 @@ func Test_Race_CUDManyReadCheckResult(t *testing.T) {
 		wg.Add(1)
 		go func(wsid istructs.WSID) {
 			defer wg.Done()
-			ws := vit.DummyWS(istructs.AppQName_test1_app1, wsid)
+			ws := vit.DummyWS(istructs.AppQName_test1_app1, wsid+istructs.MaxPseudoBaseWSID)
 			readArt(vit, ws)
 		}(prtIdx)
 	}
@@ -408,7 +409,7 @@ func readAndCheckArt(t *testing.T, idx int, vit *it.VIT, ws *it.AppWorkspace) {
 		actualName = resp.SectionRow(i)[0].(string)
 		actualControlActive = resp.SectionRow(i)[1].(float64)
 		id = resp.SectionRow(i)[2].(float64)
-		require.NotEqual(id, 0)
+		require.NotEqual(0, id)
 		i++
 	}
 	require.Equal(artname, actualName)

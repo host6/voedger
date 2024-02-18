@@ -64,7 +64,16 @@ func (se *scriptExecuterType) run(scriptName string, args ...string) error {
 	os.Chdir(scriptsTempDir)
 
 	if len(se.sshKeyPath) > 0 {
-		args = append([]string{fmt.Sprintf("eval $(ssh-agent -s); ssh-add %s; ./%s", se.sshKeyPath, scriptName)}, args...)
+		buf := []string{}
+		for _, s := range args {
+			if strings.Contains(s, " ") {
+				buf = append(buf, fmt.Sprintf(`"%s"`, s))
+			} else {
+				buf = append(buf, s)
+			}
+		}
+		args = append([]string{fmt.Sprintf("eval $(ssh-agent -s); ssh-add %s; ./%s", se.sshKeyPath, scriptName)}, buf...)
+
 		pExec = new(exec.PipedExec).Command("bash", "-c", strings.Join(args, " "))
 	} else {
 		args = append([]string{scriptName}, args...)
@@ -101,7 +110,7 @@ func (se *scriptExecuterType) run(scriptName string, args ...string) error {
 			Run(stdoutWriter, stderrWriter)
 	}
 
-	if err != nil {
+	if err != nil && verbose() {
 		loggerError(fmt.Errorf("the error of the script %s: %w", scriptName, err).Error())
 	}
 	return err
@@ -166,7 +175,7 @@ func prepareScripts(scriptFileNames ...string) error {
 		dir := filepath.Dir(destFileName)
 
 		// nolint
-		err = os.MkdirAll(dir, 0700) // os.ModePerm)
+		err = os.MkdirAll(dir, rwxrwxrwx) // os.ModePerm)
 		if err != nil {
 			return err
 		}
@@ -202,7 +211,7 @@ func extractAllScripts() error {
 				return err
 			}
 			destPath := filepath.Join(scriptsTempDir, strings.TrimPrefix(path, "scripts/drafts"))
-			err = os.MkdirAll(filepath.Dir(destPath), 0700)
+			err = os.MkdirAll(filepath.Dir(destPath), rwxrwxrwx)
 			if err != nil {
 				return err
 			}

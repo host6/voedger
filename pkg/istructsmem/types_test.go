@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem/internal/qnames"
@@ -123,7 +124,7 @@ func Test_dynoBufValue(t *testing.T) {
 	t.Run("test QName", func(t *testing.T) {
 		id, _ := test.AppCfg.qNames.ID(test.saleCmdName)
 		b := make([]byte, 2)
-		binary.BigEndian.PutUint16(b, uint16(id))
+		binary.BigEndian.PutUint16(b, id)
 
 		v, err := row.dynoBufValue(test.saleCmdName, appdef.DataKind_QName)
 		require.NoError(err)
@@ -153,11 +154,15 @@ func Test_dynoBufValue(t *testing.T) {
 	t.Run("test bool", func(t *testing.T) {
 		v, err := row.dynoBufValue(false, appdef.DataKind_bool)
 		require.NoError(err)
-		require.Equal(false, v)
+		vBool, ok := v.(bool)
+		require.True(ok)
+		require.False(vBool)
 
 		v, err = row.dynoBufValue(true, appdef.DataKind_bool)
 		require.NoError(err)
-		require.Equal(true, v)
+		vBool, ok = v.(bool)
+		require.True(ok)
+		require.True(vBool)
 
 		v, err = row.dynoBufValue(7, appdef.DataKind_bool)
 		require.ErrorIs(err, ErrWrongFieldType)
@@ -257,7 +262,7 @@ func Test_rowType_PutAs_SimpleTypes(t *testing.T) {
 		require.EqualValues([]byte(nil), row.AsBytes("raw"))
 
 		require.Equal(appdef.NullQName, row.AsQName("QName"))
-		require.Equal(false, row.AsBool("bool"))
+		require.False(row.AsBool("bool"))
 		require.Equal(istructs.NullRecordID, row.AsRecordID("RecordID"))
 
 		val := newEmptyTestViewValue()
@@ -317,6 +322,41 @@ func Test_rowType_PutAs_SimpleTypes(t *testing.T) {
 		require.Equal([]byte{1, 2, 3, 4}, row.AsBytes("bytes"))
 		require.Equal(rawValue, row.AsBytes("raw"))
 	})
+}
+
+func Test_rowType_PutFromJSON(t *testing.T) {
+	require := require.New(t)
+	test := test()
+
+	bld := test.AppStructs.ObjectBuilder(test.testRow)
+
+	data := map[string]any{
+		"int32":    float64(1),
+		"int64":    float64(2),
+		"float32":  float64(3),
+		"float64":  float64(4),
+		"bytes":    "BQY=", // []byte{5,6}
+		"string":   "str",
+		"QName":    test.testCDoc.String(),
+		"bool":     true,
+		"RecordID": float64(7),
+	}
+
+	bld.PutFromJSON(data)
+
+	row, err := bld.Build()
+	require.NoError(err)
+
+	require.EqualValues(test.testRow, row.QName())
+	require.EqualValues(1, row.AsInt32("int32"))
+	require.EqualValues(2, row.AsInt64("int64"))
+	require.EqualValues(3, row.AsFloat32("float32"))
+	require.EqualValues(4, row.AsFloat64("float64"))
+	require.Equal([]byte{5, 6}, row.AsBytes("bytes"))
+	require.Equal("str", row.AsString("string"))
+	require.Equal(test.testCDoc, row.AsQName("QName"))
+	require.True(row.AsBool("bool"))
+	require.EqualValues(7, row.AsRecordID("RecordID"))
 }
 
 func Test_rowType_PutAs_ComplexTypes(t *testing.T) {
@@ -575,7 +615,7 @@ func Test_rowType_maskValues(t *testing.T) {
 		require.Equal("*", row.AsString("string"))
 		require.Nil(row.AsBytes("raw"))
 		require.Equal(appdef.NullQName, row.AsQName("QName"))
-		require.Equal(false, row.AsBool("bool"))
+		require.False(row.AsBool("bool"))
 		require.Equal(istructs.NullRecordID, row.AsRecordID("RecordID"))
 	})
 }
@@ -796,7 +836,7 @@ func Test_rowType_Nils(t *testing.T) {
 			case "int32", "int64", "float32", "float64":
 				require.Zero(newData)
 			case "QName":
-				var nullQNameBytes = []uint8([]byte{0x0, 0x0})
+				var nullQNameBytes = []byte{0x0, 0x0}
 				require.Equal(nullQNameBytes, newData)
 			case "bool":
 				require.False(newData.(bool))

@@ -8,10 +8,10 @@ import (
 	"context"
 	"fmt"
 	"runtime/debug"
-	"time"
 
 	"github.com/voedger/voedger/pkg/apps"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/parser"
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/sys/smtp"
@@ -29,18 +29,22 @@ const (
 	TestEmail2      = "124@124.com"
 	TestServicePort = 10000
 	app1PkgName     = "app1pkg"
+	app2PkgName     = "app2pkg"
 )
 
 var (
-	QNameApp1_TestWSKind               = appdef.NewQName(app1PkgName, "WSKind")
-	QNameTestView                      = appdef.NewQName(app1PkgName, "View")
-	QNameApp1_TestEmailVerificationDoc = appdef.NewQName(app1PkgName, "Doc")
-	QNameApp1_CDocTestConstraints      = appdef.NewQName(app1PkgName, "DocConstraints")
-	QNameCmdRated                      = appdef.NewQName(app1PkgName, "RatedCmd")
-	QNameQryRated                      = appdef.NewQName(app1PkgName, "RatedQry")
-	QNameODoc1                         = appdef.NewQName(app1PkgName, "odoc1")
-	QNameODoc2                         = appdef.NewQName(app1PkgName, "odoc2")
-	TestSMTPCfg                        = smtp.Cfg{
+	QNameApp1_TestWSKind                     = appdef.NewQName(app1PkgName, "test_ws")
+	QNameTestView                            = appdef.NewQName(app1PkgName, "View")
+	QNameApp1_TestEmailVerificationDoc       = appdef.NewQName(app1PkgName, "Doc")
+	QNameApp1_DocConstraints                 = appdef.NewQName(app1PkgName, "DocConstraints")
+	QNameApp1_DocConstraintsString           = appdef.NewQName(app1PkgName, "DocConstraintsString")
+	QNameApp1_DocConstraintsFewUniques       = appdef.NewQName(app1PkgName, "DocConstraintsFewUniques")
+	QNameApp1_DocConstraintsOldAndNewUniques = appdef.NewQName(app1PkgName, "DocConstraintsOldAndNewUniques")
+	QNameCmdRated                            = appdef.NewQName(app1PkgName, "RatedCmd")
+	QNameQryRated                            = appdef.NewQName(app1PkgName, "RatedQry")
+	QNameODoc1                               = appdef.NewQName(app1PkgName, "odoc1")
+	QNameODoc2                               = appdef.NewQName(app1PkgName, "odoc2")
+	TestSMTPCfg                              = smtp.Cfg{
 		Username: "username@gmail.com",
 	}
 
@@ -51,7 +55,9 @@ var (
 			WithUserLogin("login", "pwd"),
 			WithUserLogin(TestEmail, "1"),
 			WithUserLogin(TestEmail2, "1"),
-			WithChildWorkspace(QNameApp1_TestWSKind, "test_ws", "test_template", "", "login", map[string]interface{}{"IntFld": 42}),
+			WithChildWorkspace(QNameApp1_TestWSKind, "test_ws", "test_template", "", "login", map[string]interface{}{"IntFld": 42},
+				WithChild(QNameApp1_TestWSKind, "test_ws2", "test_template", "", "login", map[string]interface{}{"IntFld": 42},
+					WithSubject(TestEmail, istructs.SubjectKind_User, []appdef.QName{iauthnz.QNameRoleWorkspaceOwner}))),
 		),
 		WithApp(istructs.AppQName_test1_app2, ProvideApp2, WithUserLogin("login", "1")),
 		WithVVMConfig(func(cfg *vvm.VVMConfig) {
@@ -84,6 +90,7 @@ func ProvideApp2(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 		QualifiedPackageName: "github.com/voedger/voedger/pkg/vit/app2pkg",
 		FS:                   SchemaTestApp2FS,
 	}
+	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app2PkgName, "testCmd"), istructsmem.NullCommandExec))
 	return apps.AppPackages{
 		AppQName: istructs.AppQName_test1_app2,
 		Packages: []parser.PackageFS{sysPackageFS, app2PackageFS},
@@ -111,24 +118,12 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 	))
 
 	// per-app limits
-	cfg.FunctionRateLimits.AddAppLimit(QNameCmdRated, istructs.RateLimit{
-		Period:                time.Minute,
-		MaxAllowedPerDuration: 2,
-	})
-	cfg.FunctionRateLimits.AddAppLimit(QNameQryRated, istructs.RateLimit{
-		Period:                time.Minute,
-		MaxAllowedPerDuration: 2,
-	})
+	cfg.FunctionRateLimits.AddAppLimit(QNameCmdRated, maxRateLimit2PerMinute)
+	cfg.FunctionRateLimits.AddAppLimit(QNameQryRated, maxRateLimit2PerMinute)
 
 	// per-workspace limits
-	cfg.FunctionRateLimits.AddWorkspaceLimit(QNameCmdRated, istructs.RateLimit{
-		Period:                time.Hour,
-		MaxAllowedPerDuration: 4,
-	})
-	cfg.FunctionRateLimits.AddWorkspaceLimit(QNameQryRated, istructs.RateLimit{
-		Period:                time.Hour,
-		MaxAllowedPerDuration: 4,
-	})
+	cfg.FunctionRateLimits.AddWorkspaceLimit(QNameCmdRated, maxRateLimit4PerHour)
+	cfg.FunctionRateLimits.AddWorkspaceLimit(QNameQryRated, maxRateLimit4PerHour)
 
 	cfg.Resources.Add(istructsmem.NewQueryFunction(
 		appdef.NewQName(app1PkgName, "MockQry"),
@@ -185,6 +180,16 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 		appdef.NewQName(app1PkgName, "CmdODocTwo"),
 		istructsmem.NullCommandExec,
 	))
+
+	cfg.AddAsyncProjectors(func(istructs.PartitionID) istructs.Projector {
+		return istructs.Projector{
+			Name: appdef.NewQName(app1PkgName, "ProjDummy"),
+			Func: func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
+				return nil
+			},
+		}
+	})
+
 	app1PackageFS := parser.PackageFS{
 		QualifiedPackageName: "github.com/voedger/voedger/pkg/vit/app1pkg",
 		FS:                   SchemaTestApp1FS,

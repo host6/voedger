@@ -7,6 +7,7 @@ package istructsmem
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -14,6 +15,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	log "github.com/untillpro/goutils/logger"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -37,11 +39,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 		test.AppCfg.Params.PLogEventCacheSize = 0
 	}
 
-	// gets AppStructProvider and AppStructs
-	provider := Provide(test.AppConfigs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
-
-	app, err := provider.AppStructs(test.appName)
-	require.NoError(err)
+	app := test.AppStructs
 
 	var rawEvent istructs.IRawEvent
 	var buildErr error
@@ -121,7 +119,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 		t.Run("test build raw event", func(t *testing.T) {
 			rawEvent, buildErr = bld.BuildRawEvent()
-			require.NoError(buildErr, buildErr)
+			require.NoError(buildErr)
 			require.NotNil(rawEvent)
 		})
 	})
@@ -153,7 +151,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 			return nil
 		},
 		))
-		require.NoError(saveErr, saveErr)
+		require.NoError(saveErr)
 		require.False(photoID.IsRaw())
 		require.False(remarkID.IsRaw())
 		require.False(saleID.IsRaw())
@@ -188,8 +186,8 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 			}
 		})
 		require.NoError(err)
-		require.NotEqual(idP, istructs.NullRecordID)
-		require.NotEqual(idR, istructs.NullRecordID)
+		require.NotEqual(istructs.NullRecordID, idP)
+		require.NotEqual(istructs.NullRecordID, idR)
 	})
 
 	t.Run("III. Read event from PLog & PLog and reads CUD demo", func(t *testing.T) {
@@ -273,7 +271,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 			t.Run("test single record reading", func(t *testing.T) {
 				var event istructs.IWLogEvent
-				err = app.Events().ReadWLog(context.Background(), test.workspace, test.wlogOfs, 1,
+				err := app.Events().ReadWLog(context.Background(), test.workspace, test.wlogOfs, 1,
 					func(wlogOffset istructs.Offset, ev istructs.IWLogEvent) (err error) {
 						require.Equal(test.wlogOfs, wlogOffset)
 						event = ev
@@ -288,7 +286,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 			t.Run("test sequential reading", func(t *testing.T) {
 				var event istructs.IWLogEvent
-				err = app.Events().ReadWLog(context.Background(), test.workspace, test.wlogOfs, 1,
+				err := app.Events().ReadWLog(context.Background(), test.workspace, test.wlogOfs, 1,
 					func(wlogOffset istructs.Offset, ev istructs.IWLogEvent) (err error) {
 						require.Equal(test.wlogOfs, wlogOffset)
 						event = ev
@@ -306,7 +304,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 			t.Run("test single record reading", func(t *testing.T) {
 				var wLogEvent istructs.IWLogEvent
-				err = app.Events().ReadWLog(context.Background(), test.workspace+1, test.wlogOfs, 1,
+				err := app.Events().ReadWLog(context.Background(), test.workspace+1, test.wlogOfs, 1,
 					func(wlogOffset istructs.Offset, event istructs.IWLogEvent) (err error) {
 						require.Fail("must be no event if read WLog from other WSID")
 						return nil
@@ -317,7 +315,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 			t.Run("test sequential reading", func(t *testing.T) {
 				var wLogEvent istructs.IWLogEvent
-				err = app.Events().ReadWLog(context.Background(), test.workspace+1, test.wlogOfs, istructs.ReadToTheEnd,
+				err := app.Events().ReadWLog(context.Background(), test.workspace+1, test.wlogOfs, istructs.ReadToTheEnd,
 					func(wlogOffset istructs.Offset, event istructs.IWLogEvent) (err error) {
 						require.Fail("must be no event if read WLog from other WSID")
 						return nil
@@ -395,7 +393,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 		t.Run("test build raw event", func(t *testing.T) {
 			rawEvent, buildErr = bld.BuildRawEvent()
-			require.NoError(buildErr, buildErr)
+			require.NoError(buildErr)
 			require.NotNil(rawEvent)
 		})
 	})
@@ -406,7 +404,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 		t.Run("test save to PLog", func(t *testing.T) {
 			ev, saveErr := app.Events().PutPlog(rawEvent, buildErr, NewIDGenerator())
-			require.NoError(saveErr, saveErr)
+			require.NoError(saveErr)
 			require.NotNil(ev)
 			pLogEvent = ev
 		})
@@ -418,7 +416,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 		})
 
 		t.Run("test apply PLog event records", func(t *testing.T) {
-			err = app.Records().Apply(pLogEvent)
+			err := app.Records().Apply(pLogEvent)
 			require.NoError(err)
 		})
 	})
@@ -478,7 +476,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 			t.Run("test single record reading", func(t *testing.T) {
 				var event istructs.IWLogEvent
-				err = app.Events().ReadWLog(context.Background(), test.workspace, test.wlogOfs+1, 1,
+				err := app.Events().ReadWLog(context.Background(), test.workspace, test.wlogOfs+1, 1,
 					func(wlogOffset istructs.Offset, ev istructs.IWLogEvent) (err error) {
 						require.Equal(test.wlogOfs+1, wlogOffset)
 						event = ev
@@ -490,7 +488,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 			t.Run("test sequential reading", func(t *testing.T) {
 				var event istructs.IWLogEvent
-				err = app.Events().ReadWLog(context.Background(), test.workspace, test.wlogOfs+1, istructs.ReadToTheEnd,
+				err := app.Events().ReadWLog(context.Background(), test.workspace, test.wlogOfs+1, istructs.ReadToTheEnd,
 					func(wlogOffset istructs.Offset, ev istructs.IWLogEvent) (err error) {
 						require.Equal(test.wlogOfs+1, wlogOffset)
 						event = ev
@@ -542,7 +540,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 			// hack: use low level appRecordsType putRecord()
 			bytes := r.storeToBytes()
-			require.True(len(bytes) > 0)
+			require.NotEmpty(bytes)
 			err = app.Records().(*appRecordsType).putRecord(test.workspace, photoID, bytes)
 			require.NoError(err)
 
@@ -555,7 +553,7 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 
 		t.Run("test reread PLog", func(t *testing.T) {
 			var pLogEvent istructs.IPLogEvent
-			err = app.Events().ReadPLog(context.Background(), test.partition, test.plogOfs+1, 1,
+			err := app.Events().ReadPLog(context.Background(), test.partition, test.plogOfs+1, 1,
 				func(plogOffset istructs.Offset, event istructs.IPLogEvent) (err error) {
 					require.Equal(test.plogOfs+1, plogOffset)
 					pLogEvent = event
@@ -634,7 +632,7 @@ func testCommandsTree(t *testing.T, cmd istructs.IObject) {
 		var names []string
 		cmd.Containers(
 			func(name string) { names = append(names, name) })
-		require.Equal(1, len(names))
+		require.Len(names, 1)
 		require.Equal(test.basketIdent, names[0])
 
 		cmd.Children(test.basketIdent, func(c istructs.IObject) { basket = c })
@@ -647,13 +645,13 @@ func testCommandsTree(t *testing.T, cmd istructs.IObject) {
 		var names []string
 		basket.Containers(
 			func(name string) { names = append(names, name) })
-		require.Equal(len(names), 1)
+		require.Len(names, 1)
 		require.Equal(test.goodIdent, names[0])
 
 		var goods []istructs.IObject
 		basket.Children(test.goodIdent, func(g istructs.IObject) { goods = append(goods, g) })
 		require.NotNil(goods)
-		require.Equal(test.goodCount, len(goods))
+		require.Len(goods, test.goodCount)
 
 		for i := 0; i < test.goodCount; i++ {
 			good := goods[i]
@@ -717,7 +715,7 @@ func testDbEvent(t *testing.T, event istructs.IDbEvent) {
 			cnt++
 		})
 		require.Equal(2, cnt)
-		require.Equal(2, len(cuds))
+		require.Len(cuds, 2)
 		testPhotoRow(t, cuds[0])
 		require.Equal(cuds[0].AsRecordID(appdef.SystemField_ID), cuds[1].AsRecordID(test.photoIdent))
 		require.Equal(test.remarkValue, cuds[1].AsString(test.remarkIdent))
@@ -800,7 +798,7 @@ func Test_EventUpdateRawCud(t *testing.T) {
 			expectedQName = docName
 			pLogEvent, saveErr := app.Events().PutPlog(rawEvent, err, idGenerator)
 			require.NotNil(pLogEvent)
-			require.NoError(saveErr, saveErr)
+			require.NoError(saveErr)
 			require.True(pLogEvent.Error().ValidEvent())
 
 			t.Run("must ok to apply CDoc records", func(t *testing.T) {
@@ -853,7 +851,7 @@ func Test_EventUpdateRawCud(t *testing.T) {
 			expectedQName = recName
 			pLogEvent, saveErr := app.Events().PutPlog(rawEvent, err, idGenerator)
 			require.NotNil(pLogEvent)
-			require.NoError(saveErr, saveErr)
+			require.NoError(saveErr)
 			require.True(pLogEvent.Error().ValidEvent())
 
 			switch test {
@@ -968,7 +966,7 @@ func Test_SingletonCDocEvent(t *testing.T) {
 			return errors.New("unexpected call ID generator from singleton CDoc creation")
 		}))
 		require.NotNil(pLogEvent)
-		require.NoError(saveErr, saveErr)
+		require.NoError(saveErr)
 		require.True(pLogEvent.Error().ValidEvent())
 
 		t.Run("newly created singleton CDoc must be ok", func(t *testing.T) {
@@ -1035,7 +1033,7 @@ func Test_SingletonCDocEvent(t *testing.T) {
 			return errors.New("unexpected call ID generator from singleton CDoc creation")
 		}))
 		require.NotNil(pLogEvent)
-		require.NoError(saveErr, saveErr)
+		require.NoError(saveErr)
 		require.False(pLogEvent.Error().ValidEvent())
 
 		require.Panics(
@@ -1099,7 +1097,7 @@ func Test_SingletonCDocEvent(t *testing.T) {
 			return errors.New("unexpected call ID generator while singleton CDoc update")
 		}))
 		require.NotNil(pLogEvent)
-		require.NoError(saveErr, saveErr)
+		require.NoError(saveErr)
 		require.True(pLogEvent.Error().ValidEvent())
 
 		t.Run("updated singleton CDoc must be ok", func(t *testing.T) {
@@ -1348,7 +1346,7 @@ func TestEventBuild_Error(t *testing.T) {
 				cud := bld.CUDBuilder().Update(getPhotoRem())
 				cud.PutBool(appdef.SystemField_IsActive, false)
 				rawEvent, buildErr = bld.BuildRawEvent()
-				require.NoError(buildErr, buildErr)
+				require.NoError(buildErr)
 				require.NotNil(rawEvent)
 			})
 		})
@@ -1383,7 +1381,7 @@ func TestEventBuild_Error(t *testing.T) {
 			cmdSec.PutString(test.passwordIdent, "12345")
 
 			rawEvent, buildErr = bld.BuildRawEvent()
-			require.NoError(buildErr, buildErr)
+			require.NoError(buildErr)
 			require.NotNil(rawEvent)
 
 			pLogEvent, saveErr := app.Events().PutPlog(rawEvent, buildErr, NewIDGeneratorWithHook(func(rawID, storageID istructs.RecordID, t appdef.IType) error {
@@ -1395,7 +1393,7 @@ func TestEventBuild_Error(t *testing.T) {
 			}))
 			require.False(pLogEvent.Error().ValidEvent())
 			require.Contains(pLogEvent.Error().ErrStr(), ErrWrongRecordID.Error())
-			require.NoError(saveErr, saveErr)
+			require.NoError(saveErr)
 			require.NotNil(pLogEvent)
 		})
 
@@ -1414,7 +1412,7 @@ func TestEventBuild_Error(t *testing.T) {
 			cud.PutString(test.remarkIdent, test.remarkValue)
 
 			rawEvent, buildErr = bld.BuildRawEvent()
-			require.NoError(buildErr, buildErr)
+			require.NoError(buildErr)
 			require.NotNil(rawEvent)
 
 			pLogEvent, saveErr := app.Events().PutPlog(rawEvent, buildErr, NewIDGeneratorWithHook(func(rawID, storageID istructs.RecordID, t appdef.IType) error {
@@ -1426,7 +1424,7 @@ func TestEventBuild_Error(t *testing.T) {
 			}))
 			require.False(pLogEvent.Error().ValidEvent())
 			require.Contains(pLogEvent.Error().ErrStr(), ErrWrongRecordID.Error())
-			require.NoError(saveErr, saveErr)
+			require.NoError(saveErr)
 			require.NotNil(pLogEvent)
 
 			require.Panics(
@@ -1466,10 +1464,10 @@ func Test_LoadEvent_CorruptedBytes(t *testing.T) {
 	testDbEvent(t, ev1)
 
 	b := ev1.storeToBytes()
-	len := len(b)
+	length := len(b)
 
 	t.Run("load/store from truncated bytes", func(t *testing.T) {
-		for i := 0; i < len; i++ {
+		for i := 0; i < length; i++ {
 			corrupted := b[0:i]
 
 			ev2 := newEmptyTestEvent()
@@ -1483,7 +1481,7 @@ func Test_LoadEvent_CorruptedBytes(t *testing.T) {
 		"— success read wrong data",
 		func(t *testing.T) {
 			stat := make(map[string]int)
-			for i := 0; i < len; i++ {
+			for i := 0; i < length; i++ {
 				b[i] ^= 255
 				ev2 := newEmptyTestEvent()
 
@@ -1505,7 +1503,7 @@ func Test_LoadEvent_CorruptedBytes(t *testing.T) {
 
 				b[i] ^= 255
 			}
-			log.Verbose("len: %d, stat: %v\n", len, stat)
+			log.Verbose("len: %d, stat: %v\n", length, stat)
 		})
 }
 
@@ -1614,8 +1612,8 @@ func Test_LoadErrorEvent_CorruptedBytes(t *testing.T) {
 
 	b := ev1.storeToBytes()
 
-	len := len(b)
-	for i := 0; i < len; i++ {
+	length := len(b)
+	for i := 0; i < length; i++ {
 		corrupted := b[0:i]
 
 		ev2 := newEmptyTestEvent()
@@ -1665,4 +1663,88 @@ func Test_ObjectMask(t *testing.T) {
 	})
 
 	require.Equal(test.goodCount, cnt)
+}
+
+func Test_objectType_FillFromJSON(t *testing.T) {
+	require := require.New(t)
+	test := test()
+
+	tests := []struct {
+		name  string
+		data  string
+		check func(istructs.IObject, error)
+	}{
+		{"must be ok to fill from empty JSON",
+			`{}`,
+			func(o istructs.IObject, err error) {
+				require.NoError(err)
+				require.Equal(test.testObj, o.QName())
+				require.EqualValues(0, o.AsInt32("int32"))
+			}},
+		{"must be ok to fill fields from JSON",
+			`{"int32": 1, "int64": 2, "float32": 3.3, "float64": 4.4, "bool": true, "string": "test", "bytes": "AQID"}`,
+			func(o istructs.IObject, err error) {
+				require.NoError(err)
+				require.Equal(test.testObj, o.QName())
+				require.EqualValues(1, o.AsInt32("int32"))
+				require.EqualValues(2, o.AsInt64("int64"))
+				require.EqualValues(3.3, o.AsFloat32("float32"))
+				require.EqualValues(4.4, o.AsFloat64("float64"))
+				require.EqualValues(true, o.AsBool("bool"))
+				require.EqualValues("test", o.AsString("string"))
+				require.EqualValues([]byte{1, 2, 3}, o.AsBytes("bytes"))
+			}},
+		{"must be ok to fill children from JSON",
+			`{"int32": 1, "child": [{"int64": 1}, {"int64": 2}, {"int64": 3}]}`,
+			func(o istructs.IObject, err error) {
+				require.NoError(err)
+				require.Equal(test.testObj, o.QName())
+				require.EqualValues(1, o.AsInt32("int32"))
+				require.Equal(3, func() int {
+					cnt := 0
+					o.Children("child", func(c istructs.IObject) {
+						cnt++
+						require.EqualValues(cnt, c.AsInt64("int64"))
+					})
+					return cnt
+				}())
+			}},
+		{"must be error if unknown field in JSON",
+			`{"unknown": 1}`,
+			func(o istructs.IObject, err error) {
+				require.ErrorIs(err, ErrNameNotFound)
+				require.ErrorContains(err, "field «unknown» is not found")
+			}},
+		{"must be error if invalid data type in JSON field",
+			`{"int32": "error"}`,
+			func(o istructs.IObject, err error) {
+				require.ErrorIs(err, ErrWrongFieldType)
+				require.ErrorContains(err, "int32")
+			}},
+		{"must be error if unknown container in JSON",
+			`{"unknown": [{"int32": 1}]}`,
+			func(o istructs.IObject, err error) {
+				require.ErrorIs(err, ErrNameNotFound)
+				require.ErrorContains(err, "container «unknown» is not found")
+			}},
+		{"must be error if invalid data type in JSON container",
+			`{"child": ["a","b"]}`,
+			func(o istructs.IObject, err error) {
+				require.ErrorIs(err, ErrWrongType)
+				require.ErrorContains(err, "invalid type «string»")
+				require.ErrorContains(err, "child «child[0]»")
+			}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := test.AppStructs.ObjectBuilder(test.testObj)
+			require.NotNil(b)
+
+			var j map[string]any
+			_ = json.Unmarshal([]byte(tt.data), &j)
+			b.FillFromJSON(j)
+
+			tt.check(b.Build())
+		})
+	}
 }

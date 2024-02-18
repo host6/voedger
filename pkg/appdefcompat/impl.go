@@ -2,6 +2,7 @@
 * Copyright (c) 2023-present unTill Pro, Ltd.
 * @author Alisher Nurmanov
  */
+
 package appdefcompat
 
 import (
@@ -14,16 +15,16 @@ import (
 var constrains = []NodeConstraint{
 	{NodeNameTypes, ConstraintInsertOnly},
 	{NodeNameFields, ConstraintAppendOnly},
-	{NodeNameUniqueFields, ConstraintNonModifiable},
+	{NodeNameUniqueFields, ConstraintOrderChangeOnly},
 	{NodeNamePartKeyFields, ConstraintNonModifiable},
 	{NodeNameClustColsFields, ConstraintNonModifiable},
 	{NodeNameCommandArgs, ConstraintNonModifiable},
 	{NodeNameCommandResult, ConstraintNonModifiable},
 }
 
-func checkBackwardCompatibility(old, new appdef.IAppDef) (cerrs *CompatibilityErrors) {
+func checkBackwardCompatibility(oldAppDef, newAppDef appdef.IAppDef) (cerrs *CompatibilityErrors) {
 	return &CompatibilityErrors{
-		Errors: compareNodes(buildTree(old), buildTree(new), constrains),
+		Errors: compareNodes(buildTree(oldAppDef), buildTree(newAppDef), constrains),
 	}
 }
 
@@ -92,7 +93,7 @@ func buildQueryNode(parentNode *CompatibilityTreeNode, item appdef.IQuery) (node
 func buildTableNode(parentNode *CompatibilityTreeNode, item appdef.IDoc) (node *CompatibilityTreeNode) {
 	node = newNode(parentNode, item.QName().String(), nil)
 	node.Props = append(node.Props,
-		buildUniqueFieldsNode(node, item),
+		buildUniquesNode(node, item),
 		buildFieldsNode(node, item, NodeNameFields),
 		buildContainersNode(node, item),
 		buildAbstractNode(node, item),
@@ -104,15 +105,19 @@ func buildTableNode(parentNode *CompatibilityTreeNode, item appdef.IDoc) (node *
 func buildCommandNode(parentNode *CompatibilityTreeNode, item appdef.ICommand) (node *CompatibilityTreeNode) {
 	node = newNode(parentNode, item.QName().String(), nil)
 	node.Props = append(node.Props,
-		buildFieldsNode(node, item.Param(), NodeNameCommandArgs),
-		buildFieldsNode(node, item.UnloggedParam(), NodeNameUnloggedArgs),
-		buildFieldsNode(node, item.Result(), NodeNameCommandResult),
+		buildQNameNode(node, item.Param(), NodeNameCommandArgs, true),
+		buildQNameNode(node, item.UnloggedParam(), NodeNameUnloggedArgs, true),
+		buildQNameNode(node, item.Result(), NodeNameCommandResult, true),
 	)
 	return
 }
 
 func buildQNameNode(parentNode *CompatibilityTreeNode, item appdef.IType, name string, qNameOnly bool) (node *CompatibilityTreeNode) {
-	node = newNode(parentNode, name, nil)
+	var value interface{}
+	if item != nil {
+		value = item.QName().String()
+	}
+	node = newNode(parentNode, name, value)
 	if !qNameOnly {
 		if t, ok := item.(appdef.IWithAbstract); ok {
 			node.Props = append(node.Props, buildAbstractNode(node, t))
@@ -161,23 +166,26 @@ func buildFieldsNode(parentNode *CompatibilityTreeNode, item interface{}, nodeNa
 	return
 }
 
-func buildUniqueFieldNode(parentNode *CompatibilityTreeNode, item appdef.IUnique) (node *CompatibilityTreeNode) {
-	node = newNode(parentNode, item.Name(), item.ID())
-	fieldsNode := newNode(node, NodeNameFields, nil)
+func buildUniqueFieldsNode(parentNode *CompatibilityTreeNode, item appdef.IUnique) (node *CompatibilityTreeNode) {
+	node = newNode(parentNode, NodeNameUniqueFields, nil)
 	for _, f := range item.Fields() {
-		fieldsNode.Props = append(fieldsNode.Props, buildFieldNode(node, f))
+		node.Props = append(node.Props, buildFieldNode(node, f))
 	}
+	return
+}
+
+func buildUniqueNode(parentNode *CompatibilityTreeNode, item appdef.IUnique) (node *CompatibilityTreeNode) {
+	node = newNode(parentNode, item.Name().String(), nil)
 	node.Props = append(node.Props,
-		fieldsNode, // Fields node
-		buildQNameNode(node, item.ParentStructure(), NodeNameParent, false), // Parent node
+		buildUniqueFieldsNode(node, item),
 	)
 	return
 }
 
-func buildUniqueFieldsNode(parentNode *CompatibilityTreeNode, item appdef.IUniques) (node *CompatibilityTreeNode) {
-	node = newNode(parentNode, NodeNameUniqueFields, nil)
+func buildUniquesNode(parentNode *CompatibilityTreeNode, item appdef.IUniques) (node *CompatibilityTreeNode) {
+	node = newNode(parentNode, NodeNameUniques, nil)
 	for _, unique := range item.Uniques() {
-		node.Props = append(node.Props, buildUniqueFieldNode(node, unique))
+		node.Props = append(node.Props, buildUniqueNode(node, unique))
 	}
 	return
 }
@@ -228,12 +236,12 @@ func buildViewNode(parentNode *CompatibilityTreeNode, item appdef.IView) (node *
 	return
 }
 
-func compareNodes(old, new *CompatibilityTreeNode, constrains []NodeConstraint) (cerrs []CompatibilityError) {
-	if !cmp.Equal(old.Value, new.Value) {
-		cerrs = append(cerrs, newCompatibilityError(ConstraintValueMatch, old.Path(), ErrorTypeValueChanged))
+func compareNodes(oldNode, newNode *CompatibilityTreeNode, constrains []NodeConstraint) (cerrs []CompatibilityError) {
+	if !cmp.Equal(oldNode.Value, newNode.Value) {
+		cerrs = append(cerrs, newCompatibilityError(ConstraintValueMatch, oldNode.Path(), ErrorTypeValueChanged))
 	}
-	m := matchNodes(old.Props, new.Props)
-	cerrs = append(cerrs, checkConstraint(old.Path(), m, findConstraint(old.Name, constrains))...)
+	m := matchNodes(oldNode.Props, newNode.Props)
+	cerrs = append(cerrs, checkConstraint(oldNode.Path(), m, findConstraint(oldNode.Name, constrains))...)
 	for _, pair := range m.MatchedNodePairs {
 		cerrs = append(cerrs, compareNodes(pair[0], pair[1], constrains)...)
 	}
@@ -241,6 +249,7 @@ func compareNodes(old, new *CompatibilityTreeNode, constrains []NodeConstraint) 
 }
 
 func findConstraint(nodeName string, constrains []NodeConstraint) (constraint Constraint) {
+	constraint = ConstraintAllAllowed
 	for _, c := range constrains {
 		if c.NodeName == nodeName {
 			return c.Constraint
@@ -250,11 +259,11 @@ func findConstraint(nodeName string, constrains []NodeConstraint) (constraint Co
 }
 
 func checkConstraint(oldTreePath []string, m *matchNodesResult, constraint Constraint) (cerrs []CompatibilityError) {
-	if len(constraint) == 0 {
+	if constraint == ConstraintAllAllowed {
 		return
 	}
 	if len(m.DeletedNodeNames) == 0 && m.InsertedNodeCount > 0 {
-		if constraint == ConstraintNonModifiable || constraint == ConstraintAppendOnly {
+		if constraint == ConstraintNonModifiable || constraint&ConstraintAppendOnly > 0 {
 			errorType := ErrorTypeNodeInserted
 			if constraint == ConstraintNonModifiable {
 				errorType = ErrorTypeNodeModified
@@ -270,7 +279,7 @@ func checkConstraint(oldTreePath []string, m *matchNodesResult, constraint Const
 	}
 
 	if len(m.DeletedNodeNames) > 0 {
-		if constraint == ConstraintNonModifiable || constraint == ConstraintAppendOnly || constraint == ConstraintInsertOnly {
+		if constraint == ConstraintNonModifiable || constraint&ConstraintAppendOnly > 0 || constraint&ConstraintInsertOnly > 0 {
 			errorType := ErrorTypeNodeRemoved
 			if constraint == ConstraintNonModifiable {
 				errorType = ErrorTypeNodeModified
@@ -283,7 +292,7 @@ func checkConstraint(oldTreePath []string, m *matchNodesResult, constraint Const
 	}
 
 	if len(m.ReorderedNodeNames) > 0 && len(m.DeletedNodeNames) == 0 {
-		if constraint == ConstraintNonModifiable || constraint == ConstraintAppendOnly {
+		if constraint == ConstraintNonModifiable || constraint&ConstraintAppendOnly > 0 {
 			errorType := ErrorTypeOrderChanged
 			if constraint == ConstraintNonModifiable {
 				errorType = ErrorTypeNodeModified
@@ -295,6 +304,13 @@ func checkConstraint(oldTreePath []string, m *matchNodesResult, constraint Const
 			}
 		}
 	}
+
+	if constraint&ConstraintOrderChangeOnly > 0 {
+		if m.AppendedNodeCount > 0 || len(m.DeletedNodeNames) > 0 || m.InsertedNodeCount > 0 {
+			cerrs = append(cerrs, newCompatibilityError(constraint, oldTreePath, ErrorTypeNodeModified))
+		}
+	}
+
 	return
 }
 

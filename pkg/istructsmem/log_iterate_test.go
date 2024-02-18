@@ -6,11 +6,13 @@
 package istructsmem
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -178,7 +180,7 @@ func Test_readLogParts(t *testing.T) {
 
 			require.Equal(tt.result.totalReads, totalReads, "logIterateType.iterate() reads = %v, want %v", totalReads, tt.result.totalReads)
 			require.Equal(tt.result.ranges, ranges, "logIterateType.iterate() read ranges = %v, want %v", ranges, tt.result.ranges)
-			if err != tt.result.err {
+			if !errors.Is(err, tt.result.err) {
 				t.Errorf("logIterateType.iterate() error = %v, want %v", err, tt.result.err)
 			}
 
@@ -201,7 +203,7 @@ func Test_readLogParts(t *testing.T) {
 
 		err := readLogParts(0, 100500, readPart)
 		require.NoError(err)
-		require.Equal(bytesRead, 4096*2)
+		require.Equal(4096*2, bytesRead)
 	})
 
 	t.Run("check readLogParts is breakable by cb() error", func(t *testing.T) {

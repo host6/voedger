@@ -11,7 +11,6 @@ import (
 	"io"
 	"net/http"
 	"strconv"
-	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/untillpro/goutils/logger"
@@ -56,7 +55,7 @@ func (s *httpService) subscribeAndWatchHandler() http.HandlerFunc {
 			http.Error(rw, "Streaming unsupported!", http.StatusInternalServerError)
 			return
 		}
-		channel, err = s.n10n.NewChannel(urlParams.SubjectLogin, 24*time.Hour)
+		channel, err = s.n10n.NewChannel(urlParams.SubjectLogin, hours24)
 		if err != nil {
 			logger.Error(err)
 			http.Error(rw, "create new channel failed: "+err.Error(), n10nErrorToStatusCode(err))
@@ -112,8 +111,7 @@ func (s *httpService) subscribeAndWatchHandler() http.HandlerFunc {
 
 func n10nErrorToStatusCode(err error) int {
 	switch {
-	case errors.Is(err, in10n.ErrChannelDoesNotExist), errors.Is(err, in10nmemv1.ErrMetricDoesNotExists),
-		errors.Is(err, in10n.ErrChannelDoesNotExist):
+	case errors.Is(err, in10n.ErrChannelDoesNotExist), errors.Is(err, in10nmemv1.ErrMetricDoesNotExists):
 		return http.StatusBadRequest
 	case errors.Is(err, in10n.ErrQuotaExceeded_Subsciptions), errors.Is(err, in10n.ErrQuotaExceeded_SubsciptionsPerSubject),
 		errors.Is(err, in10n.ErrQuotaExceeded_Channels), errors.Is(err, in10n.ErrQuotaExceeded_ChannelsPerSubject):

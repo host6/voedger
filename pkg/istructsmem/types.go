@@ -13,6 +13,7 @@ import (
 	"fmt"
 
 	"github.com/untillpro/dynobuffers"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem/internal/containers"
@@ -89,14 +90,14 @@ func (row *rowType) build() (err error) {
 					row.nils = append(row.nils, nils...)
 				} else {
 					for _, n := range nils {
-						if new := func() bool {
+						if isNew := func() bool {
 							for i := range row.nils {
 								if row.nils[i] == n {
 									return false
 								}
 							}
 							return true
-						}(); new {
+						}(); isNew {
 							row.nils = append(row.nils, n)
 						}
 					}
@@ -425,7 +426,7 @@ func (row *rowType) setType(t appdef.IType) {
 				row.fields = f
 				row.dyB = dynobuffers.NewBuffer(row.appCfg.dynoSchemes.Scheme(t.QName()))
 			} else {
-				//notest
+				// notest
 				row.collectError(fmt.Errorf("type «%v» has no fields: %w", t.QName(), ErrWrongType))
 			}
 		}
@@ -588,7 +589,7 @@ func (row *rowType) AsQName(name string) appdef.QName {
 	_ = row.fieldMustExists(name, appdef.DataKind_QName)
 
 	if id, ok := dynoBufGetWord(row.dyB, name); ok {
-		qName, err := row.appCfg.qNames.QName(qnames.QNameID(id))
+		qName, err := row.appCfg.qNames.QName(id)
 		if err != nil {
 			panic(err)
 		}
@@ -754,6 +755,20 @@ func (row *rowType) PutFloat64(name string, value float64) {
 	row.putValue(name, dynobuffers.FieldTypeFloat64, value)
 }
 
+// istructs.IRowWriter.PutFromJSON
+func (row *rowType) PutFromJSON(j map[string]any) {
+	for n, v := range j {
+		switch fv := v.(type) {
+		case float64:
+			row.PutNumber(n, fv)
+		case string:
+			row.PutChars(n, fv)
+		case bool:
+			row.PutBool(n, fv)
+		}
+	}
+}
+
 // istructs.IRowWriter.PutNumber
 func (row *rowType) PutNumber(name string, value float64) {
 	fld := row.fieldDef(name)
@@ -810,7 +825,7 @@ func (row *rowType) PutQName(name string, value appdef.QName) {
 		return
 	}
 	b := make([]byte, 2)
-	binary.BigEndian.PutUint16(b, uint16(id))
+	binary.BigEndian.PutUint16(b, id)
 
 	row.putValue(name, dynobuffers.FieldTypeByte, b)
 }

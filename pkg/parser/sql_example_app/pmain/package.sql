@@ -20,6 +20,11 @@ APPLICATION example_app (
     USE untill;
 );
 
+
+-- Declare variable to use it later in the schema. Can be overriden on app deployment stage
+DECLARE nAntiDdosPerSecRate int32 DEFAULT 1000;
+
+
 /*
     Abstract tables can only be used for INHERITance by other tables.
     INHERITS includes all the fields, nested tables and constraints from an ancestor table.
@@ -76,7 +81,7 @@ TABLE TablePlan INHERITS CDoc (
     CheckedField varchar(8) CHECK '^[0-9]{8}$', -- Field validated by regexp
     CHECK (ValidateRow(this)), -- Unnamed CHECK table constraint. Expressions evaluating to TRUE or UNKNOWN succeed.
     CONSTRAINT StateChecker CHECK (ValidateFState(FState)), -- Named CHECK table constraint
-    UNIQUE (FState, Name), -- unnamed UNIQUE table constraint, core generates `Unique01` automatically
+    UNIQUE (FState, Name), -- unnamed UNIQUE table constraint, core generates `main.TablePlan$uniques$01` automatically
     CONSTRAINT UniqueTable UNIQUE (TableNumber), -- named UNIQUE table constraint
     UNIQUEFIELD Name, -- deprecated. For Air backward compatibility only
     TableItems TABLE TablePlanItem (
@@ -126,6 +131,7 @@ WORKSPACE MyWorkspace (
     -- Definitions declared in the workspace are only available in this workspace
     TAG PosTag;
     ROLE LocationManager;
+    ROLE LocationUser;
     TYPE TypeWithKind (
         Kind int
     );
@@ -179,7 +185,7 @@ WORKSPACE MyWorkspace (
         -- Projector uses sys.HTTPStorage
         PROJECTOR UpdateSubscriptionProfile
             AFTER EXECUTE WITH PARAM ON SubscriptionEvent
-            STATE(sys.Http, AppSecret);            
+            STATE(sys.Http, AppSecret);
 
         -- Projector triggered by few COMMANDs
         PROJECTOR UpdateDashboard
@@ -192,8 +198,8 @@ WORKSPACE MyWorkspace (
             AFTER ACTIVATE OR DEACTIVATE ON TablePlan
             INTENTS(View(ActiveTablePlansView));
 
-        /* 
-            Some projector which sends E-mails and performs HTTP queries. 
+        /*
+            Some projector which sends E-mails and performs HTTP queries.
             This one also triggered on events with errors
         */
         PROJECTOR NotifyOnChanges
@@ -202,7 +208,7 @@ WORKSPACE MyWorkspace (
             INTENTS(SendMail, View(NotificationsHistory))
             INCLUDING ERRORS;
 
-        /* 
+        /*
         Projector on any CUD operation.
         CDoc, WDoc, ODoc are the only abstract tables which are allowed to use in this case
         */
@@ -235,28 +241,32 @@ WORKSPACE MyWorkspace (
         QUERY Query2(air.Order) RETURNS any;
     );
 
-    --  Object scope is PER APP PARTITION PER IP
-    RATE PosSalesRate 1000 PER HOUR PER USER;
-    RATE NewOrderRate 500 PER HOUR PER USER;
-    --  Custom scopes
-    RATE RestorePasswordRate1 3 PER 5 MINUTES PER APP PARTITION PER IP;    
-    RATE RestorePasswordRate2 10 PER DAY PER APP PARTITION PER IP;    
+    -- Object scope is PER APP PARTITION PER IP
+    -- Use variable declared in the package
+    RATE AntiDDosRate nAntiDdosPerSecRate PER SECOND;
 
-    LIMIT AllCommandsLimit EXECUTE ON ALL COMMANDS WITH RATE PosSalesRate;
-    LIMIT NewOrderLimit EXECUTE ON COMMAND NewOrder WITH RATE NewOrderRate;
-    LIMIT AllQueriesLimit EXECUTE ON ALL QUERIES WITH TAG PosTag WITH RATE AppDefaultRate;
-    -- Combination of two rates
-    LIMIT RestorePasswordLimit1 EXECUTE ON COMMAND RestorePassword WITH RATE RestorePasswordRate1; 
-    LIMIT RestorePasswordLimit2 EXECUTE ON COMMAND RestorePassword WITH RATE RestorePasswordRate2;
+    --  Custom scopes
+    RATE BackofficeRate 1000 PER HOUR PER APP PARTITION;
+    RATE QueryRate 1000 PER HOUR PER APP PARTITION PER IP;
+    RATE CudRate 100 PER HOUR PER USER;
+    RATE RestorePasswordRate1 3 PER 5 MINUTES PER APP PARTITION PER IP;
+    RATE RestorePasswordRate2 10 PER DAY PER APP PARTITION PER IP;
+
+	LIMIT AntiDDOS ON EVERYTHING WITH RATE AntiDDosRate; -- all commands, queries and CUD
+	LIMIT RestorePasswordLimit1 ON COMMAND RestorePassword WITH RATE RestorePasswordRate1;   -- Single command applied with rate
+	LIMIT RestorePasswordLimit2 ON COMMAND RestorePassword WITH RATE RestorePasswordRate2;   -- Combination of two rates
+	LIMIT Query1Limit ON QUERY Query1 WITH RATE QueryRate; -- Single query applied with rate
+	LIMIT tl1 ON TABLE WsTable WITH RATE CudRate; -- CUD operations on a single table
+	LIMIT BackofficeLimit ON TAG BackofficeTag WITH RATE BackofficeRate; -- Limit on anything with tag
 
     -- ACLs
     GRANT ALL ON ALL TABLES WITH TAG BackofficeTag TO LocationManager;
-    GRANT INSERT,UPDATE(name, number) ON ALL TABLES WITH TAG sys.ODoc TO LocationUser;
-    GRANT SELECT ON TABLE Orders TO LocationUser;
-    GRANT SELECT(name) ON TABLE Orders TO LocationUser;
-    GRANT EXECUTE ON COMMAND NewOrder TO LocationUser;
-    GRANT EXECUTE ON QUERY TransactionHistory TO LocationUser;
-    GRANT EXECUTE ON ALL QUERIES WITH TAG PosTag TO main.LocationUser;
+    GRANT INSERT,UPDATE ON ALL TABLES WITH TAG PosTag TO LocationUser;
+    GRANT SELECT ON TABLE untill.Prices TO LocationUser;
+    GRANT SELECT(Price) ON TABLE untill.Prices TO LocationUser;
+    GRANT INSERT ON COMMAND NewOrder TO LocationUser;
+    GRANT SELECT ON QUERY Query1 TO LocationUser;
+    GRANT SELECT ON ALL QUERIES WITH TAG PosTag TO main.LocationUser;
     GRANT INSERT ON WORKSPACE MyWorkspace TO LocationUser;
 
     -- VIEWs generated by the PROJECTOR.
@@ -318,8 +328,6 @@ WORKSPACE MyWorkspace (
     ) AS RESULT OF UpdateDashboard;
 
 );
-
-LIMIT MyWorkspaceInsertLimit INSERT ON WORKSPACE MyWorkspace WITH RATE AppDefaultRate;        
 
 /*
     Abstract workspaces:

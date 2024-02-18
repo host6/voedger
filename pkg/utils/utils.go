@@ -6,6 +6,7 @@
 package coreutils
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -41,6 +42,11 @@ func IsCassandraStorage() bool {
 	return ok
 }
 
+func IsDynamoDBStorage() bool {
+	_, ok := os.LookupEnv("DYNAMODB_TESTS_ENABLED")
+	return ok
+}
+
 func ServerAddress(port int) string {
 	addr := ""
 	if IsTest() {
@@ -55,8 +61,9 @@ func PartitionID(wsid istructs.WSID, numCommandProcessors CommandProcessorsCount
 
 func SplitErrors(joinedError error) (errs []error) {
 	if joinedError != nil {
-		if e, ok := joinedError.(interface{ Unwrap() []error }); ok {
-			return e.Unwrap()
+		var pErr IErrUnwrapper
+		if errors.As(joinedError, &pErr) {
+			return pErr.Unwrap()
 		}
 		return []error{joinedError}
 	}

@@ -7,14 +7,17 @@ package vvm
 import (
 	"os"
 
-	ibus "github.com/untillpro/airs-ibus"
 	"github.com/untillpro/goutils/logger"
+
+	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/iprocbusmem"
 	"github.com/voedger/voedger/pkg/isecretsimpl"
 	"github.com/voedger/voedger/pkg/istorage"
+	"github.com/voedger/voedger/pkg/istorage/mem"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/itokensjwt"
 	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
 	"github.com/voedger/voedger/pkg/router"
 	coreutils "github.com/voedger/voedger/pkg/utils"
@@ -52,12 +55,12 @@ func NewVVMDefaultConfig() VVMConfig {
 		MetricsServicePort:   DefaultMetricsServicePort,
 		StorageFactory: func() (provider istorage.IAppStorageFactory, err error) {
 			logger.Info("using istoragemem")
-			return istorage.ProvideMem(), nil
+			return mem.Provide(), nil
 		},
 		SecretsReader: isecretsimpl.ProvideSecretReader(),
 	}
 	if coreutils.IsTest() {
-		res.SecretsReader = ProvideTestSecretsReader(res.SecretsReader)
+		res.SecretsReader = itokensjwt.ProvideTestSecretsReader(res.SecretsReader)
 	}
 	return res
 }

@@ -26,6 +26,7 @@ func NewAppQName(owner, name string) AppQName {
 func (aqn *AppQName) Owner() string { return aqn.owner }
 func (aqn *AppQName) Name() string  { return aqn.name }
 func (aqn AppQName) String() string { return aqn.owner + AppQNameQualifierChar + aqn.name }
+func (aqn AppQName) IsSys() bool    { return aqn.owner == SysOwner }
 
 func ParseAppQName(val string) (res AppQName, err error) {
 	s1, s2, err := appdef.ParseQualifiedName(val, AppQNameQualifierChar)
@@ -132,6 +133,31 @@ func (no *NullObject) FieldNames(func(string))                  {}
 func (no *NullObject) Container() string                        { return "" }
 func (no *NullObject) ID() RecordID                             { return NullRecordID }
 func (no *NullObject) Parent() RecordID                         { return NullRecordID }
+
+// Implements IRowWriter
+type NullRowWriter struct{}
+
+func (*NullRowWriter) PutInt32(string, int32)        {}
+func (*NullRowWriter) PutInt64(string, int64)        {}
+func (*NullRowWriter) PutFloat32(string, float32)    {}
+func (*NullRowWriter) PutFloat64(string, float64)    {}
+func (*NullRowWriter) PutBytes(string, []byte)       {}
+func (*NullRowWriter) PutString(string, string)      {}
+func (*NullRowWriter) PutQName(string, appdef.QName) {}
+func (*NullRowWriter) PutBool(string, bool)          {}
+func (*NullRowWriter) PutRecordID(string, RecordID)  {}
+func (*NullRowWriter) PutNumber(string, float64)     {}
+func (*NullRowWriter) PutChars(string, string)       {}
+func (*NullRowWriter) PutFromJSON(map[string]any)    {}
+
+// Implements IObjectBuilder
+type NullObjectBuilder struct{ NullRowWriter }
+
+func NewNullObjectBuilder() IObjectBuilder { return &NullObjectBuilder{} }
+
+func (*NullObjectBuilder) FillFromJSON(map[string]any)        {}
+func (*NullObjectBuilder) ChildBuilder(string) IObjectBuilder { return NewNullObjectBuilder() }
+func (*NullObjectBuilder) Build() (IObject, error)            { return NewNullObject(), nil }
 
 // *********************************************************************************************************
 //

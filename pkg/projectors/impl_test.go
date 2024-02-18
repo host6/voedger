@@ -12,11 +12,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iratesce"
-	"github.com/voedger/voedger/pkg/istorage"
+	"github.com/voedger/voedger/pkg/istorage/mem"
+	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istoragecache"
-	"github.com/voedger/voedger/pkg/istorageimpl"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -50,10 +51,20 @@ func TestBasicUsage_SynchronousActualizer(t *testing.T) {
 			ProvideViewDef(appDef, incProjectionView, buildProjectionView)
 			ProvideViewDef(appDef, decProjectionView, buildProjectionView)
 			appDef.AddCommand(testQName)
-			appDef.AddProjector(incrementorName).AddEvent(testQName, appdef.ProjectorEventKind_Execute)
-			appDef.AddProjector(decrementorName).AddEvent(testQName, appdef.ProjectorEventKind_Execute)
+			appDef.AddProjector(incrementorName).AddEvent(testQName, appdef.ProjectorEventKind_Execute).SetSync(true)
+			appDef.AddProjector(decrementorName).AddEvent(testQName, appdef.ProjectorEventKind_Execute).SetSync(true)
 		},
-		nil)
+		func(cfg *istructsmem.AppConfigType) {
+			cfg.AddSyncProjectors(
+				func(istructs.PartitionID) istructs.Projector {
+					return istructs.Projector{Name: incrementorName}
+				},
+				func(istructs.PartitionID) istructs.Projector {
+					return istructs.Projector{Name: decrementorName}
+				},
+			)
+			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+		})
 	actualizerFactory := ProvideSyncActualizerFactory()
 
 	// create actualizer with two factories
@@ -176,7 +187,7 @@ func appStructs(prepareAppDef appDefCallback, prepareAppCfg appCfgCallback) istr
 		prepareAppCfg(cfg)
 	}
 
-	asf := istorage.ProvideMem()
+	asf := mem.Provide()
 	storageProvider := istorageimpl.Provide(asf)
 	prov := istructsmem.Provide(
 		cfgs,
@@ -204,7 +215,7 @@ func appStructsCached(prepareAppDef appDefCallback, prepareAppCfg appCfgCallback
 		prepareAppCfg(cfg)
 	}
 
-	asf := istorage.ProvideMem()
+	asf := mem.Provide()
 	metrics = imetrics.Provide()
 	storageProvider := istorageimpl.Provide(asf)
 	cached := istoragecache.Provide(1000000, storageProvider, metrics, "testVM")
@@ -228,10 +239,20 @@ func Test_ErrorInSyncActualizer(t *testing.T) {
 			ProvideViewDef(appDef, incProjectionView, buildProjectionView)
 			ProvideViewDef(appDef, decProjectionView, buildProjectionView)
 			appDef.AddCommand(testQName)
-			appDef.AddProjector(incrementorName).AddEvent(testQName, appdef.ProjectorEventKind_Execute)
-			appDef.AddProjector(decrementorName).AddEvent(testQName, appdef.ProjectorEventKind_Execute)
+			appDef.AddProjector(incrementorName).AddEvent(testQName, appdef.ProjectorEventKind_Execute).SetSync(true)
+			appDef.AddProjector(decrementorName).AddEvent(testQName, appdef.ProjectorEventKind_Execute).SetSync(true)
 		},
-		nil)
+		func(cfg *istructsmem.AppConfigType) {
+			cfg.AddSyncProjectors(
+				func(istructs.PartitionID) istructs.Projector {
+					return istructs.Projector{Name: incrementorName}
+				},
+				func(istructs.PartitionID) istructs.Projector {
+					return istructs.Projector{Name: decrementorName}
+				},
+			)
+			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+		})
 	actualizerFactory := ProvideSyncActualizerFactory()
 
 	// create actualizer with two factories
@@ -250,7 +271,7 @@ func Test_ErrorInSyncActualizer(t *testing.T) {
 	require.NoError(processor.SendSync(&plogEvent{wsid: 1001}))
 	require.NoError(processor.SendSync(&plogEvent{wsid: 1002}))
 	err := processor.SendSync(&plogEvent{wsid: 1099})
-	require.NotNil(err)
+	require.Error(err)
 	require.Equal("test err", err.Error())
 
 	// now read the projection values in workspaces

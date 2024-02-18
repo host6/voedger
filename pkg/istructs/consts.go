@@ -97,6 +97,9 @@ const MaxReservedBaseRecordID = MinReservedBaseRecordID + 0xffff
 const FirstSingletonID = MinReservedBaseRecordID
 const MaxSingletonID = FirstSingletonID + 0x1ff
 
+// Used to test behaviour on providing the unexisting record ID
+const NonExistingRecordID = MaxSingletonID + 1
+
 // This is the first value which must be returned by the IDGenerator (in the Command Processor) for the given workspace
 const FirstBaseRecordID = MaxReservedBaseRecordID + 1
 
@@ -142,15 +145,17 @@ const FirstGeneratedAppID = ClusterAppID(0x100)
 
 // Cluster application qnames
 
+const SysOwner = "sys"
+
 var AppQName_null = NullAppQName
-var AppQName_sys_registry = NewAppQName("sys", "registry")
+var AppQName_sys_registry = NewAppQName(SysOwner, "registry")
 var AppQName_untill_airs_bp = NewAppQName("untill", "airs-bp")
 var AppQName_test1_app1 = NewAppQName("test1", "app1")
 var AppQName_test1_app2 = NewAppQName("test1", "app2")
 var AppQName_test2_app1 = NewAppQName("test2", "app1")
 var AppQName_test2_app2 = NewAppQName("test2", "app2")
-var AppQName_sys_blobber = NewAppQName("sys", "blobber")
-var AppQName_sys_router = NewAppQName("sys", "router") // For ACME certificates
+var AppQName_sys_blobber = NewAppQName(SysOwner, "blobber")
+var AppQName_sys_router = NewAppQName(SysOwner, "router") // For ACME certificates
 var AppQName_untill_resellerportal = NewAppQName("untill", "resellerportal")
 
 // Cluster applications

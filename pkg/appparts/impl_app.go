@@ -6,51 +6,78 @@
 package appparts
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts/internal/pool"
 	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/pipeline"
 )
 
 // engine placeholder
-type engine interface{}
+type engine struct {
+	cluster.ProcessorKind
+	pool *pool.Pool[*engine]
+}
+
+func newEngine(kind cluster.ProcessorKind) *engine {
+	return &engine{
+		ProcessorKind: kind,
+	}
+}
+
+func (e *engine) release() {
+	if p := e.pool; p != nil {
+		e.pool = nil
+		p.Release(e)
+	}
+}
 
 type app struct {
-	name    istructs.AppQName
-	def     appdef.IAppDef
-	structs istructs.IAppStructs
-	engines [cluster.ProcessorKind_Count]*pool.Pool[engine]
+	apps       *apps
+	name       istructs.AppQName
+	def        appdef.IAppDef
+	partsCount int
+	structs    istructs.IAppStructs
+	engines    [cluster.ProcessorKind_Count]*pool.Pool[*engine]
 	// no locks need. Owned apps structure will locks access to this structure
 	parts map[istructs.PartitionID]*partition
 }
 
-func newApplication(name istructs.AppQName) *app {
+func newApplication(apps *apps, name istructs.AppQName) *app {
 	return &app{
+		apps:  apps,
 		name:  name,
 		parts: map[istructs.PartitionID]*partition{},
 	}
 }
 
-func (a *app) deploy(def appdef.IAppDef, structs istructs.IAppStructs, engines [cluster.ProcessorKind_Count]int) {
+func (a *app) deploy(def appdef.IAppDef, structs istructs.IAppStructs, partsCount int, engines [cluster.ProcessorKind_Count]int) {
 	a.def = def
 	a.structs = structs
+	a.partsCount = partsCount
 	for k, cnt := range engines {
-		ee := make([]engine, cnt)
-		a.engines[k] = pool.New[engine](ee)
+		ee := make([]*engine, cnt)
+		for i := 0; i < cnt; i++ {
+			ee[i] = newEngine(cluster.ProcessorKind(k))
+		}
+		a.engines[k] = pool.New[*engine](ee)
 	}
 }
 
 type partition struct {
-	app *app
-	id  istructs.PartitionID
+	app            *app
+	id             istructs.PartitionID
+	syncActualizer pipeline.ISyncOperator
 }
 
 func newPartition(app *app, id istructs.PartitionID) *partition {
 	part := &partition{
-		app: app,
-		id:  id,
+		app:            app,
+		id:             id,
+		syncActualizer: app.apps.actualizer(app.structs, id),
 	}
 	return part
 }
@@ -69,10 +96,7 @@ type partitionRT struct {
 	part       *partition
 	appDef     appdef.IAppDef
 	appStructs istructs.IAppStructs
-	borrowed   struct {
-		engine engine
-		pool   *pool.Pool[engine]
-	}
+	borrowed   *engine
 }
 
 func newPartitionRT(part *partition) *partitionRT {
@@ -89,19 +113,24 @@ func (rt *partitionRT) AppStructs() istructs.IAppStructs { return rt.appStructs 
 func (rt *partitionRT) ID() istructs.PartitionID         { return rt.part.id }
 
 func (rt *partitionRT) Release() {
-	if e := rt.borrowed.engine; e != nil {
-		rt.borrowed.engine = nil
-		rt.borrowed.pool.Release(e)
+	if e := rt.borrowed; e != nil {
+		rt.borrowed = nil
+		e.release()
 	}
+}
+
+func (rt *partitionRT) DoSyncActualizer(ctx context.Context, work interface{}) error {
+	return rt.part.syncActualizer.DoSync(ctx, work)
 }
 
 // Initialize partition RT structures for use
 func (rt *partitionRT) init(proc cluster.ProcessorKind) error {
-	engine, err := rt.part.app.engines[proc].Borrow()
+	pool := rt.part.app.engines[proc]
+	engine, err := pool.Borrow() // will be released in (*engine).release()
 	if err != nil {
-		return fmt.Errorf(errNotEnoughEngines, proc.TrimString(), err)
+		return fmt.Errorf("%w (%w): %s", ErrNotAvailableEngines, err, proc.TrimString())
 	}
-	rt.borrowed.engine = engine
-	rt.borrowed.pool = rt.part.app.engines[proc]
+	engine.pool = pool
+	rt.borrowed = engine
 	return nil
 }

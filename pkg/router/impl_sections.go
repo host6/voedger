@@ -16,22 +16,23 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	ibus "github.com/untillpro/airs-ibus"
 	"github.com/valyala/bytebufferpool"
-	istructs "github.com/voedger/voedger/pkg/istructs"
+
+	"github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
+	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 )
 
 func createRequest(reqMethod string, req *http.Request, rw http.ResponseWriter, appsWSAmount map[istructs.AppQName]istructs.AppWSAmount) (res ibus.Request, ok bool) {
 	vars := mux.Vars(req)
-	wsidStr := vars[wsid]
+	wsidStr := vars[WSID]
 	wsidInt, err := strconv.ParseInt(wsidStr, parseInt64Base, parseInt64Bits)
 	if err != nil {
 		//  impossible because of regexp in a handler
 		// notest
 		panic(err)
 	}
-	appQNameStr := vars[appOwner] + "/" + vars[appName]
+	appQNameStr := vars[AppOwner] + istructs.AppQNameQualifierChar + vars[AppName]
 	wsid := istructs.WSID(wsidInt)
 	if appQName, err := istructs.ParseAppQName(appQNameStr); err == nil {
 		if appWSAmount, ok := appsWSAmount[appQName]; ok {
@@ -139,10 +140,8 @@ func writeSectionedResponse(requestCtx context.Context, w http.ResponseWriter, s
 		} else {
 			writeResponse(w, fmt.Sprintf(`%s"status":%d,"errorDescription":"%s"}`, closer, http.StatusInternalServerError, *secErr))
 		}
-	} else {
-		if sectionedResponseStarted {
-			writeResponse(w, fmt.Sprintf(`%s}`, closer))
-		}
+	} else if sectionedResponseStarted {
+		writeResponse(w, fmt.Sprintf(`%s}`, closer))
 	}
 }
 
@@ -183,10 +182,8 @@ func writeSection(w http.ResponseWriter, isec ibus.ISection, requestCtx context.
 				}
 				isFirst = false
 				closer = "]}"
-			} else {
-				if !writeResponse(w, fmt.Sprintf(`,%s`, string(val))) {
-					return false
-				}
+			} else if !writeResponse(w, fmt.Sprintf(`,%s`, string(val))) {
+				return false
 			}
 		}
 		if !writeResponse(w, closer) {
@@ -214,10 +211,8 @@ func writeSection(w http.ResponseWriter, isec ibus.ISection, requestCtx context.
 				}
 				isFirst = false
 				closer = "}}"
-			} else {
-				if !writeResponse(w, fmt.Sprintf(`,%q:%s`, name, string(val))) {
-					return false
-				}
+			} else if !writeResponse(w, fmt.Sprintf(`,%q:%s`, name, string(val))) {
+				return false
 			}
 		}
 		if !writeResponse(w, closer) {

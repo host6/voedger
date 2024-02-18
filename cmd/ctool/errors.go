@@ -24,6 +24,7 @@ var (
 	ErrClusterControllerFunctionNotAssigned = errors.New("cluster controller function not assigned")
 	ErrPreparingClusterNodes                = errors.New("error preparing cluster nodes, command is aborted")
 	ErrManagerTokenNotExists                = errors.New("manager token not exists")
+	ErrNoIncompleteCommandWasFoundToRepeat  = errors.New("no incomplete command was found to repeat")
 )
 
 var ErrIncorrectVersion = errors.New("incorrect version")
@@ -42,12 +43,10 @@ var ErrEmptyNodeAddress = errors.New("empty IP-address")
 
 const errEmptyNodeAddress = "node %s: %w"
 
-// The commander cannot be executed
 var ErrCommandCannotBeExecuted = errors.New("command cannot be executed")
 
 const errCannotReplaceALiveNode = "cannot replace a live node %s: %w"
 
-// host is not available
 var ErrHostIsNotAvailable = errors.New("host is not available")
 
 const errHostIsNotAvailable = "host %s is not available: %w"
@@ -63,3 +62,17 @@ const errHostNotFoundInCluster = "host %s not found in cluster: %w"
 var ErrFileNotFound = errors.New("file not found")
 
 const errSshKeyNotFound = "ssh key %s not found: %w"
+
+var ErrDomainsNotFound = errors.New("domains not found")
+
+const errDomainsNotFound = "domains %s not found in cluster: %w"
+
+var ErrBackupFolderIsNotPrepared = errors.New("backup folder error")
+
+const errBackupFolderIsNotPrepared = "backup folder " + backupFolder + " is not prepared on host %s: %w"
+
+var ErrInvalidExpireTime = errors.New("invalid expire time")
+
+var ErrBackupNotExist = errors.New("backup not exist")
+
+const errBackupNotExistOnHost = "backup %s not exist on host %s: %w"

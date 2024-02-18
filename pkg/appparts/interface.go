@@ -6,19 +6,21 @@
 package appparts
 
 import (
+	"context"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
 // Application partitions manager.
+//
+// @ConcurrentAccess
 type IAppPartitions interface {
 	// Adds new application or update existing.
 	//
 	// If application with the same name exists, then its definition will be updated.
-	//
-	// @ConcurrentAccess
-	DeployApp(appName istructs.AppQName, appDef appdef.IAppDef, engines [cluster.ProcessorKind_Count]int)
+	DeployApp(name istructs.AppQName, def appdef.IAppDef, partsCount int, engines [cluster.ProcessorKind_Count]int)
 
 	// Deploys new partitions for specified application or update existing.
 	//
@@ -26,15 +28,21 @@ type IAppPartitions interface {
 	//
 	// # Panics:
 	// 	- if application not exists
-	//
-	// @ConcurrentAccess
 	DeployAppPartitions(appName istructs.AppQName, partIDs []istructs.PartitionID)
+
+	// Returns application definition.
+	//
+	// Returns nil and error if app not exists.
+	AppDef(istructs.AppQName) (appdef.IAppDef, error)
+
+	// Returns application partitions count.
+	//
+	// Returns 0 and error if app not exists.
+	AppPartsCount(istructs.AppQName) (int, error)
 
 	// Borrows and returns a partition.
 	//
 	// If partition not exist, returns error.
-	//
-	// @ConcurrentAccess
 	Borrow(istructs.AppQName, istructs.PartitionID, cluster.ProcessorKind) (IAppPartition, error)
 }
 
@@ -45,8 +53,8 @@ type IAppPartition interface {
 
 	AppStructs() istructs.IAppStructs
 
-	// Releases borrowed partition.
-	//
-	// @ConcurrentAccess
+	// Releases borrowed partition
 	Release()
+
+	DoSyncActualizer(ctx context.Context, work interface{}) (err error)
 }

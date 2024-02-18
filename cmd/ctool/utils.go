@@ -38,9 +38,18 @@ func loggerInfoGreen(args ...interface{}) {
 	logger.Info(args...)
 }
 
+func formatArgs(args []interface{}) string {
+	formattedArgs := make([]string, len(args))
+	for i, arg := range args {
+		formattedArgs[i] = fmt.Sprint(arg)
+	}
+	return strings.Join(formattedArgs, " ")
+}
+
 func loggerError(args ...interface{}) {
 	if !verbose() {
-		fmt.Println("Error:", red(args...))
+		s := fmt.Sprintf("%s %s", red("Error:"), formatArgs(args))
+		fmt.Println(s)
 	}
 	logger.Error(args...)
 }
@@ -92,6 +101,7 @@ func mkCommandDirAndLogFile(cmd *cobra.Command, cluster *clusterType) error {
 		s = fmt.Sprintf("%s-%s", s, cluster.Cmd.Kind)
 	}
 
+	time.Sleep(time.Second * 1)
 	commandDirName = fmt.Sprintf("%s-%s", time.Now().Format("20060102-150405"), s)
 
 	if cluster.dryRun {

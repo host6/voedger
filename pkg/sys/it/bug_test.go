@@ -6,6 +6,7 @@ package sys_it
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"testing"
@@ -42,7 +43,7 @@ func TestBug_QueryProcessorMustStopOnClientDisconnect(t *testing.T) {
 	goOn := make(chan interface{})
 	it.MockQryExec = func(input string, callback istructs.ExecQueryCallback) (err error) {
 		rr := &rr{res: input}
-		require.Nil(callback(rr))
+		require.NoError(callback(rr))
 		<-goOn // ждем, пока http клиент примет первый элемент и отключится
 		// теперь ждем ошибку context.Cancelled. Она выйдет не сразу, т.к. в queryprocessor работает асинхронный конвейер
 		for err == nil {
@@ -64,7 +65,7 @@ func TestBug_QueryProcessorMustStopOnClientDisconnect(t *testing.T) {
 		var err error
 		n := 0
 		for string(entireResp) != `{"sections":[{"type":"","elements":[[[["world"]]]` {
-			if n == 0 && err == io.EOF {
+			if n == 0 && errors.Is(err, io.EOF) {
 				t.Fatal()
 			}
 			buf := make([]byte, 512)

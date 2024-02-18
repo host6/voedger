@@ -74,22 +74,19 @@ func upgrade(cmd *cobra.Command, args []string) error {
 
 	ok, e := cluster.needUpgrade()
 	if e != nil {
-		loggerError(e.Error())
 		return e
 	}
 
 	if !ok {
-		loggerInfo(green("upgrade is not required"))
 		return ErrNoUpdgradeRequired
 	}
 
 	err = mkCommandDirAndLogFile(cmd, cluster)
 	if err != nil {
-		loggerError(err.Error())
 		return err
 	}
 
-	c := newCmd(ckUpgrade, strings.Join(args, " "))
+	c := newCmd(ckUpgrade, args)
 	defer func(cluster *clusterType) {
 		err = cluster.saveToJSON()
 		if err != nil {
@@ -98,12 +95,10 @@ func upgrade(cmd *cobra.Command, args []string) error {
 	}(cluster)
 
 	if err = cluster.applyCmd(c); err != nil {
-		loggerError(err.Error())
 		return err
 	}
 
 	if err = cluster.Cmd.apply(cluster); err != nil {
-		loggerError(err)
 		return err
 	}
 

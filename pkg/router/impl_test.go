@@ -18,10 +18,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	ibus "github.com/untillpro/airs-ibus"
-	"github.com/untillpro/ibusmem"
 
-	"github.com/voedger/voedger/pkg/in10n"
+	"github.com/voedger/voedger/staging/src/github.com/untillpro/ibusmem"
+
+	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
+
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
@@ -38,8 +39,8 @@ var (
 
 func TestBasicUsage_SingleResponse(t *testing.T) {
 	require := require.New(t)
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
-		bus.SendResponse(sender, ibus.Response{
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
+		sender.SendResponse(ibus.Response{
 			ContentType: "text/plain",
 			StatusCode:  http.StatusOK,
 			Data:        []byte("test resp"),
@@ -57,17 +58,17 @@ func TestBasicUsage_SingleResponse(t *testing.T) {
 }
 
 func TestSectionedSendResponseError(t *testing.T) {
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
 	}, time.Millisecond)
 	defer tearDown()
 
 	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/test1/app1/%d/somefunc", router.port(), testWSID), "application/json", http.NoBody)
-	require.Nil(t, err, err)
+	require.NoError(t, err)
 	defer resp.Body.Close()
 	defer resp.Request.Body.Close()
 
 	respBodyBytes, err := io.ReadAll(resp.Body)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, ibus.ErrTimeoutExpired.Error(), string(respBodyBytes))
 	expect500RespPlainText(t, resp)
 }
@@ -80,25 +81,25 @@ func TestBasicUsage_SectionedResponse(t *testing.T) {
 		elem3  = map[string]interface{}{"total": 1}
 	)
 	require := require.New(t)
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
 		require.Equal("test body", string(request.Body))
 		require.Equal(ibus.HTTPMethodPOST, request.Method)
 		require.Equal(0, request.PartitionNumber)
 
 		require.Equal(testWSID, istructs.WSID(request.WSID))
 		require.Equal("somefunc", request.Resource)
-		require.Equal(0, len(request.Attachments))
+		require.Empty(request.Attachments)
 		require.Equal(map[string][]string{
 			"Accept-Encoding": {"gzip"},
 			"Content-Length":  {"9"}, // len("test body")
 			"Content-Type":    {"application/json"},
 			"User-Agent":      {"Go-http-client/1.1"},
 		}, request.Header)
-		require.Equal(0, len(request.Query))
+		require.Empty(request.Query)
 
 		// request is normally handled by processors in a separate goroutine so let's send response in a separate goroutine
 		go func() {
-			rs := bus.SendParallelResponse2(sender)
+			rs := sender.SendParallelResponse()
 			require.NoError(rs.ObjectSection("obj", []string{"meta"}, elem3))
 			rs.StartMapSection(`哇"呀呀Map`, []string{`哇"呀呀`, "21"})
 			require.NoError(rs.SendElement("id1", elem1))
@@ -114,7 +115,7 @@ func TestBasicUsage_SectionedResponse(t *testing.T) {
 	body := []byte("test body")
 	bodyReader := bytes.NewReader(body)
 
-	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/%s/%s/%d/somefunc", router.port(), appOwner, appName, testWSID), "application/json", bodyReader)
+	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/%s/%s/%d/somefunc", router.port(), AppOwner, AppName, testWSID), "application/json", bodyReader)
 	require.NoError(err)
 	defer resp.Body.Close()
 
@@ -164,8 +165,8 @@ func TestBasicUsage_SectionedResponse(t *testing.T) {
 }
 
 func TestEmptySectionedResponse(t *testing.T) {
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
-		rs := bus.SendParallelResponse2(sender)
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
+		rs := sender.SendParallelResponse()
 		rs.Close(nil)
 	}, ibus.DefaultTimeout)
 	defer tearDown()
@@ -180,8 +181,8 @@ func TestEmptySectionedResponse(t *testing.T) {
 }
 
 func TestSimpleErrorSectionedResponse(t *testing.T) {
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
-		rs := bus.SendParallelResponse2(sender)
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
+		rs := sender.SendParallelResponse()
 		rs.Close(errors.New("test error"))
 	}, ibus.DefaultTimeout)
 	defer tearDown()
@@ -198,7 +199,7 @@ func TestSimpleErrorSectionedResponse(t *testing.T) {
 }
 
 func TestHandlerPanic(t *testing.T) {
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
 		panic("test panic")
 	}, ibus.DefaultTimeout)
 	defer tearDown()
@@ -206,22 +207,22 @@ func TestHandlerPanic(t *testing.T) {
 	body := []byte("")
 	bodyReader := bytes.NewReader(body)
 	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/untill/airs-bp/%d/somefunc", router.port(), testWSID), "application/json", bodyReader)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	defer resp.Body.Close()
 
 	respBodyBytes, err := io.ReadAll(resp.Body)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Contains(t, string(respBodyBytes), "test panic")
 	expect500RespPlainText(t, resp)
 }
 
 func TestClientDisconnectDuringSections(t *testing.T) {
 	ch := make(chan struct{})
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
 		go func() {
-			rs := bus.SendParallelResponse2(sender)
+			rs := sender.SendParallelResponse()
 			rs.StartMapSection("secMap", []string{"2"})
-			require.Nil(t, rs.SendElement("id1", elem1))
+			require.NoError(t, rs.SendElement("id1", elem1))
 			// sometimes Request.Body.Close() happens before checking if requestCtx.Err() nil or not after sending a section
 			// So let's wait for successful SendElelemnt(), then close the request
 			ch <- struct{}{}
@@ -237,13 +238,13 @@ func TestClientDisconnectDuringSections(t *testing.T) {
 	}, 5*time.Second)
 	defer tearDown()
 
-	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/%s/%s/%d/somefunc", router.port(), appOwner, appName, testWSID), "application/json", http.NoBody)
+	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/%s/%s/%d/somefunc", router.port(), AppOwner, AppName, testWSID), "application/json", http.NoBody)
 	require.NoError(t, err)
 	entireResp := []byte{}
 	for string(entireResp) != `{"sections":[{"type":"secMap","path":["2"],"elements":{"id1":{"fld1":"fld1Val"}` {
 		buf := make([]byte, 512)
 		n, _ := resp.Body.Read(buf)
-		require.Nil(t, err)
+		require.NoError(t, err)
 		entireResp = append(entireResp, buf[:n]...)
 		log.Println(string(entireResp))
 	}
@@ -256,39 +257,39 @@ func TestClientDisconnectDuringSections(t *testing.T) {
 }
 
 func TestCheck(t *testing.T) {
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
 	}, 1*time.Second)
 	defer tearDown()
 
 	bodyReader := bytes.NewReader(nil)
 	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/check", router.port()), "application/json", bodyReader)
-	require.Nil(t, err, err)
+	require.NoError(t, err)
 	defer resp.Body.Close()
 	respBodyBytes, err := io.ReadAll(resp.Body)
-	require.Nil(t, err)
+	require.NoError(t, err)
 	require.Equal(t, "ok", string(respBodyBytes))
 	expectOKRespPlainText(t, resp)
 }
 
 func Test404(t *testing.T) {
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
 	}, 1*time.Second)
 	defer tearDown()
 
 	bodyReader := bytes.NewReader(nil)
 	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/wrong", router.port()), "", bodyReader)
-	require.Nil(t, err, err)
+	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusNotFound, resp.StatusCode)
 }
 
 func TestFailedToWriteResponse(t *testing.T) {
 	ch := make(chan struct{})
-	setUp(t, func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
+	setUp(t, func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
 		go func() {
-			rs := bus.SendParallelResponse2(sender)
+			rs := sender.SendParallelResponse()
 			rs.StartMapSection("secMap", []string{"2"})
-			require.Nil(t, rs.SendElement("id1", elem1))
+			require.NoError(t, rs.SendElement("id1", elem1))
 
 			// now let's wait for client disconnect
 			<-ch
@@ -304,15 +305,15 @@ func TestFailedToWriteResponse(t *testing.T) {
 
 	body := []byte("")
 	bodyReader := bytes.NewReader(body)
-	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/%s/%s/%d/somefunc", router.port(), appOwner, appName, testWSID), "application/json", bodyReader)
-	require.Nil(t, err, err)
+	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/%s/%s/%d/somefunc", router.port(), AppOwner, AppName, testWSID), "application/json", bodyReader)
+	require.NoError(t, err)
 
 	// read out the first section
 	entireResp := []byte{}
 	for string(entireResp) != `{"sections":[{"type":"secMap","path":["2"],"elements":{"id1":{"fld1":"fld1Val"}` {
 		buf := make([]byte, 512)
 		n, _ := resp.Body.Read(buf)
-		require.Nil(t, err)
+		require.NoError(t, err)
 		entireResp = append(entireResp, buf[:n]...)
 		log.Println(string(entireResp))
 	}
@@ -346,14 +347,14 @@ type testRouter struct {
 	cancel     context.CancelFunc
 	wg         *sync.WaitGroup
 	httpServer pipeline.IService
-	handler    func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus)
+	handler    func(requestCtx context.Context, sender ibus.ISender, request ibus.Request)
 	params     RouterParams
 	bus        ibus.IBus
 }
 
 func startRouter(t *testing.T, rp RouterParams, bus ibus.IBus, busTimeout time.Duration) {
 	ctx, cancel := context.WithCancel(context.Background())
-	httpSrv, acmeSrv := Provide(ctx, rp, busTimeout, nil, in10n.Quotas{}, nil, nil, bus, map[istructs.AppQName]istructs.AppWSAmount{istructs.AppQName_test1_app1: 10})
+	httpSrv, acmeSrv := Provide(ctx, rp, busTimeout, nil, nil, nil, bus, map[istructs.AppQName]istructs.AppWSAmount{istructs.AppQName_test1_app1: 10})
 	require.Nil(t, acmeSrv)
 	require.NoError(t, httpSrv.Prepare(nil))
 	go func() {
@@ -367,7 +368,7 @@ func startRouter(t *testing.T, rp RouterParams, bus ibus.IBus, busTimeout time.D
 	}
 }
 
-func setUp(t *testing.T, handlerFunc func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus), busTimeout time.Duration) {
+func setUp(t *testing.T, handlerFunc func(requestCtx context.Context, sender ibus.ISender, request ibus.Request), busTimeout time.Duration) {
 	if router != nil {
 		router.handler = handlerFunc
 		if !isRouterRestartTested {
@@ -383,9 +384,8 @@ func setUp(t *testing.T, handlerFunc func(requestCtx context.Context, sender int
 		ReadTimeout:      DefaultReadTimeout,
 		ConnectionsLimit: DefaultConnectionsLimit,
 	}
-	var bus ibus.IBus
-	bus = ibusmem.Provide(func(requestCtx context.Context, sender interface{}, request ibus.Request) {
-		router.handler(requestCtx, sender, request, bus)
+	bus := ibusmem.Provide(func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
+		router.handler(requestCtx, sender, request)
 	})
 	router = &testRouter{
 		bus:     bus,
@@ -397,7 +397,7 @@ func setUp(t *testing.T, handlerFunc func(requestCtx context.Context, sender int
 }
 
 func tearDown() {
-	router.handler = func(requestCtx context.Context, sender interface{}, request ibus.Request, bus ibus.IBus) {
+	router.handler = func(requestCtx context.Context, sender ibus.ISender, request ibus.Request) {
 		panic("unexpected handler call")
 	}
 	select {

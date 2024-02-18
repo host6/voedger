@@ -12,8 +12,8 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/iratesce"
-	"github.com/voedger/voedger/pkg/istorage"
-	"github.com/voedger/voedger/pkg/istorageimpl"
+	"github.com/voedger/voedger/pkg/istorage/mem"
+	"github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -37,7 +37,7 @@ func Example() {
 		appConfigs,
 		iratesce.TestBucketsFactory,
 		payloads.TestAppTokensFactory(itokensjwt.TestTokensJWT()),
-		istorageimpl.Provide(istorage.ProvideMem(), ""))
+		provider.Provide(mem.Provide(), ""))
 
 	appParts, cleanupParts, err := appparts.New(appStructs)
 	if err != nil {
@@ -56,8 +56,8 @@ func Example() {
 
 	fmt.Println("*** Add ver 1 ***")
 
-	appParts.DeployApp(istructs.AppQName_test1_app1, appDef_1_v1, [cluster.ProcessorKind_Count]int{2, 2, 2})
-	appParts.DeployApp(istructs.AppQName_test1_app2, appDef_2_v1, [cluster.ProcessorKind_Count]int{2, 2, 2})
+	appParts.DeployApp(istructs.AppQName_test1_app1, appDef_1_v1, 1, [cluster.ProcessorKind_Count]int{2, 2, 2})
+	appParts.DeployApp(istructs.AppQName_test1_app2, appDef_2_v1, 1, [cluster.ProcessorKind_Count]int{2, 2, 2})
 
 	appParts.DeployAppPartitions(istructs.AppQName_test1_app1, []istructs.PartitionID{1})
 	appParts.DeployAppPartitions(istructs.AppQName_test1_app2, []istructs.PartitionID{1})
@@ -85,8 +85,8 @@ func Example() {
 	appConfigs.AddConfig(istructs.AppQName_test1_app1, appDef_1_v2)
 	appConfigs.AddConfig(istructs.AppQName_test1_app2, appDef_2_v2)
 
-	appParts.DeployApp(istructs.AppQName_test1_app2, appDef_2_v2, [cluster.ProcessorKind_Count]int{2, 2, 2})
-	appParts.DeployApp(istructs.AppQName_test1_app1, appDef_1_v2, [cluster.ProcessorKind_Count]int{2, 2, 2})
+	appParts.DeployApp(istructs.AppQName_test1_app2, appDef_2_v2, 1, [cluster.ProcessorKind_Count]int{2, 2, 2})
+	appParts.DeployApp(istructs.AppQName_test1_app1, appDef_1_v2, 1, [cluster.ProcessorKind_Count]int{2, 2, 2})
 
 	a2_v2_p1, err := appParts.Borrow(istructs.AppQName_test1_app2, 1, cluster.ProcessorKind_Projector)
 	if err != nil {

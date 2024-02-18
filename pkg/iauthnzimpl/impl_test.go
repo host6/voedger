@@ -11,6 +11,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/untillpro/goutils/logger"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -406,8 +407,9 @@ func TestAuthenticate(t *testing.T) {
 	}
 	authn := NewDefaultAuthenticator(subjectsGetter)
 	for _, tc := range testCases {
+		localVarSubjects := &tc.subjects
 		t.Run(tc.desc, func(t *testing.T) {
-			subjects = &tc.subjects
+			subjects = localVarSubjects
 			principals, _, err := authn.Authenticate(context.Background(), appStructs, appTokens, tc.req)
 			require.NoError(err)
 			require.Equal(tc.expectedPrincipals, principals)
@@ -1032,13 +1034,14 @@ type implIAppStructs struct {
 	views   *implIViewRecords
 }
 
-func (as *implIAppStructs) AppDef() appdef.IAppDef              { panic("") }
-func (as *implIAppStructs) Events() istructs.IEvents            { panic("") }
-func (as *implIAppStructs) Records() istructs.IRecords          { return as.records }
-func (as *implIAppStructs) ViewRecords() istructs.IViewRecords  { return as.views }
-func (as *implIAppStructs) Resources() istructs.IResources      { panic("") }
-func (as *implIAppStructs) ClusterAppID() istructs.ClusterAppID { panic("") }
-func (as *implIAppStructs) AppQName() istructs.AppQName         { panic("") }
+func (as *implIAppStructs) AppDef() appdef.IAppDef                             { panic("") }
+func (as *implIAppStructs) Events() istructs.IEvents                           { panic("") }
+func (as *implIAppStructs) Records() istructs.IRecords                         { return as.records }
+func (as *implIAppStructs) ViewRecords() istructs.IViewRecords                 { return as.views }
+func (as *implIAppStructs) ObjectBuilder(appdef.QName) istructs.IObjectBuilder { panic("") }
+func (as *implIAppStructs) Resources() istructs.IResources                     { panic("") }
+func (as *implIAppStructs) ClusterAppID() istructs.ClusterAppID                { panic("") }
+func (as *implIAppStructs) AppQName() istructs.AppQName                        { panic("") }
 func (as *implIAppStructs) IsFunctionRateLimitsExceeded(appdef.QName, istructs.WSID) bool {
 	panic("")
 }

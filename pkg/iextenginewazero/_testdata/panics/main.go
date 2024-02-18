@@ -6,7 +6,7 @@
 package main
 
 import (
-	ext "github.com/voedger/extensions-tinygo"
+	ext "github.com/voedger/exttinygo"
 )
 
 //export incorrectStorageQname
@@ -128,6 +128,14 @@ func asStringMemoryOverflow() {
 	key := ext.KeyBuilder("sys.Test", ext.NullEntity)
 	value := ext.MustGetValue(key)
 	value.AsBytes("bytes")
+}
+
+//export wrongFieldName
+func wrongFieldName() {
+	key := ext.KeyBuilder("sys.View", "pkg.TestView")
+	key.PutInt32("wrong", 1)
+	key.PutInt32("cc", 1)
+	ext.MustGetValue(key)
 }
 
 func main() {

@@ -23,14 +23,8 @@ source ./utils.sh
 
 MANAGER=$1
 
-# Add remaining nodes to swarm cluster
-# while [ $# -gt 0 ]; do
-#   ./swarm-set-label.sh $MANAGER $1 "se" "se"
-#   shift
-# done
-
-# Start db cluster
-cat ./docker-compose-se.yml | utils_ssh "$SSH_USER@$MANAGER" 'cat > ~/docker-compose-se.yml'
+# Replace placeholder with env var values and start db cluster
+envsubst < ./docker-compose-se.yml | utils_ssh "$SSH_USER@$MANAGER" 'cat > ~/docker-compose-se.yml'
 
 utils_ssh "$SSH_USER@$MANAGER" "docker stack deploy --compose-file ~/docker-compose-se.yml SEDockerStack"
 

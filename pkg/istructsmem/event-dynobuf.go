@@ -12,12 +12,11 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/istructsmem/internal/qnames"
 	"github.com/voedger/voedger/pkg/istructsmem/internal/utils"
 )
 
 func storeEvent(ev *eventType, buf *bytes.Buffer) {
-	utils.WriteUint16(buf, uint16(ev.qNameID()))
+	utils.WriteUint16(buf, ev.qNameID())
 
 	storeEventCreateParams(ev, buf)
 	storeEventBuildError(ev, buf)
@@ -109,7 +108,7 @@ func loadEvent(ev *eventType, codecVer byte, buf *bytes.Buffer) (err error) {
 	if id, err = utils.ReadUInt16(buf); err != nil {
 		return fmt.Errorf("error read event name ID: %w", err)
 	}
-	if ev.name, err = ev.appCfg.qNames.QName(qnames.QNameID(id)); err != nil {
+	if ev.name, err = ev.appCfg.qNames.QName(id); err != nil {
 		return fmt.Errorf("error read event name: %w", err)
 	}
 
@@ -223,7 +222,7 @@ func loadEventBuildError(ev *eventType, buf *bytes.Buffer) (err error) {
 
 	ev.buildErr.bytes = make([]byte, bytesLen)
 	if _, err = buf.Read(ev.buildErr.bytes); err != nil {
-		//no test: possible error (only EOF) is handled above
+		// no test: possible error (only EOF) is handled above
 		return fmt.Errorf("error read event source raw bytes: %w", err)
 	}
 

@@ -12,10 +12,12 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/istorage"
-	"github.com/voedger/voedger/pkg/istorageimpl"
+	"github.com/voedger/voedger/pkg/istorage/mem"
+	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -27,6 +29,12 @@ type (
 		AppConfigs AppConfigsType
 		AppCfg     *AppConfigType
 		AppDef     appdef.IAppDef
+
+		StorageProvider istorage.IAppStorageProvider
+		Storage         istorage.IAppStorage
+
+		AppStructsProvider istructs.IAppStructsProvider
+		AppStructs         istructs.IAppStructs
 
 		// common event entities
 		eventRawBytes      []byte
@@ -95,6 +103,7 @@ type (
 		// tested rows
 		abstractCDoc appdef.QName
 		testRow      appdef.QName
+		testObj      appdef.QName
 
 		// tested records
 		testCDoc appdef.QName
@@ -198,6 +207,7 @@ var testData = testDataType{
 
 	abstractCDoc: appdef.NewQName("test", "abstract"),
 	testRow:      appdef.NewQName("test", "Row"),
+	testObj:      appdef.NewQName("test", "Obj"),
 	testCDoc:     appdef.NewQName("test", "CDoc"),
 	testCRec:     appdef.NewQName("test", "Record"),
 
@@ -275,7 +285,7 @@ func test() *testDataType {
 				AddField(testData.humanIdent, appdef.DataKind_bool, false).
 				AddDataField(testData.photoIdent, testData.dataPhoto, false)
 			rec.
-				AddUnique("", []string{testData.buyerIdent})
+				AddUnique(appdef.NewQName("test", "photos$uniques$buyerIdent"), []string{testData.buyerIdent})
 			rec.
 				AddContainer(testData.remarkIdent, testData.tablePhotoRems, 0, appdef.Occurs_Unbounded)
 
@@ -308,6 +318,22 @@ func test() *testDataType {
 				AddField("bool", appdef.DataKind_bool, false).
 				AddField("RecordID", appdef.DataKind_RecordID, false).
 				AddField("RecordID_2", appdef.DataKind_RecordID, false)
+		}
+
+		{
+			obj := appDef.AddObject(testData.testObj)
+			obj.
+				AddField("int32", appdef.DataKind_int32, false).
+				AddField("int64", appdef.DataKind_int64, false).
+				AddField("float32", appdef.DataKind_float32, false).
+				AddField("float64", appdef.DataKind_float64, false).
+				AddField("bytes", appdef.DataKind_bytes, false).
+				AddField("string", appdef.DataKind_string, false).
+				AddField("raw", appdef.DataKind_bytes, false, appdef.MaxLen(appdef.MaxFieldLength)).
+				AddField("QName", appdef.DataKind_QName, false).
+				AddField("bool", appdef.DataKind_bool, false).
+				AddField("RecordID", appdef.DataKind_RecordID, false)
+			obj.AddContainer("child", testData.testObj, 0, appdef.Occurs_Unbounded)
 		}
 
 		{
@@ -367,28 +393,33 @@ func test() *testDataType {
 		return appDef
 	}
 
-	prepareConfig := func(cfg *AppConfigType) {
+	if testData.AppConfigs == nil {
+		testData.AppConfigs = make(AppConfigsType, 1)
+		testData.AppCfg = testData.AppConfigs.AddConfig(testData.appName, prepareAppDef())
+		testData.AppDef = testData.AppCfg.AppDef
 
-		sp := istorageimpl.Provide(istorage.ProvideMem())
-		storage, err := sp.AppStorage(testData.appName)
+		testData.AppCfg.Resources.Add(NewCommandFunction(testData.saleCmdName, NullCommandExec))
+		testData.AppCfg.Resources.Add(NewCommandFunction(testData.changeCmdName, NullCommandExec))
+		testData.AppCfg.Resources.Add(NewQueryFunction(testData.queryPhotoFunctionName, NullQueryExec))
+
+		var err error
+
+		testData.StorageProvider = istorageimpl.Provide(mem.Provide())
+		testData.Storage, err = testData.StorageProvider.AppStorage(testData.appName)
 		if err != nil {
 			panic(err)
 		}
 
-		cfg.Resources.Add(NewCommandFunction(testData.saleCmdName, NullCommandExec))
-		cfg.Resources.Add(NewCommandFunction(testData.changeCmdName, NullCommandExec))
-		cfg.Resources.Add(NewQueryFunction(testData.queryPhotoFunctionName, NullQueryExec))
-
-		if err := cfg.prepare(iratesce.TestBucketsFactory(), storage); err != nil {
+		err = testData.AppCfg.prepare(iratesce.TestBucketsFactory(), testData.Storage)
+		if err != nil {
 			panic(err)
 		}
-	}
 
-	if testData.AppConfigs == nil {
-		testData.AppConfigs = make(AppConfigsType, 1)
-		testData.AppCfg = testData.AppConfigs.AddConfig(testData.appName, prepareAppDef())
-		prepareConfig(testData.AppCfg)
-		testData.AppDef = testData.AppCfg.AppDef
+		testData.AppStructsProvider = Provide(testData.AppConfigs, iratesce.TestBucketsFactory, testTokensFactory(), testData.StorageProvider)
+		testData.AppStructs, err = testData.AppStructsProvider.AppStructsByDef(testData.appName, testData.AppDef)
+		if err != nil {
+			panic(err)
+		}
 	}
 
 	return &testData
@@ -505,7 +536,7 @@ func testTestRow(t *testing.T, row istructs.IRowReader) {
 	require.EqualValues(test.photoRawValue, row.AsBytes("raw"))
 
 	require.Equal(test.tablePhotos, row.AsQName("QName"))
-	require.Equal(true, row.AsBool("bool"))
+	require.True(row.AsBool("bool"))
 	require.Equal(istructs.RecordID(7777777), row.AsRecordID("RecordID"))
 }
 
@@ -656,7 +687,7 @@ func testTestSecureObject(t *testing.T, obj *objectType) {
 	require := require.New(t)
 	test := test()
 
-	require.Equal(obj.AsString(test.passwordIdent), maskString)
+	require.Equal(maskString, obj.AsString(test.passwordIdent))
 }
 
 func fillTestCUD(cud *cudType) {

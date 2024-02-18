@@ -6,6 +6,7 @@ package vit
 
 import (
 	"bytes"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -15,20 +16,20 @@ import (
 	"testing"
 	"time"
 
-	_ "embed"
-
 	"github.com/stretchr/testify/require"
 	"github.com/untillpro/goutils/logger"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/irates"
-	istorage "github.com/voedger/voedger/pkg/istorage"
-	"github.com/voedger/voedger/pkg/istorageimpl/istoragecas"
+	"github.com/voedger/voedger/pkg/istorage"
+	"github.com/voedger/voedger/pkg/istorage/cas"
 	"github.com/voedger/voedger/pkg/istructs"
-	istructsmem "github.com/voedger/voedger/pkg/istructsmem"
+	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/state/smtptest"
 	"github.com/voedger/voedger/pkg/sys/authnz"
+	"github.com/voedger/voedger/pkg/sys/verifier"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	"github.com/voedger/voedger/pkg/vvm"
 )
@@ -86,6 +87,10 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 		opt(vitPreConfig)
 	}
 
+	for _, initFunc := range vitPreConfig.initFuncs {
+		initFunc()
+	}
+
 	// eliminate timeouts impact for debugging
 	cfg.RouterReadTimeout = int(debugTimeout)
 	cfg.RouterWriteTimeout = int(debugTimeout)
@@ -94,7 +99,7 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 	if useCas {
 		cfg.StorageFactory = func() (provider istorage.IAppStorageFactory, err error) {
 			logger.Info("using istoragecas ", fmt.Sprint(vvm.DefaultCasParams))
-			return istoragecas.Provide(vvm.DefaultCasParams)
+			return cas.Provide(vvm.DefaultCasParams)
 		}
 	}
 
@@ -119,6 +124,35 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 	require.NoError(t, vit.Launch())
 
 	for _, app := range vitPreConfig.vitApps {
+		// deploy app and partitions
+		as, err := vit.AppStructs(app.name)
+		require.NoError(t, err)
+
+		if !app.name.IsSys() {
+			vit.VVM.APIs.IAppPartitions.DeployApp(app.name, as.AppDef(), app.deployment.PartsCount, app.deployment.EnginePoolSize)
+			appParts := []istructs.PartitionID{}
+			for pid := 0; pid < app.deployment.PartsCount; pid++ {
+				appParts = append(appParts, istructs.PartitionID(pid))
+			}
+			vit.VVM.APIs.IAppPartitions.DeployAppPartitions(app.name, appParts)
+		}
+
+		// generate verified value tokens if queried
+		//                desiredValue token
+		verifiedValues := map[string]string{}
+		for desiredValue, vvi := range app.verifiedValuesIntents {
+			appTokens := vvm.IAppTokensFactory.New(app.name)
+			verifiedValuePayload := payloads.VerifiedValuePayload{
+				VerificationKind: appdef.VerificationKind_EMail,
+				Entity:           vvi.docQName,
+				Field:            vvi.fieldName,
+				Value:            vvi.desiredValue,
+			}
+			verifiedValueToken, err := appTokens.IssueToken(verifier.VerifiedValueTokenDuration, &verifiedValuePayload)
+			require.NoError(vit.T, err)
+			verifiedValues[desiredValue] = verifiedValueToken
+		}
+
 		// создадим логины и рабочие области
 		for _, login := range app.logins {
 			vit.SignUp(login.Name, login.Pwd, login.AppQName)
@@ -130,12 +164,13 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 			}
 			appPrincipals[login.Name] = prn
 
-			for singleton, data := range login.singletons {
-				if !vit.PostProfile(prn, "q.sys.Collection", fmt.Sprintf(`{"args":{"Schema":"%s"}}`, singleton)).IsEmpty() {
+			for doc, dataFactory := range login.docs {
+				if !vit.PostProfile(prn, "q.sys.Collection", fmt.Sprintf(`{"args":{"Schema":"%s"}}`, doc)).IsEmpty() {
 					continue
 				}
+				data := dataFactory(verifiedValues)
 				data[appdef.SystemField_ID] = 1
-				data[appdef.SystemField_QName] = singleton.String()
+				data[appdef.SystemField_QName] = doc.String()
 
 				bb, err := json.Marshal(data)
 				require.NoError(t, err)
@@ -143,6 +178,9 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 				vit.PostProfile(prn, "c.sys.CUD", fmt.Sprintf(`{"cuds":[{"fields":%s}]}`, bb))
 			}
 		}
+
+		sysToken, err := payloads.GetSystemPrincipalToken(vit, app.name)
+		require.NoError(vit.T, err)
 		for _, wsd := range app.ws {
 			owner := vit.principals[app.name][wsd.ownerLoginName]
 			appWorkspaces, ok := vit.appWorkspaces[app.name]
@@ -150,23 +188,57 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 				appWorkspaces = map[string]*AppWorkspace{}
 				vit.appWorkspaces[app.name] = appWorkspaces
 			}
-			appWorkspaces[wsd.Name] = vit.CreateWorkspace(wsd, owner)
+			newAppWS := vit.CreateWorkspace(wsd, owner)
+			newAppWS.childs = wsd.childs
+			newAppWS.docs = wsd.docs
+			newAppWS.subjects = wsd.subjects
+			appWorkspaces[wsd.Name] = newAppWS
 
-			for singleton, data := range wsd.singletons {
-				if !vit.PostWS(appWorkspaces[wsd.Name], "q.sys.Collection", fmt.Sprintf(`{"args":{"Schema":"%s"}}`, singleton)).IsEmpty() {
-					continue
-				}
-				data[appdef.SystemField_ID] = 1
-				data[appdef.SystemField_QName] = singleton.String()
-
-				bb, err := json.Marshal(data)
-				require.NoError(t, err)
-
-				vit.PostWS(appWorkspaces[wsd.Name], "c.sys.CUD", fmt.Sprintf(`{"cuds":[{"fields":%s}]}`, bb), coreutils.WithAuthorizeBy(vit.GetSystemPrincipal(app.name).Token))
-			}
+			handleWSParam(vit, appWorkspaces[wsd.Name], appWorkspaces, verifiedValues, sysToken)
 		}
 	}
 	return vit
+}
+
+func handleWSParam(vit *VIT, appWS *AppWorkspace, appWorkspaces map[string]*AppWorkspace, verifiedValues map[string]string, token string) {
+	for doc, dataFactory := range appWS.docs {
+		if !vit.PostWS(appWS, "q.sys.Collection", fmt.Sprintf(`{"args":{"Schema":"%s"}}`, doc), coreutils.WithAuthorizeBy(token)).IsEmpty() {
+			continue
+		}
+		data := dataFactory(verifiedValues)
+		data[appdef.SystemField_ID] = 1
+		data[appdef.SystemField_QName] = doc.String()
+
+		bb, err := json.Marshal(data)
+		require.NoError(vit.T, err)
+
+		vit.PostWS(appWS, "c.sys.CUD", fmt.Sprintf(`{"cuds":[{"fields":%s}]}`, bb), coreutils.WithAuthorizeBy(token))
+	}
+	for _, subject := range appWS.subjects {
+		roles := ""
+		for i, role := range subject.roles {
+			if i > 0 {
+				roles += ","
+			}
+			roles += role.String()
+		}
+		body := fmt.Sprintf(`{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"sys.Subject","Login":"%s","Roles":"%s","SubjectKind":%d,"ProfileWSID":%d}}]}`,
+			subject.login, roles, subject.subjectKind, vit.principals[appWS.GetAppQName()][subject.login].ProfileWSID)
+		vit.PostWS(appWS, "c.sys.CUD", body, coreutils.WithAuthorizeBy(token))
+	}
+
+	for _, childWSParams := range appWS.childs {
+		vit.InitChildWorkspace(childWSParams, appWS)
+		childAppWS := vit.WaitForChildWorkspace(appWS, childWSParams.Name)
+		require.Empty(vit.T, childAppWS.WSError)
+		childAppWS.childs = childWSParams.childs
+		childAppWS.subjects = childWSParams.subjects
+		childAppWS.docs = childWSParams.docs
+		childAppWS.ownerLoginName = childWSParams.ownerLoginName
+		childAppWS.Owner = vit.GetPrincipal(appWS.GetAppQName(), childWSParams.ownerLoginName)
+		appWorkspaces[childWSParams.Name] = childAppWS
+		handleWSParam(vit, childAppWS, appWorkspaces, verifiedValues, token)
+	}
 }
 
 func NewVITLocalCassandra(t *testing.T, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
@@ -348,7 +420,7 @@ func (vit *VIT) refreshTokens() {
 			principalPayload := payloads.PrincipalPayload{
 				Login:       prn.Login.Name,
 				SubjectKind: istructs.SubjectKind_User,
-				ProfileWSID: istructs.WSID(prn.ProfileWSID),
+				ProfileWSID: prn.ProfileWSID,
 			}
 			as, err := vit.IAppStructsProvider.AppStructs(prn.AppQName)
 			require.NoError(vit.T, err) // notest

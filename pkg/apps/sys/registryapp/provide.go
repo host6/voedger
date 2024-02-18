@@ -25,7 +25,7 @@ func Provide(smtpCfg smtp.Cfg) apps.AppBuilder {
 			apis.NumCommandProcessors, nil, apis.IAppStorageProvider)
 
 		// sys/registry resources
-		registryPackageFS := registry.Provide(cfg, appDefBuilder, apis.IAppStructsProvider, apis.ITokens, apis.IFederation, ep)
+		registryPackageFS := registry.Provide(cfg, apis.IAppStructsProvider, apis.ITokens, apis.IFederation)
 		cfg.AddSyncProjectors(registry.ProvideSyncProjectorLoginIdxFactory())
 		registryAppPackageFS := parser.PackageFS{
 			QualifiedPackageName: RegistryAppFQN,
@@ -49,9 +49,9 @@ func AppDef() appdef.IAppDef {
 }
 
 // Returns registry partitions count
-func PartsCount() int { return 1 }
+func PartsCount() int { return DefDeploymentPartsCount }
 
 // Returns registry engines pool sizes
 func EnginePoolSize() [cluster.ProcessorKind_Count]int {
-	return [cluster.ProcessorKind_Count]int{1, 1, 1}
+	return DefDeploymentEnginePoolSize
 }

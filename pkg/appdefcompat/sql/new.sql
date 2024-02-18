@@ -32,11 +32,18 @@ WORKSPACE SomeWorkspace(
         ProfileToken                int64, -- ValueChanged: int32 in old version, int64 in new version
         NewField                    varchar -- appending field is allowed
     );
+    TABLE OneMoreTable INHERITS CDoc(
+        A varchar,
+        B varchar,
+        C int32,
+        UNIQUE (A, B) -- allowed to reorder fields in unique constraint
+    );
     TABLE AnotherOneTable INHERITS CDoc(
         A varchar,
         B varchar,
         D varchar, -- NodeInserted
-        C int32 -- OrderChanged, ValueChanged: varchar in old version, int32 in new version, field's index is changed
+        C int32, -- OrderChanged, ValueChanged: varchar in old version, int32 in new version, field's index is changed
+        UNIQUE (A, B, D) -- NodeModified: added field D to UniqueFields
     );
     TYPE SomeType(
         A varchar,
@@ -72,14 +79,19 @@ WORKSPACE SomeWorkspace(
         B int,
         PRIMARY KEY ((A), B)
     ) AS RESULT OF Proj1;
+    TABLE O_Doc INHERITS ODoc (
+        Fld1 int32,
+        Fld2 int64 -- field added, the doc is an arg of c.sys.CmdODoc -> no problem becuase the field is not required
+    );
     EXTENSION ENGINE BUILTIN (
         PROJECTOR Proj1 AFTER EXECUTE ON (Orders) INTENTS (View(SomeView), View(NewView));
         COMMAND Orders();
         COMMAND CreateLogin(CreateLoginParams, UNLOGGED CreateLoginUnloggedParams) RETURNS void;
-        COMMAND SomeCommand(SomeType2, UNLOGGED SomeType2) RETURNS SomeType2; -- args and return type changed; unlogged flag changed, but it is ok
+        COMMAND SomeCommand(SomeType2, UNLOGGED SomeType2) RETURNS SomeType2; -- args, unloggedArgs and result are changed -> deny, clietn will fail to call the cmd he just called
         COMMAND NewCommand(NewType, UNLOGGED NewType2) RETURNS NewType;
         QUERY NewQuery(NewType) RETURNS NewType; -- new query is allowed
         QUERY SomeQuery(SomeType2) RETURNS SomeType2; -- changing args and return type is allowed
+        COMMAND CmdODoc(O_Doc);
     )
 );
 

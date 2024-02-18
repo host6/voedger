@@ -6,16 +6,16 @@ package commandprocessor
 
 import (
 	"context"
+	"fmt"
 	"time"
 
-	ibus "github.com/untillpro/airs-ibus"
 	"github.com/untillpro/goutils/logger"
 
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/istructsmem"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 	"github.com/voedger/voedger/pkg/pipeline"
 	coreutils "github.com/voedger/voedger/pkg/utils"
@@ -34,7 +34,7 @@ type cmdProc struct {
 	now           coreutils.TimeFunc
 	authenticator iauthnz.IAuthenticator
 	authorizer    iauthnz.IAuthorizer
-	cfgs          istructsmem.AppConfigsType
+	storeOp       pipeline.ISyncOperator
 }
 
 type appPartition struct {
@@ -43,9 +43,9 @@ type appPartition struct {
 }
 
 // syncActualizerFactory - это фабрика(разделИД), которая возвращает свитч, в бранчах которого по синхронному актуализатору на каждое приложение, внутри каждого - проекторы на каждое приложение
-func ProvideServiceFactory(bus ibus.IBus, asp istructs.IAppStructsProvider, now coreutils.TimeFunc, syncActualizerFactory SyncActualizerFactory,
+func ProvideServiceFactory(appParts appparts.IAppPartitions, now coreutils.TimeFunc,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm VVMName, authenticator iauthnz.IAuthenticator, authorizer iauthnz.IAuthorizer,
-	secretReader isecrets.ISecretReader, appConfigsType istructsmem.AppConfigsType) ServiceFactory {
+	secretReader isecrets.ISecretReader) ServiceFactory {
 	return func(commandsChannel CommandChannel, partitionID istructs.PartitionID) pipeline.IService {
 		cmdProc := &cmdProc{
 			pNumber:       partitionID,
@@ -54,13 +54,52 @@ func ProvideServiceFactory(bus ibus.IBus, asp istructs.IAppStructsProvider, now 
 			now:           now,
 			authenticator: authenticator,
 			authorizer:    authorizer,
-			cfgs:          appConfigsType,
 		}
 
 		return pipeline.NewService(func(vvmCtx context.Context) {
 			hsp := newHostStateProvider(vvmCtx, partitionID, secretReader)
+			//syncActualizerOperator := syncActualizerFactory(vvmCtx, partitionID)
+			cmdProc.storeOp = pipeline.NewSyncPipeline(vvmCtx, "store",
+				pipeline.WireFunc("applyRecords", func(ctx context.Context, work interface{}) (err error) {
+					// sync apply records
+					cmd := work.(*cmdWorkpiece)
+					if err = cmd.appStructs.Records().Apply(cmd.pLogEvent); err != nil {
+						cmd.appPartitionRestartScheduled = true
+					}
+					return err
+				}), pipeline.WireSyncOperator("syncProjectorsAndPutWLog", pipeline.ForkOperator(pipeline.ForkSame,
+					// forK: sync projector and PutWLog
+
+					pipeline.ForkBranch(
+						pipeline.NewSyncOp(func(ctx context.Context, work interface{}) (err error) {
+							cmd := work.(*cmdWorkpiece)
+
+							cmd.syncProjectorsStart = time.Now()
+							err = cmd.appPart.DoSyncActualizer(ctx, work)
+							cmd.metrics.increase(ProjectorsSeconds, time.Since(cmd.syncProjectorsStart).Seconds())
+							cmd.syncProjectorsStart = time.Time{}
+
+							if err != nil {
+								cmd.appPartitionRestartScheduled = true
+							}
+
+							return err
+						}),
+					),
+
+					pipeline.ForkBranch(pipeline.NewSyncOp(func(ctx context.Context, work interface{}) (err error) {
+						// put WLog
+						cmd := work.(*cmdWorkpiece)
+						if err = cmd.appStructs.Events().PutWlog(cmd.pLogEvent); err != nil {
+							cmd.appPartitionRestartScheduled = true
+						} else {
+							cmd.workspace.NextWLogOffset++
+						}
+						return
+					})),
+				)))
 			cmdPipeline := pipeline.NewSyncPipeline(vvmCtx, "Command Processor",
-				pipeline.WireFunc("getAppStructs", getAppStructs),
+				pipeline.WireFunc("borrowAppPart", borrowAppPart),
 				pipeline.WireFunc("limitCallRate", limitCallRate),
 				pipeline.WireFunc("getWSDesc", getWSDesc),
 				pipeline.WireFunc("authenticate", cmdProc.authenticate),
@@ -89,13 +128,8 @@ func ProvideServiceFactory(bus ibus.IBus, asp istructs.IAppStructsProvider, now 
 				pipeline.WireFunc("validateCmdResult", validateCmdResult),
 				pipeline.WireFunc("getIDGenerator", getIDGenerator),
 				pipeline.WireFunc("putPLog", cmdProc.putPLog),
-				pipeline.WireFunc("applyPLogEvent", applyPLogEvent),
-				pipeline.WireFunc("syncProjectorsStart", syncProjectorsBegin),
-				pipeline.WireSyncOperator("syncProjectors", syncActualizerFactory(vvmCtx, partitionID)),
-				pipeline.WireFunc("syncProjectorsEnd", syncProjectorsEnd),
+				pipeline.WireFunc("store", cmdProc.storeOp.DoSync),
 				pipeline.WireFunc("n10n", cmdProc.n10n),
-				pipeline.WireFunc("putWLog", putWLog),
-				pipeline.WireSyncOperator("sendResponse", &opSendResponse{bus: bus}), // ICatch
 			)
 			// TODO: сделать потом plogOffset свой по каждому разделу, wlogoffset - свой для каждого wsid
 			defer cmdPipeline.Close()
@@ -103,25 +137,30 @@ func ProvideServiceFactory(bus ibus.IBus, asp istructs.IAppStructsProvider, now 
 				select {
 				case intf := <-commandsChannel:
 					start := time.Now()
+					cmdMes := intf.(ICommandMessage)
 					cmd := &cmdWorkpiece{
-						cmdMes:            intf.(ICommandMessage),
+						cmdMes:            cmdMes,
 						requestData:       coreutils.MapObject{},
-						asp:               asp,
+						appParts:          appParts,
 						hostStateProvider: hsp,
-					}
-					cmd.metrics = commandProcessorMetrics{
-						vvm:     string(vvm),
-						app:     cmd.cmdMes.AppQName(),
-						metrics: metrics,
+						metrics: commandProcessorMetrics{
+							vvmName: string(vvm),
+							app:     cmdMes.AppQName(),
+							metrics: metrics,
+						},
 					}
 					cmd.metrics.increase(CommandsTotal, 1.0)
-					if err := cmdPipeline.SendSync(cmd); err != nil {
-						logger.Error("unhandled error: " + err.Error())
+					cmdHandlingErr := cmdPipeline.SendSync(cmd)
+					if cmdHandlingErr != nil {
+						logger.Error(cmdHandlingErr)
 					}
-					if cmd.pLogEvent != nil {
-						cmd.pLogEvent.Release()
+					sendResponse(cmd, cmdHandlingErr)
+					if cmd.appPartitionRestartScheduled {
+						logger.Info(fmt.Sprintf("partition %d will be restarted due of an error on writing to Log: %s", cmd.cmdMes.PartitionID(), cmdHandlingErr))
+						delete(cmdProc.appPartitions, cmd.cmdMes.AppQName())
 					}
-					cmd.metrics.increase(CommandsSeconds, time.Since(start).Seconds())
+					cmd.release()
+					metrics.IncreaseApp(CommandsSeconds, string(vvm), cmdMes.AppQName(), time.Since(start).Seconds())
 				case <-vvmCtx.Done():
 					cmdProc.appPartitions = map[istructs.AppQName]*appPartition{} // clear appPartitions to test recovery
 					return

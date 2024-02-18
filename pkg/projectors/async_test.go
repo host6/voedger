@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/in10nmem"
@@ -57,6 +58,13 @@ func TestBasicUsage_AsynchronousActualizer(t *testing.T) {
 		},
 		func(cfg *istructsmem.AppConfigType) {
 			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+			cfg.AddAsyncProjectors(
+				func(partition istructs.PartitionID) istructs.Projector {
+					return istructs.Projector{Name: incrementorName}
+				}, func(partition istructs.PartitionID) istructs.Projector {
+					return istructs.Projector{Name: decrementorName}
+				},
+			)
 		})
 	partitionNr := istructs.PartitionID(1) // test within partition 1
 
@@ -145,6 +153,11 @@ func Test_AsynchronousActualizer_FlushByRange(t *testing.T) {
 		},
 		func(cfg *istructsmem.AppConfigType) {
 			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+			cfg.AddAsyncProjectors(
+				func(partition istructs.PartitionID) istructs.Projector {
+					return istructs.Projector{Name: incrementorName}
+				},
+			)
 		})
 	partitionNr := istructs.PartitionID(2) // test within partition 2
 
@@ -220,6 +233,9 @@ func Test_AsynchronousActualizer_FlushByInterval(t *testing.T) {
 		},
 		func(cfg *istructsmem.AppConfigType) {
 			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+			cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
+				return istructs.Projector{Name: incrementorName}
+			})
 		})
 	partitionNr := istructs.PartitionID(1) // test within partition 1
 
@@ -273,6 +289,19 @@ func Test_AsynchronousActualizer_FlushByInterval(t *testing.T) {
 	require.Equal(int32(1), getProjectionValue(require, app, incProjectionView, istructs.WSID(1002)))
 }
 
+func getProjectorsInError(metrics imetrics.IMetrics, appName istructs.AppQName, vvmName string) *float64 {
+	var foundMetricValue float64
+	var projInErrors *float64 = nil
+	metrics.List(func(metric imetrics.IMetric, metricValue float64) (err error) {
+		if metric.App() == appName && metric.Vvm() == vvmName && metric.Name() == ProjectorsInError {
+			foundMetricValue = metricValue
+			projInErrors = &foundMetricValue
+		}
+		return nil
+	})
+	return projInErrors
+}
+
 // Tests that error is handled correctly.
 // Async actualizer should write the error to log, then rebuild and restart itself after a 30-second pause
 func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
@@ -289,6 +318,9 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 		},
 		func(cfg *istructsmem.AppConfigType) {
 			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+			cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
+				return istructs.Projector{Name: name}
+			})
 		})
 	partitionNr := istructs.PartitionID(1) // test within partition 1
 
@@ -315,16 +347,6 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	defer cleanup()
 
 	metrics := imetrics.Provide()
-	getProjectorsInError := func() float64 {
-		var projInErrors float64
-		metrics.List(func(metric imetrics.IMetric, metricValue float64) (err error) {
-			if metric.App() == istructs.AppQName_test1_app1 && metric.Vvm() == "test" && metric.Name() == ProjectorsInError {
-				projInErrors = metricValue
-			}
-			return nil
-		})
-		return projInErrors
-	}
 
 	// init and launch actualizer
 	conf := AsyncActualizerConf{
@@ -376,7 +398,9 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 		time.Sleep(time.Microsecond)
 	}
 	require.Equal(1, attempts)
-	require.Equal(1.0, getProjectorsInError())
+	projInErr := getProjectorsInError(metrics, istructs.AppQName_test1_app1, "test")
+	require.NotNil(projInErr)
+	require.Equal(1.0, *projInErr)
 
 	// tick after-error interval ("30 second delay")
 	chanAfterError <- time.Now()
@@ -385,7 +409,9 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	for getActualizerOffset(require, app, partitionNr, name) < topOffset {
 		time.Sleep(time.Microsecond)
 	}
-	require.Equal(0.0, getProjectorsInError())
+	projInErr = getProjectorsInError(metrics, istructs.AppQName_test1_app1, "test")
+	require.NotNil(projInErr)
+	require.Equal(0.0, *projInErr)
 
 	// stop services
 	cancelCtx()
@@ -406,6 +432,9 @@ func Test_AsynchronousActualizer_ResumeReadAfterNotifications(t *testing.T) {
 		},
 		func(cfg *istructsmem.AppConfigType) {
 			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+			cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
+				return istructs.Projector{Name: incrementorName}
+			})
 		})
 	partitionNr := istructs.PartitionID(1) // test within partition 1
 
@@ -420,6 +449,7 @@ func Test_AsynchronousActualizer_ResumeReadAfterNotifications(t *testing.T) {
 	topOffset := f.fill(1002)
 
 	withCancel, cancelCtx := context.WithCancel(context.Background())
+	metrics := imetrics.Provide()
 
 	broker, cleanup := in10nmem.ProvideEx2(in10n.Quotas{
 		Channels:               2,
@@ -439,6 +469,8 @@ func Test_AsynchronousActualizer_ResumeReadAfterNotifications(t *testing.T) {
 		BundlesLimit:  2,
 		FlushInterval: 1 * time.Second,
 		Broker:        broker,
+		VvmName:       "test",
+		Metrics:       metrics,
 	}
 	actualizerFactory := ProvideAsyncActualizerFactory()
 	actualizer, err := actualizerFactory(conf, incrementorFactory)
@@ -474,6 +506,9 @@ func Test_AsynchronousActualizer_ResumeReadAfterNotifications(t *testing.T) {
 	// expected projection values
 	require.Equal(int32(3), getProjectionValue(require, app, incProjectionView, istructs.WSID(1001)))
 	require.Equal(int32(1), getProjectionValue(require, app, incProjectionView, istructs.WSID(1002)))
+	projInErrs := getProjectorsInError(metrics, istructs.AppQName_test1_app1, "test")
+	require.NotNil(projInErrs)
+	require.Equal(0.0, *projInErrs)
 }
 
 type pLogFiller struct {
@@ -483,10 +518,10 @@ type pLogFiller struct {
 	cmdQName  appdef.QName
 }
 
-func (f *pLogFiller) fill(WSID istructs.WSID) (offset istructs.Offset) {
+func (f *pLogFiller) fill(wsid istructs.WSID) (offset istructs.Offset) {
 	reb := f.app.Events().GetNewRawEventBuilder(istructs.NewRawEventBuilderParams{
 		GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-			Workspace:         WSID,
+			Workspace:         wsid,
 			HandlingPartition: f.partition,
 			PLogOffset:        f.offset,
 			QName:             f.cmdQName,
@@ -529,6 +564,9 @@ func Test_AsynchronousActualizer_Stress(t *testing.T) {
 		},
 		func(cfg *istructsmem.AppConfigType) {
 			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+			cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
+				return istructs.Projector{Name: incrementorName}
+			})
 		})
 	partitionNr := istructs.PartitionID(1) // test within partition 1
 
@@ -633,6 +671,9 @@ func Test_AsynchronousActualizer_NonBuffered(t *testing.T) {
 		},
 		func(cfg *istructsmem.AppConfigType) {
 			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+			cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
+				return istructs.Projector{Name: incrementorName}
+			})
 		})
 	partitionNr := istructs.PartitionID(2) // test within partition 2
 
@@ -750,6 +791,9 @@ func Test_AsynchronousActualizer_Stress_NonBuffered(t *testing.T) {
 		},
 		func(cfg *istructsmem.AppConfigType) {
 			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+			cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
+				return istructs.Projector{Name: incrementorName}
+			})
 		})
 	partitions := make([]*testPartition, totalPartitions)
 
@@ -876,11 +920,11 @@ func Test_AsynchronousActualizer_Stress_NonBuffered(t *testing.T) {
 	}
 
 	t.Logf("Stopped in %s ", time.Since(t0))
-	t.Logf("RPS: %.2f", float64(totalEvents)/float64(duration.Seconds()))
+	t.Logf("RPS: %.2f", float64(totalEvents)/duration.Seconds())
 	metrics.List(func(metric imetrics.IMetric, metricValue float64) (err error) {
 		if metric.Name() == "voedger_istoragecache_putbatch_total" {
 			t.Logf("PutBatch: %.0f", metricValue)
-			t.Logf("Batch Per Second: %.2f", float64(metricValue)/float64(duration.Seconds()))
+			t.Logf("Batch Per Second: %.2f", metricValue/duration.Seconds())
 		}
 		return nil
 	})
@@ -914,6 +958,9 @@ func Test_AsynchronousActualizer_Stress_Buffered(t *testing.T) {
 		},
 		func(cfg *istructsmem.AppConfigType) {
 			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
+			cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
+				return istructs.Projector{Name: incrementorName}
+			})
 		})
 	partitions := make([]*testPartition, totalPartitions)
 
@@ -1042,11 +1089,11 @@ func Test_AsynchronousActualizer_Stress_Buffered(t *testing.T) {
 	}
 
 	t.Logf("Stopped in %s ", time.Since(t0))
-	t.Logf("RPS: %.2f", float64(totalEvents)/float64(duration.Seconds()))
+	t.Logf("RPS: %.2f", float64(totalEvents)/duration.Seconds())
 	metrics.List(func(metric imetrics.IMetric, metricValue float64) (err error) {
 		if metric.Name() == "voedger_istoragecache_putbatch_total" {
 			t.Logf("PutBatch: %.0f", metricValue)
-			t.Logf("Batch Per Second: %.2f", float64(metricValue)/float64(duration.Seconds()))
+			t.Logf("Batch Per Second: %.2f", metricValue/duration.Seconds())
 		}
 		return nil
 	})

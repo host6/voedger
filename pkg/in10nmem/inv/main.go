@@ -36,20 +36,20 @@ func main() {
 		return
 	}
 
-	if os.Args[1] == "v1" {
+	switch os.Args[1] {
+	case "v1":
 		println("Running v1...")
 		nb := in10nmemv1.Provide(quotas)
 		runChannels(nb)
-	}
-	if os.Args[1] == "v2" {
+	case "v2":
 		println("Running v2...")
 		nb, cleanup := in10nmem.ProvideEx2(quotas, time.Now)
 		defer cleanup()
 
 		runChannels(nb)
+	default:
+		log.Fatal("Unknown argument", os.Args[1])
 	}
-	log.Fatal("Unknown argument", os.Args[1])
-
 }
 
 func checkErr(err error) {
@@ -73,7 +73,7 @@ func runChannels(broker in10n.IN10nBroker) {
 
 		for projector := 0; projector < numProjectorsPerPartition; projector++ {
 
-			channelID, err := broker.NewChannel(subject, 24*time.Hour)
+			channelID, err := broker.NewChannel(subject, hours24)
 			checkErr(err)
 
 			projectionKeyExample := in10n.ProjectionKey{

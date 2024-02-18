@@ -8,12 +8,14 @@ package projectors
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
 
 	"github.com/untillpro/goutils/iterate"
 	"github.com/untillpro/goutils/logger"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -73,8 +75,9 @@ func (a *asyncActualizer) Run(ctx context.Context) {
 	for ctx.Err() == nil {
 		if err = a.init(ctx); err == nil {
 			logger.Trace(a.name, "started")
-			err = a.keepReading()
-			a.conf.LogError(a.name, err)
+			if err = a.keepReading(); err != nil {
+				a.conf.LogError(a.name, err)
+			}
 		}
 		a.finit() // even execute if a.init has failed
 		if ctx.Err() == nil && err != nil {
@@ -100,6 +103,9 @@ func (a *asyncActualizer) init(ctx context.Context) (err error) {
 
 	projector := a.factory(a.conf.Partition)
 	iProjector := a.structs.AppDef().Projector(projector.Name)
+	if iProjector == nil {
+		return fmt.Errorf("async projector %s is not defined in AppDef", projector.Name)
+	}
 
 	// https://github.com/voedger/voedger/issues/1048
 	hasIntentsExceptViewAndRecord, _, _ := iterate.FindFirstMap(iProjector.Intents, func(storage appdef.QName, _ appdef.QNames) bool {
@@ -122,6 +128,10 @@ func (a *asyncActualizer) init(ctx context.Context) (err error) {
 		projector:             projector,
 		iProjector:            iProjector,
 		nonBuffered:           nonBuffered,
+	}
+
+	if p.metrics != nil {
+		p.projInErrAddr = p.metrics.AppMetricAddr(ProjectorsInError, a.conf.VvmName, a.conf.AppQName)
 	}
 
 	err = a.readOffset(p.projector.Name)
@@ -250,6 +260,7 @@ type asyncProjector struct {
 	pLogOffset            istructs.Offset
 	aametrics             AsyncActualizerMetrics
 	metrics               imetrics.IMetrics
+	projInErrAddr         *imetrics.MetricValue
 	flushPositionInterval time.Duration
 	acceptedSinceSave     bool
 	lastSave              time.Time
@@ -338,11 +349,11 @@ func (p *asyncProjector) flush() (err error) {
 		p.aametrics.Set(aaStoredOffset, p.partition, p.projector.Name, float64(p.pLogOffset))
 	}
 	err = p.state.FlushBundles()
-	if err == nil {
+	if err == nil && p.projInErrAddr != nil {
 		if atomic.CompareAndSwapInt32(p.projErrState, 1, 0) {
-			if p.metrics != nil {
-				p.metrics.IncreaseApp(ProjectorsInError, p.vvmName, p.appQName, -1)
-			}
+			p.projInErrAddr.Increase(-1)
+		} else { // state not changed
+			p.projInErrAddr.Increase(0)
 		}
 	}
 	return err
@@ -371,7 +382,7 @@ func ActualizerOffset(appStructs istructs.IAppStructs, partition istructs.Partit
 	key.PutInt32(partitionFld, int32(partition))
 	key.PutQName(projectorNameFld, projectorName)
 	value, err := appStructs.ViewRecords().Get(istructs.NullWSID, key)
-	if err == istructsmem.ErrRecordNotFound {
+	if errors.Is(err, istructsmem.ErrRecordNotFound) {
 		return istructs.NullOffset, nil
 	}
 	if err != nil {

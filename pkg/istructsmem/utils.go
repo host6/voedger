@@ -7,14 +7,14 @@ package istructsmem
 
 import (
 	"encoding/binary"
-	"fmt"
 
 	"github.com/untillpro/dynobuffers"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/irates"
 	"github.com/voedger/voedger/pkg/istorage"
-	"github.com/voedger/voedger/pkg/istorageimpl"
+	"github.com/voedger/voedger/pkg/istorage/mem"
+	"github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem/internal/consts"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -28,17 +28,17 @@ var (
 	// not a func -> golang itokensjwt.TimeFunc will be initialized on process init forever
 	testTokensFactory     = func() payloads.IAppTokensFactory { return payloads.TestAppTokensFactory(itokensjwt.TestTokensJWT()) }
 	simpleStorageProvider = func() istorage.IAppStorageProvider {
-		asf := istorage.ProvideMem()
-		return istorageimpl.Provide(asf)
+		asf := mem.Provide()
+		return provider.Provide(asf)
 	}
 )
 
-// сrackID splits ID to two-parts key — partition key (hi) and clustering columns (lo)
+// crackID splits ID to two-parts key — partition key (hi) and clustering columns (lo)
 func crackID(id uint64) (hi uint64, low uint16) {
-	return uint64(id >> partitionBits), uint16(id) & lowMask
+	return id >> partitionBits, uint16(id) & lowMask
 }
 
-// СrackRecordID splits record ID to two-parts key — partition key (hi) and clustering columns (lo)
+// CrackRecordID splits record ID to two-parts key — partition key (hi) and clustering columns (lo)
 func crackRecordID(id istructs.RecordID) (hi uint64, low uint16) {
 	return crackID(uint64(id))
 }
@@ -101,42 +101,4 @@ func wlogKey(ws istructs.WSID, offset istructs.Offset) (pkey, ccols []byte) {
 func IBucketsFromIAppStructs(as istructs.IAppStructs) irates.IBuckets {
 	// appStructs implementation has method Buckets()
 	return as.(interface{ Buckets() irates.IBuckets }).Buckets()
-}
-
-func FillObjectFromJSON(data map[string]interface{}, t appdef.IType, b istructs.IObjectBuilder) error {
-	for fieldName, fieldValue := range data {
-		switch fv := fieldValue.(type) {
-		case float64:
-			b.PutNumber(fieldName, fv)
-		case string:
-			b.PutChars(fieldName, fv)
-		case bool:
-			b.PutBool(fieldName, fv)
-		case []interface{}:
-			// e.g. "order_item": [<2 children>]
-			containers, ok := t.(appdef.IContainers)
-			if !ok {
-				return fmt.Errorf("type %v has no containers", t.QName())
-			}
-			container := containers.Container(fieldName)
-			if container == nil {
-				return fmt.Errorf("container with name %s is not found", fieldName)
-			}
-			for i, val := range fv {
-				childData, ok := val.(map[string]interface{})
-				if !ok {
-					return fmt.Errorf("child #%d of %s is not an object", i, fieldName)
-				}
-				childBuilder := b.ChildBuilder(fieldName)
-				if err := FillObjectFromJSON(childData, container.Type(), childBuilder); err != nil {
-					return err
-				}
-			}
-		}
-	}
-	return nil
-}
-
-func NewIObjectBuilder(cfg *AppConfigType, qName appdef.QName) istructs.IObjectBuilder {
-	return newObject(cfg, qName, nil)
 }
