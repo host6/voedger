@@ -377,17 +377,40 @@ func TestFederationFunc(t *testing.T) {
 	})
 
 	t.Run("expected error", func(t *testing.T) {
-		handler = func(w http.ResponseWriter, r *http.Request) {
-			_, err := io.ReadAll(r.Body)
+		t.Run("basic", func(t *testing.T) {
+			handler = func(w http.ResponseWriter, r *http.Request) {
+				_, err := io.ReadAll(r.Body)
+				require.NoError(err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"sys.SomeErrorQName","Data":"additional data"}}`))
+			}
+			resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError))
 			require.NoError(err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"sys.SomeErrorQName","Data":"additional data"}}`))
-		}
-		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError))
-		require.NoError(err)
-		resp.Println()
-		resp.RequireContainsError(t, "something")
-		resp.RequireError(t, "something gone wrong")
+			resp.Println()
+			resp.RequireContainsError(t, "something")
+			resp.RequireError(t, "something gone wrong")
+		})
+		t.Run("ExpectedErrorContains", func(t *testing.T) {
+			errorMessage := "non-expected"
+			handler = func(w http.ResponseWriter, r *http.Request) {
+				_, err := io.ReadAll(r.Body)
+				require.NoError(err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(fmt.Sprintf(`{"sys.Error":{"HTTPStatus":500,"Message":"%s","QName":"sys.SomeErrorQName","Data":"additional data"}}`,
+					errorMessage)))
+			}
+			resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError,
+				"expected error message"))
+			require.Error(err)
+			require.Nil(resp)
+
+			errorMessage = "expected error message"
+			resp, err = FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError,
+				"expected error message"))
+			require.NoError(err)
+			resp.RequireContainsError(t, "expected")
+			resp.RequireError(t, "expected error message")
+		})
 	})
 
 	t.Run("sections", func(t *testing.T) {
@@ -405,6 +428,31 @@ func TestFederationFunc(t *testing.T) {
 		require.Equal("next", resp.SectionRow(1)[0].(string))
 	})
 
+	t.Run("automatic retry on 503", func(t *testing.T) {
+		statusCode := http.StatusServiceUnavailable
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			_, err := io.ReadAll(r.Body)
+			require.NoError(err)
+			w.WriteHeader(statusCode)
+			if statusCode == http.StatusOK {
+				w.Write([]byte(`{"sections":[{"type":"","elements":[[[["Hello", "world"]]],[[["next"]]]]}]}`))
+			}
+			statusCode = http.StatusOK
+		}
+		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`)
+		require.NoError(err)
+		resp.Println()
+	})
 
-
+	t.Run("discard responce", func(t *testing.T) {
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			_, err := io.ReadAll(r.Body)
+			require.NoError(err)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"sections":[{"type":"","elements":[[[["Hello", "world"]]],[[["next"]]]]}]}`))
+		}
+		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithDiscardResponse())
+		require.NoError(err)
+		require.Nil(resp)
+	})
 }
