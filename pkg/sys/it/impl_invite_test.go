@@ -57,27 +57,6 @@ func TestInvite_BasicUsage(t *testing.T) {
 		vit.PostWS(ws, "c.sys.InitiateUpdateInviteRoles", fmt.Sprintf(`{"args":{"InviteID":%d,"Roles":"%s","EmailTemplate":"%s","EmailSubject":"%s"}}`, inviteID, updatedRoles, updateRolesEmailTemplate, updateRolesEmailSubject))
 	}
 
-	findCDocInviteByID := func(inviteID int64) []interface{} {
-		return vit.PostWS(ws, "q.sys.Collection", fmt.Sprintf(`
-			{"args":{"Schema":"sys.Invite"},
-			"elements":[{"fields":[
-				"SubjectKind",
-				"Login",
-				"Email",
-				"Roles",
-				"ExpireDatetime",
-				"VerificationCode",
-				"State",
-				"Created",
-				"Updated",
-				"SubjectID",
-				"InviteeProfileWSID",
-				"ActualLogin",
-				"sys.ID"
-			]}],
-			"filters":[{"expr":"eq","args":{"field":"sys.ID","value":%d}}]}`, inviteID)).SectionRow(0)
-	}
-
 	findCDocSubjectByLogin := func(login string) []interface{} {
 		return vit.PostWS(ws, "q.sys.Collection", fmt.Sprintf(`
 			{"args":{"Schema":"sys.Subject"},
@@ -103,7 +82,7 @@ func TestInvite_BasicUsage(t *testing.T) {
 	WaitForInviteState(vit, ws, inviteID2, invite.State_ToBeInvited, invite.State_Invited)
 	WaitForInviteState(vit, ws, inviteID3, invite.State_ToBeInvited, invite.State_Invited)
 
-	cDocInvite := findCDocInviteByID(inviteID)
+	cDocInvite := findCDocInviteByID(vit, ws, inviteID)
 
 	require.Equal(email1, cDocInvite[1])
 	require.Equal(email1, cDocInvite[2])
@@ -152,7 +131,7 @@ func TestInvite_BasicUsage(t *testing.T) {
 	}
 	require.EqualValues(expectedEmails, actualEmails)
 
-	cDocInvite = findCDocInviteByID(inviteID2)
+	cDocInvite = findCDocInviteByID(vit, ws, inviteID2)
 
 	require.Equal(verificationCodeEmail2, cDocInvite[5])
 	require.Equal(float64(vit.Now().UnixMilli()), cDocInvite[8])
@@ -175,7 +154,7 @@ func TestInvite_BasicUsage(t *testing.T) {
 	WaitForInviteState(vit, ws, inviteID, invite.State_ToBeJoined, invite.State_Joined)
 	WaitForInviteState(vit, ws, inviteID2, invite.State_ToBeJoined, invite.State_Joined)
 
-	cDocInvite = findCDocInviteByID(inviteID2)
+	cDocInvite = findCDocInviteByID(vit, ws, inviteID2)
 
 	require.Equal(float64(login2Prn.ProfileWSID), cDocInvite[10])
 	require.Equal(float64(istructs.SubjectKind_User), cDocInvite[0])
@@ -204,7 +183,7 @@ func TestInvite_BasicUsage(t *testing.T) {
 
 	WaitForInviteState(vit, ws, inviteID, invite.State_Joined, invite.State_ToUpdateRoles)
 	WaitForInviteState(vit, ws, inviteID2, invite.State_Joined, invite.State_ToUpdateRoles)
-	cDocInvite = findCDocInviteByID(inviteID)
+	cDocInvite = findCDocInviteByID(vit, ws, inviteID)
 
 	require.Equal(float64(vit.Now().UnixMilli()), cDocInvite[8])
 
@@ -231,7 +210,7 @@ func TestInvite_BasicUsage(t *testing.T) {
 	// State_ToBeCancelled will be set for a veri short period of time so let's do not catch it
 	WaitForInviteState(vit, ws, inviteID, invite.State_ToBeCancelled, invite.State_Cancelled)
 
-	cDocInvite = findCDocInviteByID(inviteID)
+	cDocInvite = findCDocInviteByID(vit, ws, inviteID)
 
 	require.Equal(float64(vit.Now().UnixMilli()), cDocInvite[8])
 
@@ -239,7 +218,7 @@ func TestInvite_BasicUsage(t *testing.T) {
 
 	require.False(cDocSubject[4].(bool))
 
-	cDocInvite = findCDocInviteByID(inviteID)
+	cDocInvite = findCDocInviteByID(vit, ws, inviteID)
 
 	require.Equal(float64(vit.Now().UnixMilli()), cDocInvite[8])
 
@@ -248,7 +227,7 @@ func TestInvite_BasicUsage(t *testing.T) {
 
 	WaitForInviteState(vit, ws, inviteID2, invite.State_ToBeLeft, invite.State_Left)
 
-	cDocInvite = findCDocInviteByID(inviteID2)
+	cDocInvite = findCDocInviteByID(vit, ws, inviteID2)
 
 	require.Equal(float64(vit.Now().UnixMilli()), cDocInvite[8])
 
@@ -261,10 +240,11 @@ func TestInvite_BasicUsage(t *testing.T) {
 	//Re-invite
 	newRoles := "new.roles"
 	InitiateInvitationByEMail(vit, ws, expireDatetime, email2, newRoles, inviteEmailTemplate, inviteEmailSubject)
-	log.Println(vit.CaptureEmail().Body)
+	_ = vit.CaptureEmail()
 	WaitForInviteState(vit, ws, inviteID2, invite.State_Left, invite.State_Invited)
-	cDocInvite = findCDocInviteByID(inviteID2)
+	cDocInvite = findCDocInviteByID(vit, ws, inviteID2)
 	require.Equal(newRoles, cDocInvite[3].(string))
+
 }
 
 func TestCancelSentInvite(t *testing.T) {
@@ -276,9 +256,10 @@ func TestCancelSentInvite(t *testing.T) {
 	loginPrn := vit.SignIn(login)
 	wsParams := it.SimpleWSParams("TestCancelSentInvite_ws")
 	ws := vit.CreateWorkspace(wsParams, loginPrn)
+	expireDatetime := int64(1674751138000)
 
 	t.Run("basic usage", func(t *testing.T) {
-		inviteID := InitiateInvitationByEMail(vit, ws, 1674751138000, email, initialRoles, inviteEmailTemplate, inviteEmailSubject)
+		inviteID := InitiateInvitationByEMail(vit, ws, expireDatetime, email, initialRoles, inviteEmailTemplate, inviteEmailSubject)
 		WaitForInviteState(vit, ws, inviteID, invite.State_ToBeInvited, invite.State_Invited)
 
 		//Read it for successful vit tear down
@@ -286,6 +267,20 @@ func TestCancelSentInvite(t *testing.T) {
 
 		vit.PostWS(ws, "c.sys.CancelSentInvite", fmt.Sprintf(`{"args":{"InviteID":%d}}`, inviteID))
 		WaitForInviteState(vit, ws, inviteID, invite.State_ToBeCancelled, invite.State_Cancelled)
+
+		// re-invite after cancel
+		newRoles := "new.roles"
+		InitiateInvitationByEMail(vit, ws, expireDatetime, email, newRoles, inviteEmailTemplate, inviteEmailSubject)
+		actualEmail := vit.CaptureEmail()
+		verificationCode := actualEmail.Body[:6]
+		WaitForInviteState(vit, ws, inviteID, invite.State_Cancelled, invite.State_ToBeInvited, invite.State_Invited)
+		cDocInvite := findCDocInviteByID(vit, ws, inviteID)
+		require.Equal(t, newRoles, cDocInvite[3].(string))
+		InitiateJoinWorkspace(vit, ws, inviteID, loginPrn, verificationCode)
+		WaitForInviteState(vit, ws, inviteID, invite.State_ToBeJoined, invite.State_Joined)
+		cDocJoinedWorkspace := FindCDocJoinedWorkspaceByInvitingWorkspaceWSIDAndLogin(vit, ws.WSID, loginPrn)
+		log.Println(cDocJoinedWorkspace)
+
 	})
 	t.Run("invite not exists -> 400 bad request", func(t *testing.T) {
 		vit.PostWS(ws, "c.sys.CancelSentInvite", fmt.Sprintf(`{"args":{"InviteID":%d}}`, istructs.NonExistingRecordID), coreutils.Expect400RefIntegrity_Existence())
@@ -308,4 +303,25 @@ func testOverwriteRoles(t *testing.T, vit *it.VIT, ws *it.AppWorkspace, email st
 	require.Equal(newRoles, resp.SectionRow()[0].(string))
 
 	return verificationCode
+}
+
+func findCDocInviteByID(vit *it.VIT, ws *it.AppWorkspace, inviteID int64) []interface{} {
+	return vit.PostWS(ws, "q.sys.Collection", fmt.Sprintf(`
+		{"args":{"Schema":"sys.Invite"},
+		"elements":[{"fields":[
+			"SubjectKind",
+			"Login",
+			"Email",
+			"Roles",
+			"ExpireDatetime",
+			"VerificationCode",
+			"State",
+			"Created",
+			"Updated",
+			"SubjectID",
+			"InviteeProfileWSID",
+			"ActualLogin",
+			"sys.ID"
+		]}],
+		"filters":[{"expr":"eq","args":{"field":"sys.ID","value":%d}}]}`, inviteID)).SectionRow(0)
 }
