@@ -268,6 +268,9 @@ func TestCancelSentInvite(t *testing.T) {
 		vit.PostWS(ws, "c.sys.CancelSentInvite", fmt.Sprintf(`{"args":{"InviteID":%d}}`, inviteID))
 		WaitForInviteState(vit, ws, inviteID, invite.State_ToBeCancelled, invite.State_Cancelled)
 
+		// cDocJoinedWorkspace := FindCDocJoinedWorkspaceByInvitingWorkspaceWSIDAndLogin(vit, ws.WSID, loginPrn)
+		// log.Println(cDocJoinedWorkspace)
+
 		// re-invite after cancel
 		newRoles := "new.roles"
 		InitiateInvitationByEMail(vit, ws, expireDatetime, email, newRoles, inviteEmailTemplate, inviteEmailSubject)
@@ -278,7 +281,7 @@ func TestCancelSentInvite(t *testing.T) {
 		require.Equal(t, newRoles, cDocInvite[3].(string))
 		InitiateJoinWorkspace(vit, ws, inviteID, loginPrn, verificationCode)
 		WaitForInviteState(vit, ws, inviteID, invite.State_ToBeJoined, invite.State_Joined)
-		cDocJoinedWorkspace := FindCDocJoinedWorkspaceByInvitingWorkspaceWSIDAndLogin(vit, ws.WSID, loginPrn)
+		cDocJoinedWorkspace = FindCDocJoinedWorkspaceByInvitingWorkspaceWSIDAndLogin(vit, ws.WSID, loginPrn)
 		log.Println(cDocJoinedWorkspace)
 
 	})
