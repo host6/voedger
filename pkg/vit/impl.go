@@ -240,8 +240,8 @@ func handleWSParam(vit *VIT, appWS *AppWorkspace, appWorkspaces map[string]*AppW
 	}
 }
 
-func NewVITLocalCassandra(t *testing.T, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
-	vit = newVit(t, vitCfg, true)
+func NewVITLocalCassandra(tb testing.TB, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
+	vit = newVit(tb, vitCfg, true)
 	for _, opt := range opts {
 		opt(vit)
 	}
@@ -492,9 +492,11 @@ func (vit *VIT) CaptureEmail() (msg smtptest.Message) {
 // will be automatically reset to 0 on TearDown
 func (vit *VIT) SetMemStorageGetDelay(delay time.Duration) {
 	vit.T.Helper()
-	vit.getStorageDelaySetter().SetTestDelayPut(delay)
-	vit.cleanups = append(vit.cleanups, func(vit *VIT) {
-		vit.getStorageDelaySetter().SetTestDelayPut(0)
+	vit.iterateDelaySetters(func(delaySetter istorage.IStorageDelaySetter) {
+		delaySetter.SetTestDelayGet(delay)
+		vit.cleanups = append(vit.cleanups, func(vit *VIT) {
+			delaySetter.SetTestDelayGet(0)
+		})
 	})
 }
 
@@ -502,13 +504,15 @@ func (vit *VIT) SetMemStorageGetDelay(delay time.Duration) {
 // will be automatically reset to 0 on TearDown
 func (vit *VIT) SetMemStoragePutDelay(delay time.Duration) {
 	vit.T.Helper()
-	vit.getStorageDelaySetter().SetTestDelayPut(delay)
-	vit.cleanups = append(vit.cleanups, func(vit *VIT) {
-		vit.getStorageDelaySetter().SetTestDelayPut(0)
+	vit.iterateDelaySetters(func(delaySetter istorage.IStorageDelaySetter) {
+		delaySetter.SetTestDelayPut(delay)
+		vit.cleanups = append(vit.cleanups, func(vit *VIT) {
+			delaySetter.SetTestDelayPut(0)
+		})
 	})
 }
 
-func (vit *VIT) getStorageDelaySetter() istorage.IStorageDelaySetter {
+func (vit *VIT) iterateDelaySetters(cb func(delaySetter istorage.IStorageDelaySetter)) {
 	vit.T.Helper()
 	for anyAppQName := range vit.VVMAppsBuilder {
 		as, err := vit.AppStorage(anyAppQName)
@@ -517,9 +521,8 @@ func (vit *VIT) getStorageDelaySetter() istorage.IStorageDelaySetter {
 		if !ok {
 			vit.T.Fatal("IAppStorage implementation is not in-mem")
 		}
-		return delaySetter
+		cb(delaySetter)
 	}
-	panic("")
 }
 
 func (ts *timeService) now() time.Time {
