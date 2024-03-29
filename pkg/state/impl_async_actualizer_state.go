@@ -25,45 +25,39 @@ type actualizerStateOpts struct {
 	messages chan smtptest.Message
 }
 
-func implProvideAsyncActualizerState(ctx context.Context, appStructs istructs.IAppStructs, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, n10nFunc N10nFunc, secretReader isecrets.ISecretReader, intentsLimit, bundlesLimit int,
+type asyncActualizerState struct {
+	*bundledHostState
+	eventFunc PLogEventFunc
+}
+
+func (s *asyncActualizerState) PLogEvent() istructs.IPLogEvent {
+	return s.eventFunc()
+}
+
+func implProvideAsyncActualizerState(ctx context.Context, appStructsFunc AppStructsFunc, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, n10nFunc N10nFunc, secretReader isecrets.ISecretReader, eventFunc PLogEventFunc, intentsLimit, bundlesLimit int,
 	optFuncs ...ActualizerStateOptFunc) IBundledHostState {
 
 	opts := &actualizerStateOpts{}
 	for _, optFunc := range optFuncs {
 		optFunc(opts)
 	}
-	state := &bundledHostState{
-		hostState:    newHostState("AsyncActualizer", intentsLimit),
-		bundlesLimit: bundlesLimit,
-		bundles:      make(map[appdef.QName]bundle),
+
+	state := &asyncActualizerState{
+		bundledHostState: &bundledHostState{
+			hostState:    newHostState("AsyncActualizer", intentsLimit, appStructsFunc),
+			bundlesLimit: bundlesLimit,
+			bundles:      make(map[appdef.QName]bundle),
+		},
+		eventFunc: eventFunc,
 	}
 
-	state.addStorage(View, &viewRecordsStorage{
-		ctx:             ctx,
-		viewRecordsFunc: func() istructs.IViewRecords { return appStructs.ViewRecords() },
-		appDefFunc:      func() appdef.IAppDef { return appStructs.AppDef() },
-		wsidFunc:        wsidFunc,
-		n10nFunc:        n10nFunc,
-	}, S_GET|S_GET_BATCH|S_READ|S_INSERT|S_UPDATE)
-
-	state.addStorage(Record, &recordsStorage{
-		recordsFunc: func() istructs.IRecords { return appStructs.Records() },
-		appDefFunc:  func() appdef.IAppDef { return appStructs.AppDef() },
-		wsidFunc:    wsidFunc,
-	}, S_GET|S_GET_BATCH)
+	state.addStorage(View, newViewRecordsStorage(ctx, appStructsFunc, wsidFunc, n10nFunc), S_GET|S_GET_BATCH|S_READ|S_INSERT|S_UPDATE)
+	state.addStorage(Record, newRecordsStorage(appStructsFunc, wsidFunc, nil), S_GET|S_GET_BATCH)
 
 	state.addStorage(WLog, &wLogStorage{
 		ctx:        ctx,
-		eventsFunc: func() istructs.IEvents { return appStructs.Events() },
-		appDefFunc: func() appdef.IAppDef { return appStructs.AppDef() },
+		eventsFunc: func() istructs.IEvents { return appStructsFunc().Events() },
 		wsidFunc:   wsidFunc,
-	}, S_GET|S_READ)
-
-	state.addStorage(PLog, &pLogStorage{
-		ctx:             ctx,
-		eventsFunc:      func() istructs.IEvents { return appStructs.Events() },
-		appDefFunc:      func() appdef.IAppDef { return appStructs.AppDef() },
-		partitionIDFunc: partitionIDFunc,
 	}, S_GET|S_READ)
 
 	state.addStorage(SendMail, &sendMailStorage{
@@ -73,6 +67,8 @@ func implProvideAsyncActualizerState(ctx context.Context, appStructs istructs.IA
 	state.addStorage(Http, &httpStorage{}, S_READ)
 
 	state.addStorage(AppSecret, &appSecretsStorage{secretReader: secretReader}, S_GET)
+
+	state.addStorage(Event, &eventStorage{eventFunc: eventFunc}, S_GET)
 
 	return state
 }

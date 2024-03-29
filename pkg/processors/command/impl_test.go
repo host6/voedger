@@ -21,6 +21,7 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/iauthnzimpl"
+	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/in10nmem"
 	"github.com/voedger/voedger/pkg/iratesce"
@@ -36,6 +37,8 @@ import (
 	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/projectors"
 	coreutils "github.com/voedger/voedger/pkg/utils"
+	wsdescutil "github.com/voedger/voedger/pkg/utils/wsdesc"
+	"github.com/voedger/voedger/pkg/vvm/engines"
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 	"github.com/voedger/voedger/staging/src/github.com/untillpro/ibusmem"
 )
@@ -76,7 +79,7 @@ func TestBasicUsage(t *testing.T) {
 				require.Equal(testCDoc.String(), cuds[0].fields[appdef.SystemField_QName])
 				close(cudsCheck)
 			}
-			require.Equal(istructs.WSID(1), args.PrepareArgs.Workspace)
+			require.Equal(istructs.WSID(1), args.PrepareArgs.WSID)
 			require.NotNil(args.State)
 
 			// просто проверим, что мы получили то, что передал клиент
@@ -122,7 +125,7 @@ func TestBasicUsage(t *testing.T) {
 			// need to authorize, otherwise execute will be forbidden
 			Header: app.sysAuthHeader,
 		}
-		resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBustTimeout())
+		resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBusTimeout())
 		require.NoError(err)
 		require.Nil(secErr, secErr)
 		require.Nil(sections)
@@ -145,7 +148,7 @@ func TestBasicUsage(t *testing.T) {
 			Resource: "c.sys.Test",
 			Header:   app.sysAuthHeader,
 		}
-		resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBustTimeout())
+		resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBusTimeout())
 		require.NoError(err)
 		require.Nil(secErr)
 		require.Nil(sections)
@@ -170,7 +173,7 @@ func sendCUD(t *testing.T, wsid istructs.WSID, app testApp, expectedCode ...int)
 		]}`),
 		Header: app.sysAuthHeader,
 	}
-	resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBustTimeout())
+	resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBusTimeout())
 	require.NoError(err)
 	require.Nil(secErr)
 	require.Nil(sections)
@@ -197,29 +200,25 @@ func TestRecoveryOnSyncProjectorError(t *testing.T) {
 		appDef.AddCommand(cudQName)
 
 		failingProjQName := appdef.NewQName(appdef.SysPackage, "Failer")
-		cfg.AddSyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
-			return istructs.Projector{
+		cfg.AddSyncProjectors(
+			istructs.Projector{
 				Name: failingProjQName,
-				Func: func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
+				Func: func(istructs.IPLogEvent, istructs.IState, istructs.IIntents) error {
 					counter++
-					if counter == 2 {
+					if counter == 3 { // 1st event is insert WorkspaceDescriptor stub
 						return testErr
 					}
 					return nil
 				},
-			}
-		})
-		appDef.AddProjector(failingProjQName).AddEvent(cudQName, appdef.ProjectorEventKind_Execute).SetSync(true)
+			})
+		appDef.AddProjector(failingProjQName).SetSync(true).Events().Add(cudQName, appdef.ProjectorEventKind_Execute)
 		cfg.Resources.Add(istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec))
 	})
 	defer tearDown(app)
 
-	cmdCUD := istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec)
-	app.cfg.Resources.Add(cmdCUD)
-
 	// ok to c.sys.CUD
 	respData := sendCUD(t, 1, app)
-	require.Equal(1, int(respData["CurrentWLogOffset"].(float64)))
+	require.Equal(2, int(respData["CurrentWLogOffset"].(float64))) // 1st is WorkspaceDescriptor stub insert
 	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
 	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
 	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
@@ -233,11 +232,10 @@ func TestRecoveryOnSyncProjectorError(t *testing.T) {
 
 	// 3rd c.sys.CUD - > recovery procedure must re-apply 2nd event (PLog, records and WLog), then 3rd event is processed ok (sync projectors are ok)
 	respData = sendCUD(t, 1, app)
-	require.Equal(3, int(respData["CurrentWLogOffset"].(float64)))
+	require.Equal(4, int(respData["CurrentWLogOffset"].(float64)))
 	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+4, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
 	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID)+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
 	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+5, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
 }
 
 func TestRecovery(t *testing.T) {
@@ -257,21 +255,7 @@ func TestRecovery(t *testing.T) {
 	app.cfg.Resources.Add(cmdCUD)
 
 	respData := sendCUD(t, 1, app)
-	require.Equal(1, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
-	restartCmdProc(&app)
-	respData = sendCUD(t, 1, app)
 	require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+3, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
-	restartCmdProc(&app)
-	respData = sendCUD(t, 2, app)
-	require.Equal(1, int(respData["CurrentWLogOffset"].(float64)))
 	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
 	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
 	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
@@ -279,6 +263,20 @@ func TestRecovery(t *testing.T) {
 	restartCmdProc(&app)
 	respData = sendCUD(t, 1, app)
 	require.Equal(3, int(respData["CurrentWLogOffset"].(float64)))
+	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+3, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+
+	restartCmdProc(&app)
+	respData = sendCUD(t, 2, app)
+	require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
+	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+
+	restartCmdProc(&app)
+	respData = sendCUD(t, 1, app)
+	require.Equal(4, int(respData["CurrentWLogOffset"].(float64)))
 	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+4, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
 	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID)+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
 	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+5, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
@@ -322,7 +320,7 @@ func TestCUDUpdate(t *testing.T) {
 		Body:     []byte(`{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"test.test"}}]}`),
 		Header:   app.sysAuthHeader,
 	}
-	resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBustTimeout())
+	resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBusTimeout())
 	require.NoError(err)
 	require.Nil(secErr, secErr)
 	require.Nil(sections)
@@ -334,7 +332,7 @@ func TestCUDUpdate(t *testing.T) {
 	t.Run("update", func(t *testing.T) {
 		id := int64(m["NewIDs"].(map[string]interface{})["1"].(float64))
 		req.Body = []byte(fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"sys.QName":"test.test", "IntFld": 42}}]}`, id))
-		resp, sections, secErr, err = app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBustTimeout())
+		resp, sections, secErr, err = app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBusTimeout())
 		require.NoError(err)
 		require.Nil(secErr)
 		require.Nil(sections)
@@ -344,7 +342,7 @@ func TestCUDUpdate(t *testing.T) {
 
 	t.Run("404 not found on update not existing", func(t *testing.T) {
 		req.Body = []byte(fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"sys.QName":"test.test", "IntFld": 42}}]}`, istructs.NonExistingRecordID))
-		resp, sections, secErr, err = app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBustTimeout())
+		resp, sections, secErr, err = app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBusTimeout())
 		require.NoError(err)
 		require.Nil(secErr)
 		require.Nil(sections)
@@ -393,7 +391,7 @@ func Test400BadRequestOnCUDErrors(t *testing.T) {
 				Body:     []byte("{" + c.bodyAdd + "}"),
 				Header:   app.sysAuthHeader,
 			}
-			resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBustTimeout())
+			resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBusTimeout())
 			require.NoError(err)
 			require.Nil(secErr)
 			require.Nil(sections)
@@ -405,7 +403,7 @@ func Test400BadRequestOnCUDErrors(t *testing.T) {
 	}
 }
 
-func Test400BadRequests(t *testing.T) {
+func TestErrors(t *testing.T) {
 	require := require.New(t)
 
 	testCmdQNameParams := appdef.NewQName(appdef.SysPackage, "TestParams")
@@ -436,17 +434,18 @@ func Test400BadRequests(t *testing.T) {
 		desc string
 		ibus.Request
 		expectedMessageLike string
+		expectedStatusCode  int
 	}{
-		{"unknown app", ibus.Request{AppQName: "untill/unknown"}, "application untill/unknown not found"}, // TODO: simplify
-		{"bad request body", ibus.Request{Body: []byte("{wrong")}, "failed to unmarshal request body: invalid character 'w' looking for beginning of object key string"},
-		{"unknown func", ibus.Request{Resource: "c.sys.Unknown"}, "unknown function"},
-		{"args: field of wrong type provided", ibus.Request{Body: []byte(`{"args":{"Text":42}}`)}, "wrong field type"},
-		{"args: not an object", ibus.Request{Body: []byte(`{"args":42}`)}, `"args" field must be an object`},
-		{"args: missing at all with a required field", ibus.Request{Body: []byte(`{}`)}, ""},
-		{"unloggedArgs: not an object", ibus.Request{Body: []byte(`{"unloggedArgs":42,"args":{"Text":"txt"}}`)}, `"unloggedArgs" field must be an object`},
-		{"unloggedArgs: field of wrong type provided", ibus.Request{Body: []byte(`{"unloggedArgs":{"Password":42},"args":{"Text":"txt"}}`)}, "wrong field type"},
-		{"unloggedArgs: missing required field of unlogged args, no unlogged args at all", ibus.Request{Body: []byte(`{"args":{"Text":"txt"}}`)}, ""},
-		{"cuds: not an object", ibus.Request{Body: []byte(`{"args":{"Text":"hello"},"unloggedArgs":{"Password":"123"},"cuds":42}`)}, `field 'cuds' must be an array of objects`},
+		{"unknown app", ibus.Request{AppQName: "untill/unknown"}, "application untill/unknown not found", http.StatusServiceUnavailable},
+		{"bad request body", ibus.Request{Body: []byte("{wrong")}, "failed to unmarshal request body: invalid character 'w' looking for beginning of object key string", http.StatusBadRequest},
+		{"unknown func", ibus.Request{Resource: "c.sys.Unknown"}, "unknown function", http.StatusBadRequest},
+		{"args: field of wrong type provided", ibus.Request{Body: []byte(`{"args":{"Text":42}}`)}, "wrong field type", http.StatusBadRequest},
+		{"args: not an object", ibus.Request{Body: []byte(`{"args":42}`)}, `"args" field must be an object`, http.StatusBadRequest},
+		{"args: missing at all with a required field", ibus.Request{Body: []byte(`{}`)}, "", http.StatusBadRequest},
+		{"unloggedArgs: not an object", ibus.Request{Body: []byte(`{"unloggedArgs":42,"args":{"Text":"txt"}}`)}, `"unloggedArgs" field must be an object`, http.StatusBadRequest},
+		{"unloggedArgs: field of wrong type provided", ibus.Request{Body: []byte(`{"unloggedArgs":{"Password":42},"args":{"Text":"txt"}}`)}, "wrong field type", http.StatusBadRequest},
+		{"unloggedArgs: missing required field of unlogged args, no unlogged args at all", ibus.Request{Body: []byte(`{"args":{"Text":"txt"}}`)}, "", http.StatusBadRequest},
+		{"cuds: not an object", ibus.Request{Body: []byte(`{"args":{"Text":"hello"},"unloggedArgs":{"Password":"123"},"cuds":42}`)}, `field 'cuds' must be an array of objects`, http.StatusBadRequest},
 	}
 
 	for _, c := range cases {
@@ -464,14 +463,14 @@ func Test400BadRequests(t *testing.T) {
 			if len(c.Resource) > 0 {
 				req.Resource = c.Resource
 			}
-			resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBustTimeout())
-			require.NoError(err)
+			resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, req, coreutils.GetTestBusTimeout())
+			require.NoError(err, c.desc)
 			require.Nil(secErr)
 			require.Nil(sections)
-			require.Equal(http.StatusBadRequest, resp.StatusCode)
-			require.Equal(coreutils.ApplicationJSON, resp.ContentType)
-			require.Contains(string(resp.Data), jsonEscape(c.expectedMessageLike))
-			require.Contains(string(resp.Data), `"HTTPStatus":400`, c.desc)
+			require.Equal(c.expectedStatusCode, resp.StatusCode, c.desc)
+			require.Equal(coreutils.ApplicationJSON, resp.ContentType, c.desc)
+			require.Contains(string(resp.Data), jsonEscape(c.expectedMessageLike), c.desc)
+			require.Contains(string(resp.Data), fmt.Sprintf(`"HTTPStatus":%d`, c.expectedStatusCode), c.desc)
 		})
 	}
 }
@@ -539,7 +538,7 @@ func TestAuthnz(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
-			resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, c.req, coreutils.GetTestBustTimeout())
+			resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, c.req, coreutils.GetTestBusTimeout())
 			require.NoError(err)
 			require.Nil(secErr, secErr)
 			require.Nil(sections)
@@ -578,7 +577,7 @@ func TestBasicUsage_FuncWithRawArg(t *testing.T) {
 		Resource: "c.sys.Test",
 		Header:   app.sysAuthHeader,
 	}
-	resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBustTimeout())
+	resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBusTimeout())
 	require.NoError(err)
 	require.Nil(secErr)
 	require.Nil(sections)
@@ -616,7 +615,7 @@ func TestRateLimit(t *testing.T) {
 
 	// first 2 calls are ok
 	for i := 0; i < 2; i++ {
-		resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBustTimeout())
+		resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBusTimeout())
 		require.NoError(err)
 		require.Nil(secErr)
 		require.Nil(sections)
@@ -624,7 +623,7 @@ func TestRateLimit(t *testing.T) {
 	}
 
 	// 3rd exceeds rate limits
-	resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBustTimeout())
+	resp, sections, secErr, err := app.bus.SendRequest2(app.ctx, request, coreutils.GetTestBusTimeout())
 	require.NoError(err)
 	require.Nil(secErr)
 	require.Nil(sections)
@@ -665,10 +664,10 @@ func replyBadRequest(sender ibus.ISender, message string) {
 
 // test app deployment constants
 var (
-	testAppName                            = istructs.AppQName_untill_airs_bp
-	testAppPartsCount                      = 2
-	testAppEngines                         = [cluster.ProcessorKind_Count]int{10, 10, 10}
-	testAppPartID     istructs.PartitionID = 1
+	testAppName                           = istructs.AppQName_untill_airs_bp
+	testAppEngines                        = [cluster.ProcessorKind_Count]int{10, 10, 10}
+	testAppPartID    istructs.PartitionID = 1
+	testAppPartCount                      = 1
 )
 
 func setUp(t *testing.T, prepare func(appDef appdef.IAppDefBuilder, cfg *istructsmem.AppConfigType)) testApp {
@@ -686,6 +685,9 @@ func setUp(t *testing.T, prepare func(appDef appdef.IAppDefBuilder, cfg *istruct
 	// build application
 	adb := appdef.New()
 	adb.AddObject(istructs.QNameRaw).AddField(processors.Field_RawObject_Body, appdef.DataKind_string, true, appdef.MaxLen(appdef.MaxFieldLength))
+	wsdescutil.AddWorkspaceDescriptorStubDef(adb)
+	qNameTestWSKind := appdef.NewQName(appdef.SysPackage, "TestWSKind")
+	adb.AddCDoc(qNameTestWSKind).SetSingleton()
 	cfg := cfgs.AddConfig(istructs.AppQName_untill_airs_bp, adb)
 	if prepare != nil {
 		prepare(adb, cfg)
@@ -699,19 +701,28 @@ func setUp(t *testing.T, prepare func(appDef appdef.IAppDefBuilder, cfg *istruct
 
 	secretReader := isecretsimpl.ProvideSecretReader()
 	n10nBroker, n10nBrokerCleanup := in10nmem.ProvideEx2(in10n.Quotas{
-		Channels:               1000,
-		ChannelsPerSubject:     10,
-		Subsciptions:           1000,
-		SubsciptionsPerSubject: 10,
+		Channels:                1000,
+		ChannelsPerSubject:      10,
+		Subscriptions:           1000,
+		SubscriptionsPerSubject: 10,
 	}, time.Now)
 
 	// prepare the AppParts to borrow AppStructs
-	appParts, appPartsClean, err := appparts.NewWithActualizer(appStructsProvider,
-		projectors.NewSyncActualizerFactoryFactory(projectors.ProvideSyncActualizerFactory(), secretReader, n10nBroker))
+	appParts, appPartsClean, err := appparts.NewWithActualizerWithExtEnginesFactories(appStructsProvider,
+		projectors.NewSyncActualizerFactoryFactory(projectors.ProvideSyncActualizerFactory(), secretReader, n10nBroker),
+		func(app istructs.AppQName) iextengine.ExtensionEngineFactories {
+			return engines.ProvideExtEngineFactories(
+				engines.ExtEngineFactoriesConfig{
+					AppConfig:   cfgs.GetConfig(app),
+					WASMCompile: false,
+				},
+			)
+		},
+	)
 	require.NoError(err)
 	defer appPartsClean()
 
-	appParts.DeployApp(testAppName, appDef, testAppPartsCount, testAppEngines)
+	appParts.DeployApp(testAppName, appDef, testAppPartCount, testAppEngines)
 	appParts.DeployAppPartitions(testAppName, []istructs.PartitionID{testAppPartID})
 
 	// command processor работает через ibus.SendResponse -> нам нужна реализация ibus
@@ -730,8 +741,7 @@ func setUp(t *testing.T, prepare func(appDef appdef.IAppDefBuilder, cfg *istruct
 		if authHeaders, ok := request.Header[coreutils.Authorization]; ok {
 			token = strings.TrimPrefix(authHeaders[0], "Bearer ")
 		}
-		command := appDef.Command(cmdQName)
-		icm := NewCommandMessage(ctx, request.Body, appQName, istructs.WSID(request.WSID), sender, testAppPartID, command, token, "")
+		icm := NewCommandMessage(ctx, request.Body, appQName, istructs.WSID(request.WSID), sender, testAppPartID, cmdQName, token, "")
 		serviceChannel <- icm
 	})
 
@@ -739,7 +749,7 @@ func setUp(t *testing.T, prepare func(appDef appdef.IAppDefBuilder, cfg *istruct
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(testAppName)
 	systemToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	cmdProcessorFactory := ProvideServiceFactory(appParts, time.Now, n10nBroker, imetrics.Provide(), "vvm", iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter), iauthnzimpl.NewDefaultAuthorizer(), secretReader)
+	cmdProcessorFactory := ProvideServiceFactory(appParts, time.Now, n10nBroker, imetrics.Provide(), "vvm", iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs), iauthnzimpl.NewDefaultAuthorizer(), secretReader)
 	cmdProcService := cmdProcessorFactory(serviceChannel, testAppPartID)
 
 	go func() {
@@ -747,9 +757,12 @@ func setUp(t *testing.T, prepare func(appDef appdef.IAppDefBuilder, cfg *istruct
 		close(done)
 	}()
 
-	// skip checking workspace initialization
-	coreutils.AddDummyWS(1)
-	coreutils.AddDummyWS(2)
+	as, err := appStructsProvider.AppStructs(istructs.AppQName_untill_airs_bp)
+	require.NoError(err)
+	err = wsdescutil.CreateCDocWorkspaceDescriptorStub(as, testAppPartID, 1, qNameTestWSKind, 1, 1)
+	require.NoError(err)
+	err = wsdescutil.CreateCDocWorkspaceDescriptorStub(as, testAppPartID, 2, qNameTestWSKind, 2, 1)
+	require.NoError(err)
 
 	return testApp{
 		cfg:               cfg,

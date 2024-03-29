@@ -29,16 +29,17 @@ type CUDFunc func() istructs.ICUD
 type CmdResultBuilderFunc func() istructs.IObjectBuilder
 type PrincipalsFunc func() []iauthnz.Principal
 type TokenFunc func() string
-type CommandProcessorStateFactory func(ctx context.Context, appStructsFunc AppStructsFunc, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, secretReader isecrets.ISecretReader, cudFunc CUDFunc, principalPayloadFunc PrincipalsFunc, tokenFunc TokenFunc, intentsLimit int, cmdResultBuilderFunc CmdResultBuilderFunc) IHostState
-type SyncActualizerStateFactory func(ctx context.Context, appStructs istructs.IAppStructs, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, n10nFunc N10nFunc, secretReader isecrets.ISecretReader, intentsLimit int) IHostState
-type QueryProcessorStateFactory func(ctx context.Context, appStructs istructs.IAppStructs, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, secretReader isecrets.ISecretReader, principalPayloadFunc PrincipalsFunc, tokenFunc TokenFunc) IHostState
-type AsyncActualizerStateFactory func(ctx context.Context, appStructs istructs.IAppStructs, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, n10nFunc N10nFunc, secretReader isecrets.ISecretReader, intentsLimit, bundlesLimit int,
+type PLogEventFunc func() istructs.IPLogEvent
+type ArgFunc func() istructs.IObject
+type UnloggedArgFunc func() istructs.IObject
+type CommandProcessorStateFactory func(ctx context.Context, appStructsFunc AppStructsFunc, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, secretReader isecrets.ISecretReader, cudFunc CUDFunc, principalPayloadFunc PrincipalsFunc, tokenFunc TokenFunc, intentsLimit int, cmdResultBuilderFunc CmdResultBuilderFunc, argFunc ArgFunc, unloggedArgFunc UnloggedArgFunc) IHostState
+type SyncActualizerStateFactory func(ctx context.Context, appStructsFunc AppStructsFunc, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, n10nFunc N10nFunc, secretReader isecrets.ISecretReader, eventFunc PLogEventFunc, intentsLimit int) IHostState
+type QueryProcessorStateFactory func(ctx context.Context, appStructsFunc AppStructsFunc, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, secretReader isecrets.ISecretReader, principalPayloadFunc PrincipalsFunc, tokenFunc TokenFunc, argFunc ArgFunc) IHostState
+type AsyncActualizerStateFactory func(ctx context.Context, appStructsFunc AppStructsFunc, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, n10nFunc N10nFunc, secretReader isecrets.ISecretReader, eventFunc PLogEventFunc, intentsLimit, bundlesLimit int,
 	opts ...ActualizerStateOptFunc) IBundledHostState
 
 type eventsFunc func() istructs.IEvents
-type viewRecordsFunc func() istructs.IViewRecords
 type recordsFunc func() istructs.IRecords
-type appDefFunc func() appdef.IAppDef
 
 type ApplyBatchItem struct {
 	key   istructs.IStateKeyBuilder
@@ -96,6 +97,7 @@ func (b *keyBuilder) Equals(src istructs.IKeyBuilder) bool {
 	}
 	return true
 }
+func (b *keyBuilder) ToBytes(istructs.WSID) ([]byte, []byte, error) { panic(ErrNotSupported) }
 
 type logKeyBuilder struct {
 	istructs.IStateKeyBuilder
@@ -109,25 +111,6 @@ func (b *logKeyBuilder) PutInt64(name string, value int64) {
 		b.offset = istructs.Offset(value)
 	case Field_Count:
 		b.count = int(value)
-	}
-}
-
-type pLogKeyBuilder struct {
-	logKeyBuilder
-	partitionID istructs.PartitionID
-}
-
-func (b *pLogKeyBuilder) Storage() appdef.QName {
-	return PLog
-}
-
-func (b *pLogKeyBuilder) String() string {
-	return fmt.Sprintf("plog partitionID - %d, offset - %d, count - %d", b.partitionID, b.offset, b.count)
-}
-
-func (b *pLogKeyBuilder) PutInt32(name string, value int32) {
-	if name == Field_PartitionID {
-		b.partitionID = istructs.PartitionID(value)
 	}
 }
 
@@ -311,6 +294,72 @@ func (v *recordsValue) FieldNames(cb func(fieldName string)) {
 	v.record.FieldNames(cb)
 }
 
+type objectArrayContainerValue struct {
+	baseStateValue
+	object    istructs.IObject
+	container string
+}
+
+func (v *objectArrayContainerValue) GetAsString(int) string      { panic(ErrNotSupported) }
+func (v *objectArrayContainerValue) GetAsBytes(int) []byte       { panic(ErrNotSupported) }
+func (v *objectArrayContainerValue) GetAsInt32(int) int32        { panic(ErrNotSupported) }
+func (v *objectArrayContainerValue) GetAsInt64(int) int64        { panic(ErrNotSupported) }
+func (v *objectArrayContainerValue) GetAsFloat32(int) float32    { panic(ErrNotSupported) }
+func (v *objectArrayContainerValue) GetAsFloat64(int) float64    { panic(ErrNotSupported) }
+func (v *objectArrayContainerValue) GetAsQName(int) appdef.QName { panic(ErrNotSupported) }
+func (v *objectArrayContainerValue) GetAsBool(int) bool          { panic(ErrNotSupported) }
+func (v *objectArrayContainerValue) GetAsValue(i int) (result istructs.IStateValue) {
+	index := 0
+	v.object.Children(v.container, func(o istructs.IObject) {
+		if index == i {
+			result = &objectValue{object: o}
+		}
+		index++
+	})
+	if result == nil {
+		panic(errIndexOutOfBounds(i))
+	}
+	return
+}
+func (v *objectArrayContainerValue) Length() int {
+	var result int
+	v.object.Children(v.container, func(i istructs.IObject) {
+		result++
+	})
+	return result
+}
+
+type objectValue struct {
+	baseStateValue
+	object istructs.IObject
+}
+
+func (v *objectValue) AsInt32(name string) int32                { return v.object.AsInt32(name) }
+func (v *objectValue) AsInt64(name string) int64                { return v.object.AsInt64(name) }
+func (v *objectValue) AsFloat32(name string) float32            { return v.object.AsFloat32(name) }
+func (v *objectValue) AsFloat64(name string) float64            { return v.object.AsFloat64(name) }
+func (v *objectValue) AsBytes(name string) []byte               { return v.object.AsBytes(name) }
+func (v *objectValue) AsString(name string) string              { return v.object.AsString(name) }
+func (v *objectValue) AsQName(name string) appdef.QName         { return v.object.AsQName(name) }
+func (v *objectValue) AsBool(name string) bool                  { return v.object.AsBool(name) }
+func (v *objectValue) AsRecordID(name string) istructs.RecordID { return v.object.AsRecordID(name) }
+func (v *objectValue) RecordIDs(includeNulls bool, cb func(string, istructs.RecordID)) {
+	v.object.RecordIDs(includeNulls, cb)
+}
+func (v *objectValue) FieldNames(cb func(string)) { v.object.FieldNames(cb) }
+func (v *objectValue) AsValue(name string) (result istructs.IStateValue) {
+	v.object.Containers(func(name string) {
+		result = &objectArrayContainerValue{
+			object:    v.object,
+			container: name,
+		}
+	})
+	if result == nil {
+		panic(errUndefined(name))
+	}
+	return
+}
+
 type pLogValue struct {
 	baseStateValue
 	event  istructs.IPLogEvent
@@ -332,22 +381,43 @@ func (v *pLogValue) AsInt64(name string) int64 {
 	case Field_Offset:
 		return v.offset
 	}
-	return 0
+	panic(errUndefined(name))
 }
-func (v *pLogValue) AsBool(string) bool { return v.event.Synced() }
+func (v *pLogValue) AsBool(name string) bool {
+	if name == Field_Synced {
+		return v.event.Synced()
+	}
+	panic(errUndefined(name))
+}
 func (v *pLogValue) AsRecord(string) istructs.IRecord {
 	return v.event.ArgumentObject().AsRecord()
 }
+func (v *pLogValue) AsQName(name string) appdef.QName {
+	if name == Field_QName {
+		return v.event.QName()
+	}
+	panic(errUndefined(name))
+}
 func (v *pLogValue) AsEvent(string) istructs.IDbEvent { return v.event }
 func (v *pLogValue) AsValue(name string) istructs.IStateValue {
-	if name != Field_CUDs {
-		panic(ErrNotSupported)
+	if name == Field_CUDs {
+		sv := &cudsValue{}
+		v.event.CUDs(func(rec istructs.ICUDRow) {
+			sv.cuds = append(sv.cuds, rec)
+		})
+		return sv
 	}
-	sv := &cudsValue{}
-	v.event.CUDs(func(rec istructs.ICUDRow) {
-		sv.cuds = append(sv.cuds, rec)
-	})
-	return sv
+	if name == Field_Error {
+		return &eventErrorValue{error: v.event.Error()}
+	}
+	if name == Field_ArgumentObject {
+		arg := v.event.ArgumentObject()
+		if arg == nil {
+			return nil
+		}
+		return &objectValue{object: arg}
+	}
+	panic(errUndefined(name))
 }
 
 type wLogValue struct {
@@ -624,6 +694,32 @@ func (v *viewValue) AsRecord(name string) istructs.IRecord {
 	return v.value.AsRecord(name)
 }
 
+type eventErrorValue struct {
+	istructs.IStateValue
+	error istructs.IEventError
+}
+
+func (v *eventErrorValue) AsString(name string) string {
+	if name == Field_ErrStr {
+		return v.error.ErrStr()
+	}
+	panic(ErrNotSupported)
+}
+
+func (v *eventErrorValue) AsBool(name string) bool {
+	if name == Field_ValidEvent {
+		return v.error.ValidEvent()
+	}
+	panic(ErrNotSupported)
+}
+
+func (v *eventErrorValue) AsQName(name string) appdef.QName {
+	if name == Field_QNameFromParams {
+		return v.error.QNameFromParams()
+	}
+	panic(ErrNotSupported)
+}
+
 type cudsValue struct {
 	istructs.IStateValue
 	cuds []istructs.ICUDRow
@@ -737,4 +833,68 @@ func (c *resultValueBuilder) PutNumber(name string, value float64) {
 }
 func (c *resultValueBuilder) PutRecordID(name string, value istructs.RecordID) {
 	c.resultBuilder.PutRecordID(name, value)
+}
+
+type wsTypeKey struct {
+	wsid     istructs.WSID
+	appQName istructs.AppQName
+}
+
+type wsTypeVailidator struct {
+	appStructsFunc AppStructsFunc
+	wsidKinds      map[wsTypeKey]appdef.QName
+}
+
+func newWsTypeValidator(appStructsFunc AppStructsFunc) wsTypeVailidator {
+	return wsTypeVailidator{
+		appStructsFunc: appStructsFunc,
+		wsidKinds:      make(map[wsTypeKey]appdef.QName),
+	}
+}
+
+// Returns NullQName if not found
+func (v *wsTypeVailidator) getWSIDKind(wsid istructs.WSID, entity appdef.QName) (appdef.QName, error) {
+	key := wsTypeKey{wsid: wsid, appQName: v.appStructsFunc().AppQName()}
+	wsKind, ok := v.wsidKinds[key]
+	if !ok {
+		wsDesc, err := v.appStructsFunc().Records().GetSingleton(wsid, qNameCDocWorkspaceDescriptor)
+		if err != nil {
+			// notest
+			return appdef.NullQName, err
+		}
+		if wsDesc.QName() == appdef.NullQName {
+			if v.appStructsFunc().AppDef().WorkspaceByDescriptor(entity) != nil {
+				// Special case. sys.CreateWorkspace creates WSKind while WorkspaceDescriptor is not applied yet.
+				return entity, nil
+			}
+			return appdef.NullQName, fmt.Errorf("%w: %d", errWorkspaceDescriptorNotFound, wsid)
+		}
+		wsKind = wsDesc.AsQName(field_WSKind)
+		if len(v.wsidKinds) < wsidTypeValidatorCacheSize {
+			v.wsidKinds[key] = wsKind
+		}
+	}
+	return wsKind, nil
+}
+
+func (v *wsTypeVailidator) validate(wsid istructs.WSID, entity appdef.QName) error {
+	if entity == qNameCDocWorkspaceDescriptor {
+		return nil // This QName always can be read and write. Otherwise sys.CreateWorkspace is not able to create descriptor.
+	}
+	if wsid != istructs.NullWSID && v.appStructsFunc().Records() != nil { // NullWSID only stores actualizer offsets
+		wsKind, err := v.getWSIDKind(wsid, entity)
+		if err != nil {
+			// notest
+			return err
+		}
+		ws := v.appStructsFunc().AppDef().WorkspaceByDescriptor(wsKind)
+		if ws == nil {
+			// notest
+			return errDescriptorForUndefinedWorkspace
+		}
+		if ws.TypeByName(entity) == nil {
+			return typeIsNotDefinedInWorkspaceWithDescriptor(entity, wsKind)
+		}
+	}
+	return nil
 }

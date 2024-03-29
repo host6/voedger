@@ -69,20 +69,25 @@ classDiagram
         <<interface>>
     }
 
+    ISingleton --|> IDoc : inherits
+    class ISingleton {
+        <<interface>>
+        +Singleton() bool
+    }
+
     IGDoc --|> IDoc : inherits
     class IGDoc {
         <<interface>>
         +Kind()* TypeKind_GDoc
     }
 
-    ICDoc --|> IDoc : inherits
+    ICDoc --|> ISingleton : inherits
     class ICDoc {
         <<interface>>
         +Kind()* TypeKind_CDoc
-        +Singleton() bool
     }
 
-    IWDoc --|> IDoc : inherits
+    IWDoc --|> ISingleton : inherits
     class IWDoc {
         <<interface>>
         +Kind()* TypeKind_WDoc
@@ -171,10 +176,10 @@ classDiagram
         <<interface>>
         +Kind()* TypeKind_Projector
         +Extension() IExtension
-        +Events() []IProjectorEvent
         +WantErrors() bool
-        +States() [QName]QNames
-        +Intents() [QName]QNames
+        +Events() IProjectorEvents
+        +States() IStorages
+        +Intents() IStorages
     }
 
     IWorkspace --|> IType : inherits
@@ -291,20 +296,25 @@ classDiagram
         <<interface>>
     }
 
+    ISingleton --|> IDoc : inherits
+    class ISingleton {
+        <<interface>>
+        +Singleton() bool
+    }
+
     IGDoc --|> IDoc : inherits
     class IGDoc {
         <<interface>>
         +Kind()* TypeKind_GDoc
     }
 
-    ICDoc --|> IDoc : inherits
+    ICDoc --|> ISingleton : inherits
     class ICDoc {
         <<interface>>
         +Kind()* TypeKind_CDoc
-        +Singleton() bool
     }
 
-    IWDoc --|> IDoc : inherits
+    IWDoc --|> ISingleton : inherits
     class IWDoc {
         <<interface>>
         +Kind()* TypeKind_WDoc
@@ -368,8 +378,7 @@ classDiagram
 
   class ICDoc {
     <<Interface>>
-    IDoc
-    +Singleton() bool
+    ISingleton
   }
   ICDoc "1" o--> "0..*" ICRecord : children
 
@@ -381,7 +390,7 @@ classDiagram
 
   class IWDoc {
     <<Interface>>
-    IDoc
+    ISingleton
   }
   IWDoc "1" o--> "0..*" IWRecord : children
 
@@ -548,7 +557,7 @@ classDiagram
   }
 ```
 
-### Functions, commands, queries and projectors
+### Extensions
 
 ```mermaid
     classDiagram
@@ -557,6 +566,8 @@ classDiagram
         <<interface>>
         +Name() string
         +Engine() ExtensionEngineKind
+        +States() IStorages
+        +Intents() IStorages
     }
 
     IExtension "1" ..> "1" ExtensionEngineKind : Engine
@@ -564,6 +575,23 @@ classDiagram
         <<enumeration>>
         BuiltIn
         WASM
+    }
+
+    IExtension "1" *--> "1" IStorages : States
+    IExtension "1" *--> "1" IStorages : Intents
+    class IStorages {
+        <<interface>>
+        +Enum(func(IStorage))
+        +Len() int
+        +Map() map[QName] []QName
+        +Storage(QName) IStorage
+    }
+    IStorages "1" *--> "0..*" IStorage : Storages
+    class IStorage {
+        <<interface>>
+        +Comment() : []string
+        +Name(): QName
+        +QNames() []QName
     }
 
     IExtension <|-- IFunction : inherits
@@ -590,14 +618,19 @@ classDiagram
     class IProjector {
         <<interface>>
         +Kind()* TypeKind_Projector
-        +Extension() IExtension
-        +Events() []IProjectorEvent
         +WantErrors() bool
-        +States() [QName]QNames
-        +Intents() [QName]QNames
+        +Events() IProjectorEvents
     }
 
-    IProjector "1" *--> "1..*" IProjectorEvent : Events
+    IProjector "1" *--> "1" IProjectorEvents : Events
+    IProjectorEvents "1" *--> "1..*" IProjectorEvent : Event
+    class IProjectorEvents {
+        <<interface>>
+        +Enum(func(IProjectorEvent))
+        +Event(QName) IProjectorEvent
+        +Len() int
+        +Map() map[QName] []ProjectorEventKind
+    }
     class IProjectorEvent {
         <<interface>>
         +Comment() []string
@@ -614,13 +647,6 @@ classDiagram
         Deactivate
         Execute
         ExecuteWithParam
-    }
-
-    IProjector "1" *--> "0..*" storage : States
-    IProjector "1" *--> "0..*" storage : Intents
-    class storage {
-        QName
-        +QNames() []QName
     }
 ```
 
@@ -667,3 +693,7 @@ Invalid names examples:
 
 - Maximum fields per unique is 256
 - Maximum uniques per structure is 100.
+
+### Singletons
+
+- Maximum singletons per application is 512.

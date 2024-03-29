@@ -140,18 +140,19 @@ func (app *appStructsType) AppQName() istructs.AppQName {
 	return app.config.Name
 }
 
+func (app *appStructsType) AppTokens() istructs.IAppTokens {
+	return app.appTokens
+}
+
+// istructs.IAppStructs.AsyncProjectors
+func (app *appStructsType) AsyncProjectors() istructs.Projectors {
+	return app.config.AsyncProjectors()
+}
+
 // IAppStructs.Buckets() - wrong, import cycle between istructs and irates
 // so let's add simple method to use it at utils.IBucketsFromIAppStructs()
 func (app *appStructsType) Buckets() irates.IBuckets {
 	return app.buckets
-}
-
-func (app *appStructsType) SyncProjectors() []istructs.ProjectorFactory {
-	return app.config.syncProjectorFactories
-}
-
-func (app *appStructsType) AsyncProjectors() []istructs.ProjectorFactory {
-	return app.config.asyncProjectorFactories
 }
 
 func (app *appStructsType) CUDValidators() []istructs.CUDValidator {
@@ -160,14 +161,6 @@ func (app *appStructsType) CUDValidators() []istructs.CUDValidator {
 
 func (app *appStructsType) EventValidators() []istructs.EventValidator {
 	return app.config.eventValidators
-}
-
-func (app *appStructsType) WSAmount() istructs.AppWSAmount {
-	return app.appWSAmount
-}
-
-func (app *appStructsType) AppTokens() istructs.IAppTokens {
-	return app.appTokens
 }
 
 func (app *appStructsType) IsFunctionRateLimitsExceeded(funcQName appdef.QName, wsid istructs.WSID) bool {
@@ -194,6 +187,15 @@ func (app *appStructsType) IsFunctionRateLimitsExceeded(funcQName appdef.QName, 
 		keys = append(keys, key)
 	}
 	return !app.buckets.TakeTokens(keys, 1)
+}
+
+// istructs.IAppStructs.SyncProjectors
+func (app *appStructsType) SyncProjectors() istructs.Projectors {
+	return app.config.SyncProjectors()
+}
+
+func (app *appStructsType) WSAmount() istructs.AppWSAmount {
+	return app.appWSAmount
 }
 
 func (app *appStructsType) describe() *descr.Application {
@@ -455,17 +457,17 @@ func (recs *appRecordsType) validEvent(ev *eventType) (err error) {
 	}
 
 	for _, rec := range ev.cud.creates {
-		if cDoc, ok := rec.typ.(appdef.ICDoc); ok && cDoc.Singleton() {
+		if singleton, ok := rec.typ.(appdef.ISingleton); ok && singleton.Singleton() {
 			id, err := recs.app.config.singletons.ID(rec.QName())
 			if err != nil {
 				return err
 			}
 			exists, err := load(id, nil)
 			if err != nil {
-				return fmt.Errorf("error checking singleton CDoc «%v» record «%d» existence: %w", rec.QName(), id, err)
+				return fmt.Errorf("error checking singleton «%v» record «%d» existence: %w", rec.QName(), id, err)
 			}
 			if exists {
-				return fmt.Errorf("can not create singleton, CDoc «%v» record «%d» already exists: %w", rec.QName(), id, ErrRecordIDUniqueViolation)
+				return fmt.Errorf("can not create singleton, «%v» record «%d» already exists: %w", rec.QName(), id, ErrRecordIDUniqueViolation)
 			}
 		}
 	}

@@ -14,8 +14,10 @@ import (
 )
 
 var (
+	testWS          = appdef.NewQName("test", "test_ws")
 	testQName       = appdef.NewQName("test", "QName")
 	testQNameSimple = appdef.NewQName("test", "QNameSimple")
+	testQNameView   = appdef.NewQName("test", "view")
 	testFieldDefs   = map[string]appdef.DataKind{
 		"int32":    appdef.DataKind_int32,
 		"int64":    appdef.DataKind_int64,
@@ -27,14 +29,34 @@ var (
 		"recordID": appdef.DataKind_RecordID,
 	}
 
-	testAppDef = func() appdef.IAppDefBuilder {
-		app := appdef.New()
+	testAppDef = func(t *testing.T) appdef.IAppDef {
+		adb := appdef.New()
 
-		obj := app.AddObject(testQName)
+		obj := adb.AddObject(testQName)
 		addFieldDefs(obj, testFieldDefs)
 
-		simpleObj := app.AddObject(testQNameSimple)
+		simpleObj := adb.AddObject(testQNameSimple)
 		simpleObj.AddField("int32", appdef.DataKind_int32, false)
+
+		view := adb.AddView(testQNameView)
+		view.Key().PartKey().AddField("pk", appdef.DataKind_int64)
+		view.Key().ClustCols().AddField("cc", appdef.DataKind_string)
+		iValueFields := map[string]appdef.DataKind{}
+		for n, k := range testFieldDefs {
+			iValueFields[n] = k
+		}
+		iValueFields["record"] = appdef.DataKind_Record
+		for n, k := range iValueFields {
+			view.Value().AddField(n, k, false)
+		}
+
+		ws := adb.AddWorkspace(testWS)
+		ws.AddType(testQName)
+		ws.AddType(testQNameSimple)
+		ws.AddType(appdef.NewQName("test", "view"))
+
+		app, err := adb.Build()
+		require.NoError(t, err)
 
 		return app
 	}
@@ -95,7 +117,7 @@ func TestToMap_Basic(t *testing.T) {
 		},
 	}
 
-	appDef := testAppDef()
+	appDef := testAppDef(t)
 
 	t.Run("ObjectToMap", func(t *testing.T) {
 		m := ObjectToMap(obj, appDef)
@@ -148,7 +170,7 @@ func TestToMap_Filter(t *testing.T) {
 		return false
 	})
 
-	appDef := testAppDef()
+	appDef := testAppDef(t)
 
 	t.Run("ObjectToMap", func(t *testing.T) {
 		m := ObjectToMap(obj, appDef, filter)
@@ -190,7 +212,7 @@ func TestMToMap_NonNilsOnly_Filter(t *testing.T) {
 		appdef.SystemField_QName: testQName.String(),
 	}
 
-	appDef := testAppDef()
+	appDef := testAppDef(t)
 
 	t.Run("ObjectToMap", func(t *testing.T) {
 		m := ObjectToMap(obj, appDef, WithNonNilsOnly(), Filter(func(name string, kind appdef.DataKind) bool {
@@ -220,40 +242,28 @@ func TestMToMap_NonNilsOnly_Filter(t *testing.T) {
 
 func TestReadValue(t *testing.T) {
 	require := require.New(t)
-	iValueFields := map[string]appdef.DataKind{}
-	for n, k := range testFieldDefs {
-		iValueFields[n] = k
-	}
-	iValueFields["record"] = appdef.DataKind_Record
 
-	appDefs := testAppDef()
-	viewName := appdef.NewQName("test", "view")
-	view := appDefs.AddView(viewName)
-	view.KeyBuilder().PartKeyBuilder().AddField("pk", appdef.DataKind_int64)
-	view.KeyBuilder().ClustColsBuilder().AddField("cc", appdef.DataKind_string)
-	for n, k := range iValueFields {
-		view.ValueBuilder().AddField(n, k, false)
-	}
+	appDef := testAppDef(t)
 
 	iValueValues := map[string]interface{}{}
 	for k, v := range testData {
 		iValueValues[k] = v
 	}
-	iValueValues[appdef.SystemField_QName] = viewName
+	iValueValues[appdef.SystemField_QName] = testQNameView
 	iValueValues["record"] = &TestObject{
 		Data: testDataSimple,
 	}
 	iValue := &TestValue{
 		TestObject: &TestObject{
-			Name: viewName,
+			Name: testQNameView,
 			Id:   42,
 			Data: iValueValues,
 		},
 	}
 
 	t.Run("FieldsToMap", func(t *testing.T) {
-		m := FieldsToMap(iValue, appDefs)
-		testBasic(viewName, m, require)
+		m := FieldsToMap(iValue, appDef)
+		testBasic(testQNameView, m, require)
 		require.Equal(
 			map[string]interface{}{"int32": int32(42), appdef.SystemField_QName: "test.QNameSimple", appdef.SystemField_Container: ""},
 			m["record"],
@@ -261,8 +271,8 @@ func TestReadValue(t *testing.T) {
 	})
 
 	t.Run("FieldsToMap non-nils only", func(t *testing.T) {
-		m := FieldsToMap(iValue, appDefs, WithNonNilsOnly())
-		testBasic(viewName, m, require)
+		m := FieldsToMap(iValue, appDef, WithNonNilsOnly())
+		testBasic(testQNameView, m, require)
 		require.Equal(
 			map[string]interface{}{"int32": int32(42), appdef.SystemField_QName: "test.QNameSimple"},
 			m["record"],
@@ -274,8 +284,8 @@ func TestReadValue(t *testing.T) {
 			Name: testQName,
 			Data: iValueValues,
 		}
-		require.Panics(func() { FieldsToMap(obj, appDefs) })
-		require.Panics(func() { FieldsToMap(obj, appDefs, WithNonNilsOnly()) })
+		require.Panics(func() { FieldsToMap(obj, appDef) })
+		require.Panics(func() { FieldsToMap(obj, appDef, WithNonNilsOnly()) })
 	})
 }
 

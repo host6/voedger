@@ -20,6 +20,8 @@ var (
 	AppSecret      = appdef.NewQName(appdef.SysPackage, "AppSecret")
 	RequestSubject = appdef.NewQName(appdef.SysPackage, "RequestSubject")
 	Result         = appdef.NewQName(appdef.SysPackage, "Result")
+	Event          = appdef.NewQName(appdef.SysPackage, "Event")
+	CommandContext = appdef.NewQName(appdef.SysPackage, "CommandContext")
 )
 
 const (
@@ -35,6 +37,14 @@ const (
 	Field_Method                        = "Method"
 	Field_Header                        = "Header"
 	Field_Offset                        = "Offset"
+	Field_Error                         = "Error"
+	Field_ErrStr                        = "ErrStr"
+	Field_QNameFromParams               = "QNameFromParams"
+	Field_ValidEvent                    = "ValidEvent"
+	Field_QName                         = "QName"
+	Field_ArgumentObject                = "ArgumentObject"
+	Field_ArgumentUnloggedObject        = "ArgumentUnloggedObject"
+	Field_Synced                        = "Synced"
 	Field_Count                         = "Count"
 	Field_ID                            = "ID"
 	Field_From                          = "From"
@@ -70,8 +80,11 @@ const (
 	ColOffset                             = "offs"
 	defaultHTTPClientTimeout              = 20_000 * time.Millisecond
 	httpStorageKeyBuilderStringerSliceCap = 3
+	wsidTypeValidatorCacheSize            = 100
 )
 
 var (
-	emptyApplyBatchItem = ApplyBatchItem{}
+	emptyApplyBatchItem          = ApplyBatchItem{}
+	qNameCDocWorkspaceDescriptor = appdef.NewQName(appdef.SysPackage, "WorkspaceDescriptor")
+	field_WSKind                 = "WSKind"
 )

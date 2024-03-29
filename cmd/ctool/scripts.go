@@ -10,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,13 +26,30 @@ var scriptsFS embed.FS
 
 var scriptsTempDir string
 
+var indicator []string
+
 type scriptExecuterType struct {
 	outputPrefix string
 	sshKeyPath   string
 }
 
+func selectIndicator() []string {
+	indicators1 := []string{"|", "/", "-", "\\"}
+	indicators2 := []string{"◐", "◓", "◑", "◒"}
+	indicators3 := []string{"⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"}
+
+	indicators := [][]string{indicators1, indicators2, indicators3}
+	// nolint
+	randomIndex := rand.Intn(len(indicators))
+	return indicators[randomIndex]
+}
+
 func showProgress(done chan bool) {
-	indicators := []string{"|", "/", "-", "\\"}
+
+	if len(indicator) == 0 {
+		indicator = selectIndicator()
+	}
+
 	i := 0
 	for {
 		select {
@@ -40,9 +58,9 @@ func showProgress(done chan bool) {
 			return
 		default:
 			if !verbose() {
-				fmt.Printf(green("\r%s\r"), indicators[i])
+				fmt.Printf(green("\r%s\r"), indicator[i])
 			}
-			i = (i + 1) % len(indicators)
+			i = (i + 1) % len(indicator)
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
@@ -63,22 +81,8 @@ func (se *scriptExecuterType) run(scriptName string, args ...string) error {
 	// nolint
 	os.Chdir(scriptsTempDir)
 
-	if len(se.sshKeyPath) > 0 {
-		buf := []string{}
-		for _, s := range args {
-			if strings.Contains(s, " ") {
-				buf = append(buf, fmt.Sprintf(`"%s"`, s))
-			} else {
-				buf = append(buf, s)
-			}
-		}
-		args = append([]string{fmt.Sprintf("eval $(ssh-agent -s); ssh-add %s; ./%s", se.sshKeyPath, scriptName)}, buf...)
-
-		pExec = new(exec.PipedExec).Command("bash", "-c", strings.Join(args, " "))
-	} else {
-		args = append([]string{scriptName}, args...)
-		pExec = new(exec.PipedExec).Command("bash", args...)
-	}
+	args = append([]string{scriptName}, args...)
+	pExec = new(exec.PipedExec).Command("bash", args...)
 
 	var stdoutWriter io.Writer
 	var stderrWriter io.Writer
@@ -91,8 +95,13 @@ func (se *scriptExecuterType) run(scriptName string, args ...string) error {
 			stderrWriter = logFile
 		}
 	} else {
-		stdoutWriter = os.Stdout
-		stderrWriter = os.Stderr
+		if verbose() {
+			stdoutWriter = os.Stdout
+			stderrWriter = os.Stderr
+		} else {
+			stdoutWriter = nil
+			stderrWriter = nil
+		}
 	}
 
 	done := make(chan bool)

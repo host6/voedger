@@ -6,11 +6,10 @@
 package appdef
 
 // Application definition is a set of types, views, commands, queries and workspaces.
-//
-// Ref to apdef.go for implementation
 type IAppDef interface {
 	IComment
 	IWithTypes
+	IWithPackages
 
 	// Return data type by name.
 	//
@@ -114,6 +113,11 @@ type IAppDef interface {
 	// Projectors are enumerated in alphabetical order by QName.
 	Projectors(func(IProjector))
 
+	// Return extension by name.
+	//
+	// Returns nil if not found.
+	Extension(QName) IExtension
+
 	// Enumerates all application extensions (commands, queries and extensions)
 	//
 	// Extensions are enumerated in alphabetical order by QName
@@ -131,8 +135,8 @@ type IAppDef interface {
 }
 
 type IAppDefBuilder interface {
-	IAppDef
 	ICommentBuilder
+	IPackagesBuilder
 
 	// Adds new data type with specified name and kind.
 	//
@@ -172,14 +176,6 @@ type IAppDefBuilder interface {
 	//   - if name is invalid,
 	//   - if type with name already exists.
 	AddCDoc(name QName) ICDocBuilder
-
-	// Adds new singleton CDoc type with specified name.
-	//
-	// # Panics:
-	//   - if name is empty (appdef.NullQName),
-	//   - if name is invalid,
-	//   - if type with name already exists.
-	AddSingleton(name QName) ICDocBuilder
 
 	// Adds new CRecord type with specified name.
 	//
@@ -268,6 +264,12 @@ type IAppDefBuilder interface {
 	//   - if name is invalid,
 	//   - if type with name already exists.
 	AddWorkspace(QName) IWorkspaceBuilder
+
+	// Returns application definition while building.
+	//
+	// Can be called before or after all entities added.
+	// Does not validate application definition, some types may be invalid.
+	AppDef() IAppDef
 
 	// Builds application definition.
 	//

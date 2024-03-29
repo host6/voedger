@@ -11,6 +11,7 @@ import (
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/itokens"
 	"github.com/voedger/voedger/pkg/parser"
+	_ "github.com/voedger/voedger/pkg/sys"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
@@ -23,34 +24,32 @@ func Provide(cfg *istructsmem.AppConfigType, asp istructs.IAppStructsProvider, i
 
 	cfg.Resources.Add(istructsmem.NewQueryFunction(
 		appdef.NewQName(RegistryPackage, "IssuePrincipalToken"),
-		provideIssuePrincipalTokenExec(asp, itokens)))
+		provideIssuePrincipalTokenExec(itokens)))
 	provideChangePassword(cfg)
-	provideResetPassword(cfg, asp, itokens, federation)
-	cfg.AddAsyncProjectors(provideAsyncProjectorFactoryInvokeCreateWorkspaceID(federation, cfg.Name, itokens))
+	provideResetPassword(cfg, itokens, federation)
+	cfg.AddAsyncProjectors(
+		provideAsyncProjectorInvokeCreateWorkspaceID(federation, itokens),
+	)
 	return ProvidePackageFS()
 }
 
 func ProvidePackageFS() parser.PackageFS {
 	return parser.PackageFS{
-		QualifiedPackageName: RegistryPackageFQN,
-		FS:                   schemasFS,
+		Path: RegistryPackageFQN,
+		FS:   schemasFS,
 	}
 }
 
-func provideAsyncProjectorFactoryInvokeCreateWorkspaceID(federation coreutils.IFederation, appQName istructs.AppQName, tokensAPI itokens.ITokens) istructs.ProjectorFactory {
-	return func(partition istructs.PartitionID) istructs.Projector {
-		return istructs.Projector{
-			Name: qNameProjectorInvokeCreateWorkspaceID_registry,
-			Func: invokeCreateWorkspaceIDProjector(federation, appQName, tokensAPI),
-		}
+func provideAsyncProjectorInvokeCreateWorkspaceID(federation coreutils.IFederation, tokensAPI itokens.ITokens) istructs.Projector {
+	return istructs.Projector{
+		Name: qNameProjectorInvokeCreateWorkspaceID_registry,
+		Func: invokeCreateWorkspaceIDProjector(federation, tokensAPI),
 	}
 }
 
-func ProvideSyncProjectorLoginIdxFactory() istructs.ProjectorFactory {
-	return func(partition istructs.PartitionID) istructs.Projector {
-		return istructs.Projector{
-			Name: QNameProjectorLoginIdx,
-			Func: projectorLoginIdx,
-		}
+func ProvideSyncProjectorLoginIdx() istructs.Projector {
+	return istructs.Projector{
+		Name: QNameProjectorLoginIdx,
+		Func: projectorLoginIdx,
 	}
 }

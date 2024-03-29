@@ -50,7 +50,8 @@ type IQueryFunction interface {
 type PrepareArgs struct {
 	Workpiece      interface{}
 	ArgumentObject IObject
-	Workspace      WSID
+	WSID           WSID
+	Workspace      appdef.IWorkspace
 }
 
 type CommandPrepareArgs struct {
@@ -89,6 +90,11 @@ type IState interface {
 
 	// Read reads all values according to the get and return them in callback
 	Read(key IStateKeyBuilder, callback ValueCallback) (err error)
+
+	// For projectors
+	PLogEvent() IPLogEvent
+
+	App() AppQName
 }
 type IIntents interface {
 	// NewValue returns a new value builder for given get
@@ -97,6 +103,17 @@ type IIntents interface {
 
 	// UpdateValue returns a value builder to update existing value
 	UpdateValue(key IStateKeyBuilder, existingValue IStateValue) (builder IStateValueBuilder, err error)
+}
+type IPkgNameResolver interface {
+	// Returns package path by package local name.
+	//
+	// Returns empty string if not found
+	PackageFullPath(localName string) string
+
+	// Returns package local name by package path.
+	//
+	// Returns empty string if not found
+	PackageLocalName(fullPath string) string
 }
 type IStateValue interface {
 	IValue

@@ -33,7 +33,7 @@ var (
 	SchemaTestApp2FS embed.FS
 
 	DefaultTestAppPartsCount  = 10
-	DefaultTestAppEnginesPool = cluster.PoolSize(10, 10, 10)
+	DefaultTestAppEnginesPool = cluster.PoolSize(10, 10, 20)
 	maxRateLimit2PerMinute    = istructs.RateLimit{
 		Period:                time.Minute,
 		MaxAllowedPerDuration: 2,
@@ -41,5 +41,9 @@ var (
 	maxRateLimit4PerHour = istructs.RateLimit{
 		Period:                time.Hour,
 		MaxAllowedPerDuration: 4,
+	}
+	TestAppDeploymentDescriptor = cluster.AppDeploymentDescriptor{
+		PartsCount:     DefaultTestAppPartsCount,
+		EnginePoolSize: DefaultTestAppEnginesPool,
 	}
 )

@@ -29,8 +29,9 @@ func TestAppConfigsType_AddConfig(t *testing.T) {
 	t.Run("must be ok to add config for known app", func(t *testing.T) {
 		cfgs := make(AppConfigsType)
 		app, id := istructs.AppQName_test1_app1, istructs.ClusterAppID_test1_app1
-		appDef := appdef.New()
-		cfg := cfgs.AddConfig(app, appDef)
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+		cfg := cfgs.AddConfig(app, adb)
 		require.NotNil(cfg)
 		require.Equal(cfg.Name, app)
 		require.Equal(cfg.ClusterAppID, id)
@@ -39,20 +40,30 @@ func TestAppConfigsType_AddConfig(t *testing.T) {
 		appStructs := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
 
 		t.Run("must be ok to change appDef after add config", func(t *testing.T) {
-			appDef.AddSingleton(appdef.NewQName("test", "doc")).
-				AddField("field", appdef.DataKind_int64, true)
+			docName := appdef.NewQName("test", "doc")
+			doc := adb.AddCDoc(docName)
+			doc.AddField("field", appdef.DataKind_int64, true)
+			doc.SetSingleton()
 			appStr, err := appStructs.AppStructs(app)
 			require.NoError(err)
 			require.NotNil(appStr)
+			t.Run("should be ok to retrieve changed doc from AppStructs", func(t *testing.T) {
+				doc := appStr.AppDef().CDoc(docName)
+				require.Equal(docName, doc.QName())
+				require.True(doc.Singleton())
+				require.Equal(appdef.DataKind_int64, doc.Field("field").DataKind())
+			})
 		})
 	})
 
 	t.Run("must be error to make invalid changes in appDef after add config", func(t *testing.T) {
 		cfgs := make(AppConfigsType)
-		appDef := appdef.New()
-		_ = cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 
-		appDef.AddObject(appdef.NewQName("test", "obj")).
+		_ = cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
+
+		adb.AddObject(appdef.NewQName("test", "obj")).
 			AddContainer("unknown", appdef.NewQName("test", "unknown"), 0, 1) // <- error here: reference to unknown element type
 
 		_, storageProvider := teststore.New()
@@ -76,10 +87,11 @@ func TestAppConfigsType_AddConfig(t *testing.T) {
 		require.Panics(func() {
 			_ = cfgs.AddConfig(istructs.AppQName_test1_app1,
 				func() appdef.IAppDefBuilder {
-					app := appdef.New()
-					app.AddObject(appdef.NewQName("test", "obj")).
+					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
+					adb.AddObject(appdef.NewQName("test", "obj")).
 						AddContainer("unknown", appdef.NewQName("test", "unknown"), 0, 1) // <- error here: reference to unknown element type
-					return app
+					return adb
 				}())
 		})
 	})
@@ -142,14 +154,18 @@ func TestAppConfigsType_GetConfig(t *testing.T) {
 func TestErrorsAppConfigsType(t *testing.T) {
 	require := require.New(t)
 
+	docName, recName := appdef.NewQName("test", "doc"), appdef.NewQName("test", "rec")
+
 	appDef := func() appdef.IAppDefBuilder {
-		app := appdef.New()
-		doc := app.AddSingleton(appdef.NewQName("test", "doc"))
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+		doc := adb.AddCDoc(docName)
+		doc.SetSingleton()
 		doc.AddField("f1", appdef.DataKind_string, true)
-		doc.AddContainer("rec", appdef.NewQName("test", "rec"), 0, 1)
-		doc.AddUnique(appdef.UniqueQName(doc.QName(), "f1"), []string{"f1"})
-		app.AddCRecord(appdef.NewQName("test", "rec"))
-		return app
+		doc.AddContainer("rec", recName, 0, 1)
+		doc.AddUnique(appdef.UniqueQName(docName, "f1"), []string{"f1"})
+		adb.AddCRecord(recName)
+		return adb
 	}()
 
 	storage, storageProvider := teststore.New()
@@ -159,8 +175,11 @@ func TestErrorsAppConfigsType(t *testing.T) {
 		_ = cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
 		provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
 
-		_, err := provider.AppStructs(istructs.AppQName_test1_app1)
+		as, err := provider.AppStructs(istructs.AppQName_test1_app1)
 		require.NoError(err)
+		require.NotNil(as)
+		require.Equal(docName, as.AppDef().CDoc(docName).QName())
+		require.Equal(recName, as.AppDef().CRecord(recName).QName())
 	})
 
 	t.Run("must be error to provide app structure if error while read versions", func(t *testing.T) {
@@ -221,6 +240,7 @@ func TestErrorsAppConfigsType(t *testing.T) {
 		t.Run("query", func(t *testing.T) {
 			t.Run("missing in cfg", func(t *testing.T) {
 				adb := appdef.New()
+				adb.AddPackage("test", "test.com/test")
 				adb.AddQuery(qName)
 				cfgs := make(AppConfigsType, 1)
 				_ = cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
@@ -243,6 +263,7 @@ func TestErrorsAppConfigsType(t *testing.T) {
 		t.Run("command", func(t *testing.T) {
 			t.Run("missing in cfg", func(t *testing.T) {
 				adb := appdef.New()
+				adb.AddPackage("test", "test.com/test")
 				adb.AddCommand(qName)
 				cfgs := make(AppConfigsType, 1)
 				_ = cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
@@ -266,11 +287,12 @@ func TestErrorsAppConfigsType(t *testing.T) {
 			t.Run("sync", func(t *testing.T) {
 				t.Run("missing in cfg", func(t *testing.T) {
 					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
 					qName2 := appdef.NewQName("test", "qName2")
 					adb.AddCDoc(qName2)
 					adb.AddProjector(qName).
 						SetSync(true).
-						AddEvent(qName2, appdef.ProjectorEventKind_Insert)
+						Events().Add(qName2, appdef.ProjectorEventKind_Insert)
 					cfgs := make(AppConfigsType, 1)
 					_ = cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
 					provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
@@ -282,11 +304,7 @@ func TestErrorsAppConfigsType(t *testing.T) {
 					adb := appdef.New()
 					cfgs := make(AppConfigsType, 1)
 					cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
-					cfg.AddSyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
-						return istructs.Projector{
-							Name: qName,
-						}
-					})
+					cfg.AddSyncProjectors(istructs.Projector{Name: qName})
 					provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
 					_, err := provider.AppStructs(istructs.AppQName_test1_app1)
 					require.Error(err)
@@ -294,18 +312,15 @@ func TestErrorsAppConfigsType(t *testing.T) {
 				})
 				t.Run("defined as async in cfg", func(t *testing.T) {
 					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
 					qName2 := appdef.NewQName("test", "qName2")
 					adb.AddCDoc(qName2)
 					adb.AddProjector(qName).
 						SetSync(true).
-						AddEvent(qName2, appdef.ProjectorEventKind_Insert)
+						Events().Add(qName2, appdef.ProjectorEventKind_Insert)
 					cfgs := make(AppConfigsType, 1)
 					cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
-					cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
-						return istructs.Projector{
-							Name: qName,
-						}
-					})
+					cfg.AddAsyncProjectors(istructs.Projector{Name: qName})
 					provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
 					_, err := provider.AppStructs(istructs.AppQName_test1_app1)
 					require.Error(err)
@@ -315,11 +330,12 @@ func TestErrorsAppConfigsType(t *testing.T) {
 			t.Run("async", func(t *testing.T) {
 				t.Run("missing in cfg", func(t *testing.T) {
 					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
 					qName2 := appdef.NewQName("test", "qName2")
 					adb.AddCDoc(qName2)
 					adb.AddProjector(qName).
 						SetSync(false).
-						AddEvent(qName2, appdef.ProjectorEventKind_Insert)
+						Events().Add(qName2, appdef.ProjectorEventKind_Insert)
 					cfgs := make(AppConfigsType, 1)
 					_ = cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
 					provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
@@ -331,11 +347,7 @@ func TestErrorsAppConfigsType(t *testing.T) {
 					adb := appdef.New()
 					cfgs := make(AppConfigsType, 1)
 					cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
-					cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
-						return istructs.Projector{
-							Name: qName,
-						}
-					})
+					cfg.AddAsyncProjectors(istructs.Projector{Name: qName})
 					provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
 					_, err := provider.AppStructs(istructs.AppQName_test1_app1)
 					require.Error(err)
@@ -343,18 +355,15 @@ func TestErrorsAppConfigsType(t *testing.T) {
 				})
 				t.Run("defined as sync in cfg", func(t *testing.T) {
 					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
 					qName2 := appdef.NewQName("test", "qName2")
 					adb.AddCDoc(qName2)
 					adb.AddProjector(qName).
 						SetSync(false).
-						AddEvent(qName2, appdef.ProjectorEventKind_Insert)
+						Events().Add(qName2, appdef.ProjectorEventKind_Insert)
 					cfgs := make(AppConfigsType, 1)
 					cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
-					cfg.AddSyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
-						return istructs.Projector{
-							Name: qName,
-						}
-					})
+					cfg.AddSyncProjectors(istructs.Projector{Name: qName})
 					provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
 					_, err := provider.AppStructs(istructs.AppQName_test1_app1)
 					require.Error(err)
@@ -362,23 +371,16 @@ func TestErrorsAppConfigsType(t *testing.T) {
 				})
 				t.Run("defined twice in cfg", func(t *testing.T) {
 					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
 					qName2 := appdef.NewQName("test", "qName2")
 					adb.AddCDoc(qName2)
 					adb.AddProjector(qName).
 						SetSync(true).
-						AddEvent(qName2, appdef.ProjectorEventKind_Insert)
+						Events().Add(qName2, appdef.ProjectorEventKind_Insert)
 					cfgs := make(AppConfigsType, 1)
 					cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
-					cfg.AddAsyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
-						return istructs.Projector{
-							Name: qName,
-						}
-					})
-					cfg.AddSyncProjectors(func(partition istructs.PartitionID) istructs.Projector {
-						return istructs.Projector{
-							Name: qName,
-						}
-					})
+					cfg.AddAsyncProjectors(istructs.Projector{Name: qName})
+					cfg.AddSyncProjectors(istructs.Projector{Name: qName})
 					provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
 					_, err := provider.AppStructs(istructs.AppQName_test1_app1)
 					require.Error(err)

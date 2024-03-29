@@ -10,7 +10,8 @@ ABSTRACT TABLE CDoc INHERITS CRecord();
 ABSTRACT TABLE ODoc INHERITS ORecord();
 ABSTRACT TABLE WDoc INHERITS WRecord();
 
-ABSTRACT TABLE Singleton INHERITS CDoc();
+ABSTRACT TABLE CSingleton INHERITS CDoc();
+ABSTRACT TABLE WSingleton INHERITS WDoc();
 
 ABSTRACT WORKSPACE Workspace (
     TYPE CreateLoginParams(
@@ -29,6 +30,8 @@ ABSTRACT WORKSPACE Workspace (
         QUERY UPTerminalWebhook(any) RETURNS any;
     )
 );
+
+ALTERABLE WORKSPACE AppWorkspaceWS();
 
 ALTERABLE WORKSPACE Profile(
 

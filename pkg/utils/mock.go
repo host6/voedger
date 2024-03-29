@@ -127,6 +127,14 @@ func (m *MockState) Read(key istructs.IStateKeyBuilder, callback istructs.ValueC
 	args := m.Called(key, callback)
 	return args.Error(0)
 }
+func (m *MockState) PLogEvent() istructs.IPLogEvent {
+	args := m.Called()
+	return args.Get(0).(istructs.IPLogEvent)
+}
+func (m *MockState) App() istructs.AppQName {
+	args := m.Called()
+	return args.Get(0).(istructs.AppQName)
+}
 
 type MockStateKeyBuilder struct {
 	mock.Mock
@@ -187,6 +195,10 @@ func (m *MockStateKeyBuilder) Entity() appdef.QName {
 }
 func (m *MockStateKeyBuilder) PutFromJSON(map[string]any) {
 	m.Called(0)
+}
+func (m *MockStateKeyBuilder) ToBytes(wsid istructs.WSID) ([]byte, []byte, error) {
+	args := m.Called(wsid)
+	return args.Get(0).([]byte), args.Get(1).([]byte), args.Error(2)
 }
 
 type MockStateValue struct {
@@ -341,6 +353,10 @@ func (m *MockStateValueBuilder) BuildValue() istructs.IStateValue {
 }
 func (m *MockStateValueBuilder) PutFromJSON(map[string]any) {
 	m.Called(0)
+}
+func (m *MockStateValueBuilder) ToBytes() ([]byte, error) {
+	args := m.Called()
+	return args.Get(0).([]byte), args.Error(1)
 }
 
 type MockRawEvent struct {

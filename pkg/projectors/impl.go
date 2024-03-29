@@ -11,19 +11,20 @@ import (
 	"fmt"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/state"
 )
 
-func asyncActualizerFactory(conf AsyncActualizerConf, factory istructs.ProjectorFactory) (pipeline.ISyncOperator, error) {
+func asyncActualizerFactory(conf AsyncActualizerConf, projector istructs.Projector) (pipeline.ISyncOperator, error) {
 	return pipeline.ServiceOperator(&asyncActualizer{
-		factory: factory,
-		conf:    conf,
+		projector: projector,
+		conf:      conf,
 	}), nil
 }
 
-func syncActualizerFactory(conf SyncActualizerConf, projection istructs.ProjectorFactory, otherProjections ...istructs.ProjectorFactory) pipeline.ISyncOperator {
+func syncActualizerFactory(conf SyncActualizerConf, projectors istructs.Projectors) pipeline.ISyncOperator {
 	if conf.IntentsLimit == 0 {
 		conf.IntentsLimit = defaultIntentsLimit
 	}
@@ -31,13 +32,10 @@ func syncActualizerFactory(conf SyncActualizerConf, projection istructs.Projecto
 		conf.WorkToEvent = func(work interface{}) istructs.IPLogEvent { return work.(istructs.IPLogEvent) }
 	}
 	service := &eventService{}
-	ss := make([]state.IHostState, 0, len(otherProjections)+1)
-	bb := make([]pipeline.ForkOperatorOptionFunc, 0, len(otherProjections))
-	b, s := newSyncBranch(conf, projection, service)
-	bb = append(bb, b)
-	ss = append(ss, s)
-	for _, otherProjection := range otherProjections {
-		b, s = newSyncBranch(conf, otherProjection, service)
+	ss := make([]state.IHostState, 0, len(projectors))
+	bb := make([]pipeline.ForkOperatorOptionFunc, 0, len(projectors))
+	for _, p := range projectors {
+		b, s := newSyncBranch(conf, p, service)
 		ss = append(ss, s)
 		bb = append(bb, b)
 	}
@@ -60,38 +58,34 @@ func syncActualizerFactory(conf SyncActualizerConf, projection istructs.Projecto
 		pipeline.WireSyncOperator("ErrorHandler", h))
 }
 
-func newSyncBranch(conf SyncActualizerConf, projectorFactory istructs.ProjectorFactory, service *eventService) (fn pipeline.ForkOperatorOptionFunc, s state.IHostState) {
-	projector := projectorFactory(conf.Partition)
+func newSyncBranch(conf SyncActualizerConf, projector istructs.Projector, service *eventService) (fn pipeline.ForkOperatorOptionFunc, s state.IHostState) {
 	pipelineName := fmt.Sprintf("[%d] %s", conf.Partition, projector.Name)
 	s = state.ProvideSyncActualizerStateFactory()(
 		conf.Ctx,
-		conf.AppStructs(),
+		conf.AppStructs,
 		state.SimplePartitionIDFunc(conf.Partition),
 		service.getWSID,
 		conf.N10nFunc,
 		conf.SecretReader,
+		service.getEvent,
 		conf.IntentsLimit)
-	iProjector := conf.AppStructs().AppDef().Projector(projector.Name)
-	triggeringQNames := triggeringQNames(iProjector)
 	fn = pipeline.ForkBranch(pipeline.NewSyncPipeline(conf.Ctx, pipelineName,
-		pipeline.WireFunc("Projector", func(_ context.Context, _ interface{}) (err error) {
-			if !isAcceptable(service.event, iProjector.WantErrors(), triggeringQNames, conf.AppStructs().AppDef()) {
-				return nil
-			}
-			return projector.Func(service.event, s, s)
-		}),
+		pipeline.WireFunc("Projector",
+			func(ctx context.Context, work interface{}) error {
+				appPart := work.(interface{ AppPartition() appparts.IAppPartition }).AppPartition()
+				appDef := appPart.AppStructs().AppDef()
+				prj := appDef.Projector(projector.Name)
+				event := s.PLogEvent()
+				if !isAcceptable(event, prj.WantErrors(), prj.Events().Map(), appDef) {
+					return nil
+				}
+				return appPart.Invoke(ctx, projector.Name, s, s)
+				// return projector.Func(service.event, s, s)
+			}),
 		pipeline.WireFunc("IntentsValidator", func(_ context.Context, _ interface{}) (err error) {
 			return s.ValidateIntents()
 		})))
 	return
-}
-
-func triggeringQNames(iProjector appdef.IProjector) map[appdef.QName][]appdef.ProjectorEventKind {
-	triggeringQNames := map[appdef.QName][]appdef.ProjectorEventKind{}
-	iProjector.Events(func(pe appdef.IProjectorEvent) {
-		triggeringQNames[pe.On().QName()] = append(triggeringQNames[pe.On().QName()], pe.Kind()...)
-	})
-	return triggeringQNames
 }
 
 type syncErrorHandler struct {
@@ -122,6 +116,8 @@ type eventService struct {
 
 func (s *eventService) getWSID() istructs.WSID { return s.event.Workspace() }
 
+func (s *eventService) getEvent() istructs.IPLogEvent { return s.event }
+
 func provideViewDefImpl(appDef appdef.IAppDefBuilder, qname appdef.QName, buildFunc ViewTypeBuilder) {
 	builder := appDef.AddView(qname)
 	if buildFunc != nil {
@@ -131,7 +127,7 @@ func provideViewDefImpl(appDef appdef.IAppDefBuilder, qname appdef.QName, buildF
 
 func provideOffsetsDefImpl(adb appdef.IAppDefBuilder) {
 	view := adb.AddView(qnameProjectionOffsets)
-	view.KeyBuilder().PartKeyBuilder().AddField(partitionFld, appdef.DataKind_int32)
-	view.KeyBuilder().ClustColsBuilder().AddField(projectorNameFld, appdef.DataKind_QName)
-	view.ValueBuilder().AddField(offsetFld, appdef.DataKind_int64, true)
+	view.Key().PartKey().AddField(partitionFld, appdef.DataKind_int32)
+	view.Key().ClustCols().AddField(projectorNameFld, appdef.DataKind_QName)
+	view.Value().AddField(offsetFld, appdef.DataKind_int64, true)
 }

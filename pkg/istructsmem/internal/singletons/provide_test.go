@@ -34,9 +34,11 @@ func Test_BasicUsage(t *testing.T) {
 	testName := appdef.NewQName("test", "doc")
 
 	testAppDef := func() appdef.IAppDef {
-		app := appdef.New()
-		app.AddSingleton(testName)
-		appDef, err := app.Build()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+		doc := adb.AddCDoc(testName)
+		doc.SetSingleton()
+		appDef, err := adb.Build()
 		if err != nil {
 			panic(err)
 		}
@@ -80,9 +82,9 @@ func test_AppDefSingletons(t *testing.T, appDef appdef.IAppDef, st *Singletons) 
 	require := require.New(t)
 	appDef.Types(
 		func(t appdef.IType) {
-			if cDoc, ok := t.(appdef.ICDoc); ok {
-				if cDoc.Singleton() {
-					id, err := st.ID(cDoc.QName())
+			if singleton, ok := t.(appdef.ISingleton); ok {
+				if singleton.Singleton() {
+					id, err := st.ID(singleton.QName())
 					require.NoError(err)
 					require.NotEqual(istructs.NullRecordID, id)
 				}
@@ -94,6 +96,7 @@ func Test_SingletonsGetID(t *testing.T) {
 
 	require := require.New(t)
 	cDocName := appdef.NewQName("test", "SingletonCDoc")
+	wDocName := appdef.NewQName("test", "SingletonWDoc")
 
 	st := New()
 
@@ -106,10 +109,22 @@ func Test_SingletonsGetID(t *testing.T) {
 			err = versions.Prepare(storage)
 			require.NoError(err)
 
-			app := appdef.New()
-			app.AddSingleton(cDocName).
-				AddField("f1", appdef.DataKind_QName, true)
-			appDef, err := app.Build()
+			adb := appdef.New()
+			adb.AddPackage("test", "test.com/test")
+
+			{
+				doc := adb.AddCDoc(cDocName)
+				doc.SetSingleton()
+				doc.AddField("f1", appdef.DataKind_QName, true)
+			}
+
+			{
+				doc := adb.AddWDoc(wDocName)
+				doc.SetSingleton()
+				doc.AddField("f1", appdef.DataKind_QName, true)
+			}
+
+			appDef, err := adb.Build()
 			require.NoError(err)
 
 			return storage, versions, appDef
@@ -156,10 +171,12 @@ func Test_SingletonsGetID(t *testing.T) {
 
 	t.Run("check known QName", func(t *testing.T) {
 		testQName(cDocName, true)
+		testQName(wDocName, true)
 	})
 
 	t.Run("check unknown QName", func(t *testing.T) {
 		testQName(appdef.NewQName("unknown", "CDoc"), false)
+		testQName(appdef.NewQName("unknown", "WDoc"), false)
 	})
 
 	t.Run("check unknown id", func(t *testing.T) {
@@ -197,10 +214,13 @@ func Test_Singletons_Errors(t *testing.T) {
 		err := versions.Prepare(storage)
 		require.NoError(err)
 
-		app := appdef.New()
-		app.AddSingleton(cDocName).
-			AddField("f1", appdef.DataKind_QName, true)
-		appDef, err := app.Build()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+
+		doc := adb.AddCDoc(cDocName)
+		doc.SetSingleton()
+		doc.AddField("f1", appdef.DataKind_QName, true)
+		appDef, err := adb.Build()
 		require.NoError(err)
 
 		stone := New()
@@ -209,18 +229,21 @@ func Test_Singletons_Errors(t *testing.T) {
 		require.ErrorIs(err, testError)
 	})
 
-	t.Run("must error if maximum singletons is exceeded by CDocs", func(t *testing.T) {
+	t.Run("must error if maximum singletons is exceeded", func(t *testing.T) {
 		storage := teststore.NewStorage()
 
 		versions := vers.New()
 		err := versions.Prepare(storage)
 		require.NoError(err)
 
-		appDefBuilder := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+
 		for id := istructs.FirstSingletonID; id <= istructs.MaxSingletonID; id++ {
-			appDefBuilder.AddSingleton(appdef.NewQName("test", fmt.Sprintf("CDoc_%v", id)))
+			doc := adb.AddCDoc(appdef.NewQName("test", fmt.Sprintf("doc_%v", id)))
+			doc.SetSingleton()
 		}
-		appDef, err := appDefBuilder.Build()
+		appDef, err := adb.Build()
 		require.NoError(err)
 
 		st := New()
@@ -240,7 +263,8 @@ func Test_Singletons_Errors(t *testing.T) {
 		require.NoError(err)
 
 		app := appdef.New()
-		app.AddSingleton(defName)
+		doc := app.AddCDoc(defName)
+		doc.SetSingleton()
 		appDef, err := app.Build()
 		require.NoError(err)
 
@@ -259,7 +283,8 @@ func Test_Singletons_Errors(t *testing.T) {
 		require.NoError(err)
 
 		app := appdef.New()
-		app.AddSingleton(defName)
+		doc := app.AddCDoc(defName)
+		doc.SetSingleton()
 		appDef, err := app.Build()
 		require.NoError(err)
 
@@ -273,7 +298,7 @@ func Test_Singletons_Errors(t *testing.T) {
 		require.ErrorIs(err, testError)
 	})
 
-	t.Run("must error if some some CDoc singleton QName from storage is not well formed", func(t *testing.T) {
+	t.Run("must error if some some singleton QName from storage is not well formed", func(t *testing.T) {
 		storage := teststore.NewStorage()
 
 		versions := vers.New()

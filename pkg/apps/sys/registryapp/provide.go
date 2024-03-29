@@ -17,8 +17,8 @@ import (
 	"github.com/voedger/voedger/pkg/sys/smtp"
 )
 
-func Provide(smtpCfg smtp.Cfg) apps.AppBuilder {
-	return func(apis apps.APIs, cfg *istructsmem.AppConfigType, appDefBuilder appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) apps.AppPackages {
+func Provide(smtpCfg smtp.Cfg, partsCount int) apps.AppBuilder {
+	return func(apis apps.APIs, cfg *istructsmem.AppConfigType, appDefBuilder appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) apps.BuiltInAppDef {
 
 		// sys package
 		sysPackageFS := sys.Provide(cfg, appDefBuilder, smtpCfg, ep, nil, apis.TimeFunc, apis.ITokens, apis.IFederation, apis.IAppStructsProvider, apis.IAppTokensFactory,
@@ -26,32 +26,19 @@ func Provide(smtpCfg smtp.Cfg) apps.AppBuilder {
 
 		// sys/registry resources
 		registryPackageFS := registry.Provide(cfg, apis.IAppStructsProvider, apis.ITokens, apis.IFederation)
-		cfg.AddSyncProjectors(registry.ProvideSyncProjectorLoginIdxFactory())
+		cfg.AddSyncProjectors(registry.ProvideSyncProjectorLoginIdx())
 		registryAppPackageFS := parser.PackageFS{
-			QualifiedPackageName: RegistryAppFQN,
-			FS:                   registryAppSchemaFS,
+			Path: RegistryAppFQN,
+			FS:   registryAppSchemaFS,
 		}
-		return apps.AppPackages{
+
+		return apps.BuiltInAppDef{
 			AppQName: istructs.AppQName_sys_registry,
 			Packages: []parser.PackageFS{sysPackageFS, registryPackageFS, registryAppPackageFS},
+			AppDeploymentDescriptor: cluster.AppDeploymentDescriptor{
+				PartsCount:     partsCount,
+				EnginePoolSize: cluster.PoolSize(partsCount, DefDeploymentQPCount, partsCount),
+			},
 		}
 	}
-}
-
-// Returns registry application definition
-func AppDef() appdef.IAppDef {
-	registryFS := registry.ProvidePackageFS()
-	appDef, err := apps.BuildAppDefFromFS(RegistryAppFQN, registryAppSchemaFS, ".", registryFS)
-	if err != nil {
-		panic(err)
-	}
-	return appDef
-}
-
-// Returns registry partitions count
-func PartsCount() int { return DefDeploymentPartsCount }
-
-// Returns registry engines pool sizes
-func EnginePoolSize() [cluster.ProcessorKind_Count]int {
-	return DefDeploymentEnginePoolSize
 }

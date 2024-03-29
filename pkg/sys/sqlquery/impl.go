@@ -7,6 +7,7 @@ package sqlquery
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"strconv"
 	"strings"
 
@@ -14,18 +15,36 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/processors"
+	"github.com/voedger/voedger/pkg/sys/authnz"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
 func execQrySqlQuery(asp istructs.IAppStructsProvider, appQName istructs.AppQName, numCommandProcessors coreutils.CommandProcessorsCount) func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
-		wsid := args.Workspace
+		wsid := args.WSID
+		ws := args.Workspace
+		appStructs, err := asp.AppStructs(appQName)
+		if err != nil {
+			return err
+		}
 		if index := strings.Index(args.ArgumentObject.AsString(field_Query), flag_WSID); index != -1 {
 			v, err := strconv.Atoi(args.ArgumentObject.AsString(field_Query)[index+len(flag_WSID):])
 			if err != nil {
 				return err
 			}
 			wsid = istructs.WSID(v)
+			wsDesc, err := appStructs.Records().GetSingleton(wsid, authnz.QNameCDocWorkspaceDescriptor)
+			if err != nil {
+				// notest
+				return err
+			}
+			if wsDesc.QName() == appdef.NullQName {
+				return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("wsid %d: %s", wsid, processors.ErrWSNotInited.Message))
+			}
+			if ws = appStructs.AppDef().WorkspaceByDescriptor(wsDesc.AsQName(authnz.Field_WSKind)); ws == nil {
+				return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("no workspace by QName of its descriptor %s from wsid %d", wsDesc.QName(), wsid))
+			}
 		}
 
 		stmt, err := sqlparser.Parse(args.ArgumentObject.AsString(field_Query))
@@ -49,11 +68,6 @@ func execQrySqlQuery(asp istructs.IAppStructsProvider, appQName istructs.AppQNam
 			}
 		}
 
-		appStructs, err := asp.AppStructs(appQName)
-		if err != nil {
-			return err
-		}
-
 		var whereExpr sqlparser.Expr
 		if s.Where == nil {
 			whereExpr = nil
@@ -66,7 +80,7 @@ func execQrySqlQuery(asp istructs.IAppStructsProvider, appQName istructs.AppQNam
 
 		switch appStructs.AppDef().Type(source).Kind() {
 		case appdef.TypeKind_ViewRecord:
-			return readViewRecords(ctx, wsid, appdef.NewQName(table.Qualifier.String(), table.Name.String()), whereExpr, appStructs, f, callback)
+			return readViewRecords(ctx, wsid, appdef.NewQName(table.Qualifier.String(), table.Name.String()), whereExpr, appStructs, f, callback, ws)
 		case appdef.TypeKind_CDoc:
 			fallthrough
 		case appdef.TypeKind_CRecord:
@@ -82,9 +96,9 @@ func execQrySqlQuery(asp istructs.IAppStructsProvider, appQName istructs.AppQNam
 				return e
 			}
 			if source == plog {
-				return readPlog(ctx, wsid, numCommandProcessors, offset, limit, appStructs, f, callback)
+				return readPlog(ctx, wsid, numCommandProcessors, offset, limit, appStructs, f, callback, appStructs.AppDef())
 			}
-			return readWlog(ctx, wsid, offset, limit, appStructs, f, callback)
+			return readWlog(ctx, wsid, offset, limit, appStructs, f, callback, appStructs.AppDef())
 		}
 
 		return fmt.Errorf("unsupported source: %s", source)
@@ -164,4 +178,38 @@ func getFilter(f func(string) bool) coreutils.MapperOpt {
 	return coreutils.Filter(func(name string, kind appdef.DataKind) bool {
 		return f(name)
 	})
+}
+
+func renderDbEvent(data map[string]interface{}, f *filter, event istructs.IDbEvent, appDef appdef.IAppDef) {
+	if f.filter("QName") {
+		data["QName"] = event.QName().String()
+	}
+	if f.filter("ArgumentObject") {
+		data["ArgumentObject"] = coreutils.ObjectToMap(event.ArgumentObject(), appDef)
+	}
+	if f.filter("CUDs") {
+		data["CUDs"] = coreutils.CUDsToMap(event, appDef)
+	}
+	if f.filter("RegisteredAt") {
+		data["RegisteredAt"] = event.RegisteredAt()
+	}
+	if f.filter("Synced") {
+		data["Synced"] = event.Synced()
+	}
+	if f.filter("DeviceID") {
+		data["DeviceID"] = event.DeviceID()
+	}
+	if f.filter("SyncedAt") {
+		data["SyncedAt"] = event.SyncedAt()
+	}
+	if f.filter("Error") {
+		if event.Error() != nil {
+			errorData := make(map[string]interface{})
+			errorData["ErrStr"] = event.Error().ErrStr()
+			errorData["QNameFromParams"] = event.Error().QNameFromParams().String()
+			errorData["ValidEvent"] = event.Error().ValidEvent()
+			errorData["OriginalEventBytes"] = event.Error().OriginalEventBytes()
+			data["Error"] = errorData
+		}
+	}
 }

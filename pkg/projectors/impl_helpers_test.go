@@ -7,11 +7,14 @@
 package projectors
 
 import (
+	"context"
 	"errors"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
+	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 )
@@ -20,27 +23,49 @@ const (
 	colValue = "myvalue"
 )
 
-type plogEvent struct {
+type plogEventMock struct {
 	wlogOffset istructs.Offset
 	wsid       istructs.WSID
 }
 
 var testQName = appdef.NewQName(appdef.SysPackage, "abc")
 
-func (e *plogEvent) ArgumentObject() istructs.IObject     { return istructs.NewNullObject() }
-func (e *plogEvent) Command() istructs.IObject            { return nil }
-func (e *plogEvent) Workspace() istructs.WSID             { return e.wsid }
-func (e *plogEvent) WLogOffset() istructs.Offset          { return e.wlogOffset }
-func (e *plogEvent) SaveWLog() (err error)                { return nil }
-func (e *plogEvent) SaveCUDs() (err error)                { return nil }
-func (e *plogEvent) Release()                             {}
-func (e *plogEvent) Error() istructs.IEventError          { return nil }
-func (e *plogEvent) QName() appdef.QName                  { return testQName }
-func (e *plogEvent) CUDs(func(rec istructs.ICUDRow))      {}
-func (e *plogEvent) RegisteredAt() istructs.UnixMilli     { return 0 }
-func (e *plogEvent) Synced() bool                         { return false }
-func (e *plogEvent) DeviceID() istructs.ConnectedDeviceID { return 0 }
-func (e *plogEvent) SyncedAt() istructs.UnixMilli         { return 0 }
+func (e *plogEventMock) ArgumentObject() istructs.IObject     { return istructs.NewNullObject() }
+func (e *plogEventMock) Command() istructs.IObject            { return nil }
+func (e *plogEventMock) Workspace() istructs.WSID             { return e.wsid }
+func (e *plogEventMock) WLogOffset() istructs.Offset          { return e.wlogOffset }
+func (e *plogEventMock) SaveWLog() (err error)                { return nil }
+func (e *plogEventMock) SaveCUDs() (err error)                { return nil }
+func (e *plogEventMock) Release()                             {}
+func (e *plogEventMock) Error() istructs.IEventError          { return nil }
+func (e *plogEventMock) QName() appdef.QName                  { return testQName }
+func (e *plogEventMock) CUDs(func(rec istructs.ICUDRow))      {}
+func (e *plogEventMock) RegisteredAt() istructs.UnixMilli     { return 0 }
+func (e *plogEventMock) Synced() bool                         { return false }
+func (e *plogEventMock) DeviceID() istructs.ConnectedDeviceID { return 0 }
+func (e *plogEventMock) SyncedAt() istructs.UnixMilli         { return 0 }
+
+type cmdWorkpieceMock struct {
+	appPart appparts.IAppPartition
+	event   istructs.IPLogEvent
+}
+
+func (w *cmdWorkpieceMock) AppPartition() appparts.IAppPartition { return w.appPart }
+func (w *cmdWorkpieceMock) Event() istructs.IPLogEvent           { return w.event }
+
+type cmdProcMock struct {
+	appParts appparts.IAppPartitions
+}
+
+func (p cmdProcMock) TestEvent(wsid istructs.WSID) error {
+	appPart, err := p.appParts.Borrow(istructs.AppQName_test1_app1, istructs.PartitionID(1), cluster.ProcessorKind_Command)
+	if err != nil {
+		return err
+	}
+	defer appPart.Release()
+
+	return appPart.DoSyncActualizer(context.Background(), &cmdWorkpieceMock{appPart: appPart, event: &plogEventMock{wsid: wsid}})
+}
 
 func storeProjectorOffset(appStructs istructs.IAppStructs, partition istructs.PartitionID, projectorName appdef.QName, offset istructs.Offset) error {
 	kb := appStructs.ViewRecords().KeyBuilder(qnameProjectionOffsets)

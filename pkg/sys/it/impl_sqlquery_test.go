@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/sys/sqlquery"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	it "github.com/voedger/voedger/pkg/vit"
@@ -474,4 +475,27 @@ func TestSqlQuery(t *testing.T) {
 
 		require.NotEqual(t, len(wsOne.Sections[0].Elements), len(wsTwo.Sections[0].Elements))
 	})
+
+	t.Run("400 bad request on read from non-inited workspace", func(t *testing.T) {
+		vit.PostWS(ws, "q.sys.SqlQuery", `{"args":{"Query":"select * from sys.wlog --wsid=0"}}`, coreutils.Expect400(processors.ErrWSNotInited.Message))
+	})
+}
+
+func TestReadFromWLogWithSysRawArg(t *testing.T) {
+	require := require.New(t)
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+
+	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+
+	lastOffset := vit.PostWS(ws, "c.app1pkg.TestCmdRawArg", "hello world").CurrentWLogOffset
+
+	body := fmt.Sprintf(`{"args":{"Query":"select * from sys.wlog where Offset > %d"},"elements":[{"fields":["Result"]}]}`, lastOffset-1)
+	resp := vit.PostWS(ws, "q.sys.SqlQuery", body)
+	res := resp.SectionRow()[0].(string)
+	m := map[string]interface{}{}
+	require.NoError(json.Unmarshal([]byte(res), &m))
+	rawArg := m["ArgumentObject"].(map[string]interface{})["Body"].(string)
+	require.Equal("hello world", rawArg)
+
 }

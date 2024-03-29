@@ -6,16 +6,13 @@ package registry
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"net/http"
 
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/sys/authnz"
-	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
 // q.registry.IssuePrincipalToken
@@ -34,7 +31,7 @@ func (q *iptRR) AsString(name string) string {
 	return q.principalToken
 }
 
-func provideIssuePrincipalTokenExec(asp istructs.IAppStructsProvider, itokens itokens.ITokens) istructsmem.ExecQueryClosure {
+func provideIssuePrincipalTokenExec(itokens itokens.ITokens) istructsmem.ExecQueryClosure {
 	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 		login := args.ArgumentObject.AsString(authnz.Field_Login)
 		appName := args.ArgumentObject.AsString(authnz.Field_AppName)
@@ -45,23 +42,10 @@ func provideIssuePrincipalTokenExec(asp istructs.IAppStructsProvider, itokens it
 			// validated already on c.registry.CreateLogin
 			return err
 		}
-		if err != nil {
-			return coreutils.NewHTTPErrorf(http.StatusBadRequest, "failed to parse app qualified name", appQName.String(), ":", err)
-		}
 
-		as, err := asp.AppStructs(appQName)
-		if err != nil {
-			if errors.Is(err, istructs.ErrAppNotFound) {
-				return coreutils.NewHTTPErrorf(http.StatusBadRequest, "unknown application ", appName)
-			}
-			return err
-		}
+		// TODO: check we're called at our AppWSID?
 
-		if err = CheckAppWSID(login, args.Workspace, as.WSAmount()); err != nil {
-			return err
-		}
-
-		cdocLogin, doesLoginExist, err := GetCDocLogin(login, args.State, args.Workspace, appName)
+		cdocLogin, doesLoginExist, err := GetCDocLogin(login, args.State, args.WSID, appName)
 		if err != nil {
 			return err
 		}

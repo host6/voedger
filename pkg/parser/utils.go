@@ -111,6 +111,31 @@ func lookupInSysPackage[stmtType *WorkspaceStmt](ctx *basicContext, fn DefQName)
 	return s, e
 }
 
+func getCurrentAlterWorkspace(ictx *iterateCtx) *AlterWorkspaceStmt {
+	var ic *iterateCtx = ictx
+	var ws *AlterWorkspaceStmt = nil
+	for ic != nil && ws == nil {
+		if aw, isAlterWorkspace := ic.collection.(*AlterWorkspaceStmt); isAlterWorkspace {
+			return aw
+		}
+		ic = ic.parent
+	}
+	return nil
+}
+
+func getCurrentWorkspace(ictx *iterateCtx) *WorkspaceStmt {
+	var ic *iterateCtx = ictx
+	var ws *WorkspaceStmt = nil
+	for ic != nil && ws == nil {
+		if _, isWorkspace := ic.collection.(*WorkspaceStmt); isWorkspace {
+			ws = ic.collection.(*WorkspaceStmt)
+			break
+		}
+		ic = ic.parent
+	}
+	return ws
+}
+
 func lookupInCtx[stmtType *TableStmt | *TypeStmt | *FunctionStmt | *CommandStmt | *RateStmt | *TagStmt | *ProjectorStmt |
 	*WorkspaceStmt | *ViewStmt | *StorageStmt | *LimitStmt | *QueryStmt | *RoleStmt | *WsDescriptorStmt | *DeclareStmt](fn DefQName, ictx *iterateCtx) (stmtType, *PackageSchemaAST, error) {
 	schema, err := getTargetSchema(fn, ictx)
@@ -142,20 +167,24 @@ func lookupInCtx[stmtType *TableStmt | *TypeStmt | *FunctionStmt | *CommandStmt 
 	}
 
 	if schema == ictx.pkg {
-
-		// Am I in a workspace?
-		var ic *iterateCtx = ictx
-		var ws *WorkspaceStmt = nil
-		for ic != nil && ws == nil {
-			if _, isWorkspace := ic.collection.(*WorkspaceStmt); isWorkspace {
-				ws = ic.collection.(*WorkspaceStmt)
-				break
-			}
-			ic = ic.parent
-		}
+		ws := getCurrentWorkspace(ictx)
 		// First look in the current workspace
 		if ws != nil {
 			ws.Iterate(lookupCallback)
+			if item == nil {
+				var value interface{} = item
+				if _, ok := value.(*WorkspaceStmt); !ok { //  when looking for something else than a workspace, look in the inherited workspaces
+					for _, dq := range ws.Inherits {
+						err := resolveInCtx[*WorkspaceStmt](dq, ictx, func(f *WorkspaceStmt, schema *PackageSchemaAST) error {
+							f.Iterate(lookupCallback)
+							return nil
+						})
+						if err != nil {
+							return nil, nil, err
+						}
+					}
+				}
+			}
 		}
 
 		// Look in the package
@@ -209,6 +238,7 @@ func iterateContext(ictx *iterateCtx, callback func(stmt interface{}, ctx *itera
 				collection:   collection,
 				pkg:          ictx.pkg,
 				parent:       ictx,
+				wsCtxs:       ictx.wsCtxs,
 			}
 			iterateContext(iNestedCtx, callback)
 		}
@@ -238,7 +268,7 @@ func GetQualifiedPackageName(pkgName Ident, schema *SchemaAST) string {
 	suffix := fmt.Sprintf("/%s", pkgName)
 	for i := 0; i < len(schema.Imports); i++ {
 		imp := schema.Imports[i]
-		if strings.HasSuffix(imp.Name, suffix) {
+		if strings.HasSuffix(imp.Name, suffix) || imp.Name == string(pkgName) {
 			return imp.Name
 		}
 	}

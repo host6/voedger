@@ -10,6 +10,7 @@ package vvm
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strconv"
 	"strings"
@@ -22,8 +23,9 @@ import (
 
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/apppartsctl"
-	builtinapps "github.com/voedger/voedger/pkg/cluster/builtin"
+	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/router"
+	"github.com/voedger/voedger/pkg/vvm/engines"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/apps"
@@ -51,7 +53,6 @@ import (
 	queryprocessor "github.com/voedger/voedger/pkg/processors/query"
 	"github.com/voedger/voedger/pkg/projectors"
 	"github.com/voedger/voedger/pkg/state"
-	"github.com/voedger/voedger/pkg/sys/builtin"
 	"github.com/voedger/voedger/pkg/sys/invite"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	dbcertcache "github.com/voedger/voedger/pkg/vvm/db_cert_cache"
@@ -81,10 +82,10 @@ func ProvideVVM(vvmCfg *VVMConfig, vvmIdx VVMIdxType) (voedgerVM *VoedgerVM, err
 		ProcessorChannel_Query,
 	)
 	vvmCfg.Quotas = in10n.Quotas{
-		Channels:               int(DefaultQuotasChannelsFactor * vvmCfg.NumCommandProcessors),
-		ChannelsPerSubject:     DefaultQuotasChannelsPerSubject,
-		Subsciptions:           int(DefaultQuotasSubscriptionsFactor * vvmCfg.NumCommandProcessors),
-		SubsciptionsPerSubject: DefaultQuotasSubscriptionsPerSubject,
+		Channels:                int(DefaultQuotasChannelsFactor * vvmCfg.NumCommandProcessors),
+		ChannelsPerSubject:      DefaultQuotasChannelsPerSubject,
+		Subscriptions:           int(DefaultQuotasSubscriptionsFactor * vvmCfg.NumCommandProcessors),
+		SubscriptionsPerSubject: DefaultQuotasSubscriptionsPerSubject,
 	}
 	voedgerVM.VVM, voedgerVM.vvmCleanup, err = ProvideCluster(ctx, vvmCfg, vvmIdx)
 	if err != nil {
@@ -114,14 +115,13 @@ func ProvideCluster(vvmCtx context.Context, vvmConfig *VVMConfig, vvmIdx VVMIdxT
 		provideQueryProcessors,
 		provideAppServiceFactory,
 		provideAppPartitionFactory,
-		//provideSyncActualizerFactory,
 		provideAsyncActualizersFactory,
 		provideRouterServiceFactory,
 		provideOperatorAppServices,
 		provideBlobAppStorage,
 		provideBlobberAppStruct,
 		provideVVMApps,
-		provideAppsPackages,
+		provideBuiltInAppsPackages,
 		provideBlobberClusterAppID,
 		provideServiceChannelFactory,
 		provideBlobStorage,
@@ -164,9 +164,10 @@ func ProvideCluster(vvmCtx context.Context, vvmConfig *VVMConfig, vvmIdx VVMIdxT
 		provideStorageFactory,
 		provideIAppStorageUncachingProviderFactory,
 		provideAppPartsCtlPipelineService,
+		provideIsDeviceAllowedFunc,
+		provideBuiltInApps,
+		provideAppPartitions,
 		apppartsctl.New,
-		appparts.NewWithActualizer,
-		builtinapps.Apps,
 		// wire.Value(vvmConfig.NumCommandProcessors) -> (wire bug?) value github.com/untillpro/airs-bp3/vvm.CommandProcessorsCount can't be used: vvmConfig is not declared in package scope
 		wire.FieldsOf(&vvmConfig,
 			"NumCommandProcessors",
@@ -185,6 +186,51 @@ func ProvideCluster(vvmCtx context.Context, vvmConfig *VVMConfig, vvmIdx VVMIdxT
 			"SecretsReader",
 		),
 	))
+}
+
+func provideAppPartitions(
+	cfgs istructsmem.AppConfigsType,
+	asp istructs.IAppStructsProvider,
+	actualizer appparts.SyncActualizerFactory,
+	_ []BuiltInAppsPackages, /*need to make it called in correct order*/
+) (ap appparts.IAppPartitions, cleanup func(), err error) {
+
+	eff := func(app istructs.AppQName) iextengine.ExtensionEngineFactories {
+		appCfg := cfgs.GetConfig(app)
+		if appCfg == nil {
+			panic(fmt.Errorf("app config not found for %s", app))
+		}
+		eefCfg := engines.ExtEngineFactoriesConfig{
+			AppConfig:   appCfg,
+			WASMCompile: false,
+		}
+		return engines.ProvideExtEngineFactories(eefCfg)
+	}
+
+	return appparts.NewWithActualizerWithExtEnginesFactories(asp, actualizer, eff)
+}
+
+func provideIsDeviceAllowedFunc(appEPs map[istructs.AppQName]extensionpoints.IExtensionPoint, _ []BuiltInAppsPackages /*need to make it called in correct order*/) iauthnzimpl.IsDeviceAllowedFuncs {
+	res := iauthnzimpl.IsDeviceAllowedFuncs{}
+	for appQName, appEP := range appEPs {
+		val, ok := appEP.Find(apps.EPIsDeviceAllowedFunc)
+		if !ok {
+			res[appQName] = func(as istructs.IAppStructs, requestWSID istructs.WSID, deviceProfileWSID istructs.WSID) (ok bool, err error) {
+				return true, nil
+			}
+		} else {
+			res[appQName] = val.(iauthnzimpl.IsDeviceAllowedFunc)
+		}
+	}
+	return res
+}
+
+func provideBuiltInApps(builtInAppsPackages []BuiltInAppsPackages) []apppartsctl.BuiltInApp {
+	res := make([]apppartsctl.BuiltInApp, len(builtInAppsPackages))
+	for i, pkg := range builtInAppsPackages {
+		res[i] = pkg.BuiltInApp
+	}
+	return res
 }
 
 func provideAppPartsCtlPipelineService(ctl apppartsctl.IAppPartitionsController) IAppPartsCtlPipelineService {
@@ -266,7 +312,7 @@ func provideMetricsServicePort(msp MetricsServicePortInitial, vvmIdx VVMIdxType)
 }
 
 // VVMPort could be dynamic -> need a source to get the actual port later
-// just calling RouterService.GetPort() causes wire cycle: RouterService requires IBus->VVMApps->FederatioURL->VVMPort->RouterService
+// just calling RouterService.GetPort() causes wire cycle: RouterService requires IBus->VVMApps->FederationURL->VVMPort->RouterService
 // so we need something in the middle of FederationURL and RouterService: FederationURL reads VVMPortSource, RouterService writes it.
 func provideVVMPortSource() *VVMPortSource {
 	return &VVMPortSource{}
@@ -277,7 +323,7 @@ func provideMetricsServiceOperator(ms metrics.MetricsService) MetricsServiceOper
 }
 
 // TODO: consider vvmIdx
-func provideIFederation(cfg *VVMConfig, vvmPortSource *VVMPortSource) coreutils.IFederation {
+func provideIFederation(cfg *VVMConfig, vvmPortSource *VVMPortSource) (coreutils.IFederation, func()) {
 	return coreutils.NewIFederation(func() *url.URL {
 		if cfg.FederationURL != nil {
 			return cfg.FederationURL
@@ -323,15 +369,15 @@ func provideAppsExtensionPoints(vvmConfig *VVMConfig) map[istructs.AppQName]exte
 	return vvmConfig.VVMAppsBuilder.PrepareAppsExtensionPoints()
 }
 
-func provideVVMApps(appsPackages []apps.AppPackages) (vvmApps VVMApps) {
-	for _, appPackage := range appsPackages {
-		vvmApps = append(vvmApps, appPackage.AppQName)
+func provideVVMApps(builtInApps []apppartsctl.BuiltInApp) (vvmApps VVMApps) {
+	for _, builtInApp := range builtInApps {
+		vvmApps = append(vvmApps, builtInApp.Name)
 	}
 	return vvmApps
 }
 
-func provideAppsPackages(vvmConfig *VVMConfig, cfgs istructsmem.AppConfigsType, apis apps.APIs, appsEPs map[istructs.AppQName]extensionpoints.IExtensionPoint) ([]apps.AppPackages, error) {
-	return vvmConfig.VVMAppsBuilder.Build(cfgs, apis, appsEPs)
+func provideBuiltInAppsPackages(vvmConfig *VVMConfig, cfgs istructsmem.AppConfigsType, apis apps.APIs, appsEPs map[istructs.AppQName]extensionpoints.IExtensionPoint) ([]BuiltInAppsPackages, error) {
+	return vvmConfig.VVMAppsBuilder.BuiltInAppsPackages(cfgs, apis, appsEPs)
 }
 
 func provideServiceChannelFactory(vvmConfig *VVMConfig, procbus iprocbus.IProcBus) ServiceChannelFactory {
@@ -363,8 +409,8 @@ func provideChannelGroups(cfg *VVMConfig) (res []iprocbusmem.ChannelGroup) {
 }
 
 func provideCachingAppStorageProvider(vvmCfg *VVMConfig, storageCacheSize StorageCacheSizeType, metrics imetrics.IMetrics,
-	vvmName commandprocessor.VVMName, uncachingProivder IAppStorageUncachingProviderFactory) (istorage.IAppStorageProvider, error) {
-	aspNonCaching := uncachingProivder()
+	vvmName commandprocessor.VVMName, uncachingProvider IAppStorageUncachingProviderFactory) (istorage.IAppStorageProvider, error) {
+	aspNonCaching := uncachingProvider()
 	res := istoragecache.Provide(int(storageCacheSize), aspNonCaching, metrics, string(vvmName))
 	return res, nil
 }
@@ -377,43 +423,6 @@ type switchByAppName struct {
 func (s *switchByAppName) Switch(work interface{}) (branchName string, err error) {
 	return work.(interface{ AppQName() istructs.AppQName }).AppQName().String(), nil
 }
-
-// func provideSyncActualizerFactory(vvmApps VVMApps, structsProvider istructs.IAppStructsProvider, n10nBroker in10n.IN10nBroker, mpq MaxPrepareQueriesType, actualizerFactory projectors.SyncActualizerFactory, secretReader isecrets.ISecretReader) commandprocessor.SyncActualizerFactory {
-// 	return func(vvmCtx context.Context, partitionID istructs.PartitionID) pipeline.ISyncOperator {
-// 		actualizers := []pipeline.SwitchOperatorOptionFunc{}
-// 		for _, appQName := range vvmApps {
-// 			appStructs, err := structsProvider.AppStructs(appQName)
-// 			if err != nil {
-// 				panic(err)
-// 			}
-// 			if len(appStructs.SyncProjectors()) == 0 {
-// 				actualizers = append(actualizers, pipeline.SwitchBranch(appQName.String(), &pipeline.NOOP{}))
-// 				continue
-// 			}
-// 			conf := projectors.SyncActualizerConf{
-// 				Ctx: vvmCtx,
-// 				//TODO это правильно, что постоянную appStrcuts возвращаем? Каждый раз не надо запрашивать у appStructsProvider?
-// 				AppStructs:   func() istructs.IAppStructs { return appStructs },
-// 				SecretReader: secretReader,
-// 				Partition:    partitionID,
-// 				WorkToEvent: func(work interface{}) istructs.IPLogEvent {
-// 					return work.(interface{ Event() istructs.IPLogEvent }).Event()
-// 				},
-// 				N10nFunc: func(view appdef.QName, wsid istructs.WSID, offset istructs.Offset) {
-// 					n10nBroker.Update(in10n.ProjectionKey{
-// 						App:        appStructs.AppQName(),
-// 						Projection: view,
-// 						WS:         wsid,
-// 					}, offset)
-// 				},
-// 				IntentsLimit: builtin.MaxCUDs,
-// 			}
-// 			actualizer := actualizerFactory(conf, appStructs.SyncProjectors()[0], appStructs.SyncProjectors()[1:]...)
-// 			actualizers = append(actualizers, pipeline.SwitchBranch(appQName.String(), actualizer))
-// 		}
-// 		return pipeline.SwitchOperator(&switchByAppName{}, actualizers[0], actualizers[1:]...)
-// 	}
-// }
 
 func provideBlobberAppStruct(asp istructs.IAppStructsProvider) (BlobberAppStruct, error) {
 	return asp.AppStructs(istructs.AppQName_sys_blobber)
@@ -475,7 +484,7 @@ func provideCommandChannelFactory(sch ServiceChannelFactory) CommandChannelFacto
 	}
 }
 
-func provideQueryProcessors(qpCount QueryProcessorsCount, qc QueryChannel, appParts appparts.IAppPartitions, qpFactory queryprocessor.ServiceFactory,
+func provideQueryProcessors(qpCount coreutils.QueryProcessorsCount, qc QueryChannel, appParts appparts.IAppPartitions, qpFactory queryprocessor.ServiceFactory,
 	imetrics imetrics.IMetrics, vvm commandprocessor.VVMName, mpq MaxPrepareQueriesType, authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer) OperatorQueryProcessors {
 	forks := make([]pipeline.ForkOperatorOptionFunc, qpCount)
 	resultSenderFactory := func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable {
@@ -499,54 +508,52 @@ func provideCommandProcessors(cpCount coreutils.CommandProcessorsCount, ccf Comm
 	return pipeline.ForkOperator(pipeline.ForkSame, forks[0], forks[1:]...)
 }
 
-func provideAsyncActualizersFactory(appStructsProvider istructs.IAppStructsProvider, n10nBroker in10n.IN10nBroker, asyncActualizerFactory projectors.AsyncActualizerFactory, secretReader isecrets.ISecretReader, metrics imetrics.IMetrics) AsyncActualizersFactory {
-	return func(vvmCtx context.Context, appQName istructs.AppQName, asyncProjectorFactories AsyncProjectorFactories, partitionID istructs.PartitionID, opts []state.ActualizerStateOptFunc) pipeline.ISyncOperator {
-		var asyncProjectors []pipeline.ForkOperatorOptionFunc
+func provideAsyncActualizersFactory(appParts appparts.IAppPartitions, appStructsProvider istructs.IAppStructsProvider, n10nBroker in10n.IN10nBroker, asyncActualizerFactory projectors.AsyncActualizerFactory, secretReader isecrets.ISecretReader, metrics imetrics.IMetrics) AsyncActualizersFactory {
+	return func(vvmCtx context.Context, appQName istructs.AppQName, asyncProjectors istructs.Projectors, partitionID istructs.PartitionID, opts []state.ActualizerStateOptFunc) pipeline.ISyncOperator {
 		appStructs, err := appStructsProvider.AppStructs(appQName)
 		if err != nil {
 			panic(err)
 		}
 
 		conf := projectors.AsyncActualizerConf{
-			Ctx:      vvmCtx,
-			AppQName: appQName,
-			// FIXME: это правильно, что постоянную appStrcuts возвращаем? Каждый раз не надо запрашивать у appStructsProvider?
+			Ctx:           vvmCtx,
+			AppQName:      appQName,
+			AppPartitions: appParts,
 			AppStructs:    func() istructs.IAppStructs { return appStructs },
 			SecretReader:  secretReader,
 			Partition:     partitionID,
 			Broker:        n10nBroker,
 			Opts:          opts,
-			IntentsLimit:  builtin.MaxCUDs,
+			IntentsLimit:  projectors.DefaultIntentsLimit,
 			FlushInterval: actualizerFlushInterval,
 			Metrics:       metrics,
 		}
 
-		asyncProjectors = make([]pipeline.ForkOperatorOptionFunc, len(asyncProjectorFactories))
-
-		for i, asyncProjectorFactory := range asyncProjectorFactories {
-			asyncProjector, err := asyncActualizerFactory(conf, asyncProjectorFactory)
+		forkOps := make([]pipeline.ForkOperatorOptionFunc, 0, len(asyncProjectors))
+		for _, prj := range asyncProjectors {
+			asyncActualizer, err := asyncActualizerFactory(conf, prj)
 			if err != nil {
 				panic(err)
 			}
-			asyncProjectors[i] = pipeline.ForkBranch(asyncProjector)
+			forkOps = append(forkOps, pipeline.ForkBranch(asyncActualizer))
 		}
-		return pipeline.ForkOperator(func(work interface{}, branchNumber int) (fork interface{}, err error) { return struct{}{}, nil }, asyncProjectors[0], asyncProjectors[1:]...)
+
+		return pipeline.ForkOperator(func(work interface{}, branchNumber int) (fork interface{}, err error) { return struct{}{}, nil }, forkOps[0], forkOps[1:]...)
 	}
 }
 
 func provideAppPartitionFactory(aaf AsyncActualizersFactory, opts []state.ActualizerStateOptFunc) AppPartitionFactory {
-	return func(vvmCtx context.Context, appQName istructs.AppQName, asyncProjectorFactories AsyncProjectorFactories, partitionID istructs.PartitionID) pipeline.ISyncOperator {
-		return aaf(vvmCtx, appQName, asyncProjectorFactories, partitionID, opts)
+	return func(vvmCtx context.Context, appQName istructs.AppQName, asyncProjectors istructs.Projectors, partitionID istructs.PartitionID) pipeline.ISyncOperator {
+		return aaf(vvmCtx, appQName, asyncProjectors, partitionID, opts)
 	}
 }
 
-// forks appPartition(just async actualizers for now) by cmd processors amount (or by partitions amount) per one app
-// [partitionAmount]appPartition(asyncActualizers)
-func provideAppServiceFactory(apf AppPartitionFactory, cpCount coreutils.CommandProcessorsCount) AppServiceFactory {
-	return func(vvmCtx context.Context, appQName istructs.AppQName, asyncProjectorFactories AsyncProjectorFactories) pipeline.ISyncOperator {
-		forks := make([]pipeline.ForkOperatorOptionFunc, cpCount)
-		for i := 0; i < int(cpCount); i++ {
-			forks[i] = pipeline.ForkBranch(apf(vvmCtx, appQName, asyncProjectorFactories, istructs.PartitionID(i)))
+// forks appPartition(just async actualizers for now) of one app by amount of partitions of the app
+func provideAppServiceFactory(apf AppPartitionFactory) AppServiceFactory {
+	return func(vvmCtx context.Context, appQName istructs.AppQName, asyncProjectors istructs.Projectors, appPartsCount int) pipeline.ISyncOperator {
+		forks := make([]pipeline.ForkOperatorOptionFunc, appPartsCount)
+		for i := 0; i < int(appPartsCount); i++ {
+			forks[i] = pipeline.ForkBranch(apf(vvmCtx, appQName, asyncProjectors, istructs.PartitionID(i)))
 		}
 		return pipeline.ForkOperator(pipeline.ForkSame, forks[0], forks[1:]...)
 	}
@@ -554,18 +561,18 @@ func provideAppServiceFactory(apf AppPartitionFactory, cpCount coreutils.Command
 
 // forks appServices per apps
 // [appsAmount]appServices
-func provideOperatorAppServices(apf AppServiceFactory, vvmApps VVMApps, asp istructs.IAppStructsProvider) OperatorAppServicesFactory {
+func provideOperatorAppServices(apf AppServiceFactory, builtInAppsPackages []BuiltInAppsPackages, asp istructs.IAppStructsProvider) OperatorAppServicesFactory {
 	return func(vvmCtx context.Context) pipeline.ISyncOperator {
 		var branches []pipeline.ForkOperatorOptionFunc
-		for _, appQName := range vvmApps {
-			as, err := asp.AppStructs(appQName)
+		for _, builtInAppPackages := range builtInAppsPackages {
+			as, err := asp.AppStructs(builtInAppPackages.Name)
 			if err != nil {
 				panic(err)
 			}
 			if len(as.AsyncProjectors()) == 0 {
 				continue
 			}
-			branch := pipeline.ForkBranch(apf(vvmCtx, appQName, as.AsyncProjectors()))
+			branch := pipeline.ForkBranch(apf(vvmCtx, builtInAppPackages.Name, as.AsyncProjectors(), builtInAppPackages.PartsCount))
 			branches = append(branches, branch)
 		}
 		if len(branches) == 0 {

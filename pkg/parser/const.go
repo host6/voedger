@@ -12,16 +12,18 @@ import (
 )
 
 const (
-	nameCDOC      = "CDoc"
-	nameODOC      = "ODoc"
-	nameWDOC      = "WDoc"
-	nameSingleton = "Singleton"
-	nameCRecord   = "CRecord"
-	nameORecord   = "ORecord"
-	nameWRecord   = "WRecord"
+	nameCDOC       = "CDoc"
+	nameODOC       = "ODoc"
+	nameWDOC       = "WDoc"
+	nameCSingleton = "CSingleton"
+	nameWSingleton = "WSingleton"
+	nameCRecord    = "CRecord"
+	nameORecord    = "ORecord"
+	nameWRecord    = "WRecord"
 )
 
 const rootWorkspaceName = "Workspace"
+const appWorkspaceName = "AppWorkspaceWS"
 
 const ExportedAppsFile = "apps.yaml"
 const ExportedPkgFolder = "pkg"

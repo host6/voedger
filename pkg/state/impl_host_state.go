@@ -12,6 +12,8 @@ import (
 )
 
 type hostState struct {
+	istructs.IPkgNameResolver
+	appStructsFunc AppStructsFunc
 	name           string
 	storages       map[appdef.QName]IStateStorage
 	withGet        map[appdef.QName]IWithGet
@@ -24,7 +26,15 @@ type hostState struct {
 	intentsLimit   int
 }
 
-func newHostState(name string, intentsLimit int) *hostState {
+func (s *hostState) PLogEvent() istructs.IPLogEvent {
+	panic("PLogEvent only available in actualizers")
+}
+
+func (s *hostState) App() istructs.AppQName {
+	return s.appStructsFunc().AppQName()
+}
+
+func newHostState(name string, intentsLimit int, appStructsFunc AppStructsFunc) *hostState {
 	return &hostState{
 		name:           name,
 		storages:       make(map[appdef.QName]IStateStorage),
@@ -36,11 +46,20 @@ func newHostState(name string, intentsLimit int) *hostState {
 		withUpdate:     make(map[appdef.QName]IWithUpdate),
 		intents:        make(map[appdef.QName][]ApplyBatchItem),
 		intentsLimit:   intentsLimit,
+		appStructsFunc: appStructsFunc,
 	}
 }
 
 func supports(ops int, op int) bool {
 	return ops&op == op
+}
+
+func (s *hostState) PackageFullPath(localName string) string {
+	return s.appStructsFunc().AppDef().PackageFullPath(localName)
+}
+
+func (s *hostState) PackageLocalName(fullPath string) string {
+	return s.appStructsFunc().AppDef().PackageLocalName(fullPath)
 }
 
 func (s *hostState) addStorage(storageName appdef.QName, storage IStateStorage, ops int) {
@@ -240,7 +259,11 @@ func (s *hostState) NewValue(key istructs.IStateKeyBuilder) (eb istructs.IStateV
 	}
 
 	// TODO later: implement re-using of value builders
-	builder := storage.ProvideValueBuilder(key, nil)
+	builder, err := storage.ProvideValueBuilder(key, nil)
+	if err != nil {
+		// notest
+		return nil, err
+	}
 	s.putToIntents(key.Storage(), key, builder)
 
 	return builder, nil
@@ -256,7 +279,11 @@ func (s *hostState) UpdateValue(key istructs.IStateKeyBuilder, existingValue ist
 	}
 
 	// TODO later: implement re-using of value builders
-	builder := storage.ProvideValueBuilderForUpdate(key, existingValue, nil)
+	builder, err := storage.ProvideValueBuilderForUpdate(key, existingValue, nil)
+	if err != nil {
+		// notest
+		return nil, err
+	}
 	s.putToIntents(key.Storage(), key, builder)
 
 	return builder, nil

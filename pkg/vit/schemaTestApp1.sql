@@ -3,6 +3,16 @@
 
 APPLICATION app1();
 
+ALTERABLE WORKSPACE test_wsWS_another (
+	DESCRIPTOR test_ws_another ();
+
+	TABLE docInAnotherWS INHERITS CDoc();
+
+	EXTENSION ENGINE BUILTIN (
+		COMMAND testCmd();
+	);
+);
+
 ALTERABLE WORKSPACE test_wsWS (
 
 	DESCRIPTOR test_ws (
@@ -429,7 +439,7 @@ ALTERABLE WORKSPACE test_wsWS (
 		UNIQUEFIELD Int
 	);
 
-	TABLE Config INHERITS Singleton (
+	TABLE Config INHERITS CSingleton (
 		Fld1 varchar NOT NULL
 	);
 
@@ -506,6 +516,8 @@ ALTERABLE WORKSPACE test_wsWS (
 
 		COMMAND CmdODocOne(odoc1);
 		COMMAND CmdODocTwo(odoc2, UNLOGGED odoc2);
+
+		COMMAND TestCmdRawArg(sys.Raw);
 		PROJECTOR ProjDummy AFTER INSERT ON (CRecord) INTENTS(View(View)); -- does nothing, only to define view.app1pkg.View
 	);
 );

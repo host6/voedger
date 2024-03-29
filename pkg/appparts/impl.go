@@ -6,8 +6,10 @@
 package appparts
 
 import (
-	"fmt"
+	"context"
+	"errors"
 	"sync"
+	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/cluster"
@@ -15,18 +17,20 @@ import (
 )
 
 type apps struct {
-	structs    istructs.IAppStructsProvider
-	actualizer SyncActualizerFactory
-	apps       map[istructs.AppQName]*app
-	mx         sync.RWMutex
+	structs                   istructs.IAppStructsProvider
+	syncActualizerFactory     SyncActualizerFactory
+	extEngineFactoriesFactory ExtensionEngineFactoriesFactory
+	apps                      map[istructs.AppQName]*app
+	mx                        sync.RWMutex
 }
 
-func newAppPartitions(structs istructs.IAppStructsProvider, actualizer SyncActualizerFactory) (ap IAppPartitions, cleanup func(), err error) {
+func newAppPartitions(asp istructs.IAppStructsProvider, saf SyncActualizerFactory, eff ExtensionEngineFactoriesFactory) (ap IAppPartitions, cleanup func(), err error) {
 	a := &apps{
-		structs:    structs,
-		actualizer: actualizer,
-		apps:       map[istructs.AppQName]*app{},
-		mx:         sync.RWMutex{},
+		structs:                   asp,
+		syncActualizerFactory:     saf,
+		extEngineFactoriesFactory: eff,
+		apps:                      map[istructs.AppQName]*app{},
+		mx:                        sync.RWMutex{},
 	}
 	return a, func() {}, err
 }
@@ -35,18 +39,19 @@ func (aps *apps) DeployApp(name istructs.AppQName, def appdef.IAppDef, partsCoun
 	aps.mx.Lock()
 	defer aps.mx.Unlock()
 
-	a, ok := aps.apps[name]
-	if !ok {
-		a = newApplication(aps, name)
-		aps.apps[name] = a
+	if _, ok := aps.apps[name]; ok {
+		panic(errAppCannotToBeRedeployed(name))
 	}
+
+	a := newApplication(aps, name, partsCount)
+	aps.apps[name] = a
 
 	appStructs, err := aps.structs.AppStructsByDef(name, def)
 	if err != nil {
 		panic(err)
 	}
 
-	a.deploy(def, appStructs, partsCount, engines)
+	a.deploy(def, appStructs, engines)
 }
 
 func (aps *apps) DeployAppPartitions(appName istructs.AppQName, partIDs []istructs.PartitionID) {
@@ -55,7 +60,7 @@ func (aps *apps) DeployAppPartitions(appName istructs.AppQName, partIDs []istruc
 
 	a, ok := aps.apps[appName]
 	if !ok {
-		panic(fmt.Errorf(errAppNotFound, appName, ErrNotFound))
+		panic(errAppNotFound(appName))
 	}
 
 	for _, id := range partIDs {
@@ -65,19 +70,28 @@ func (aps *apps) DeployAppPartitions(appName istructs.AppQName, partIDs []istruc
 }
 
 func (aps *apps) AppDef(appName istructs.AppQName) (appdef.IAppDef, error) {
+	aps.mx.Lock()
+	defer aps.mx.Unlock()
+
 	app, ok := aps.apps[appName]
 	if !ok {
-		return nil, fmt.Errorf(errAppNotFound, appName, ErrNotFound)
+		return nil, errAppNotFound(appName)
 	}
 	return app.def, nil
 }
 
+// Returns _total_ application partitions count.
+//
+// This is a configuration value for the application, independent of how many sections are currently deployed.
 func (aps *apps) AppPartsCount(appName istructs.AppQName) (int, error) {
+	aps.mx.Lock()
+	defer aps.mx.Unlock()
+
 	app, ok := aps.apps[appName]
 	if !ok {
-		return 0, fmt.Errorf(errAppNotFound, appName, ErrNotFound)
+		return 0, errAppNotFound(appName)
 	}
-	return len(app.parts), nil
+	return app.partsCount, nil
 }
 
 func (aps *apps) Borrow(appName istructs.AppQName, partID istructs.PartitionID, proc cluster.ProcessorKind) (IAppPartition, error) {
@@ -86,12 +100,12 @@ func (aps *apps) Borrow(appName istructs.AppQName, partID istructs.PartitionID, 
 
 	app, ok := aps.apps[appName]
 	if !ok {
-		return nil, fmt.Errorf(errAppNotFound, appName, ErrNotFound)
+		return nil, errAppNotFound(appName)
 	}
 
 	part, ok := app.parts[partID]
 	if !ok {
-		return nil, fmt.Errorf(errPartitionNotFound, appName, partID, ErrNotFound)
+		return nil, errPartitionNotFound(appName, partID)
 	}
 
 	borrowed, err := part.borrow(proc)
@@ -100,4 +114,19 @@ func (aps *apps) Borrow(appName istructs.AppQName, partID istructs.PartitionID, 
 	}
 
 	return borrowed, nil
+}
+
+func (aps *apps) WaitForBorrow(ctx context.Context, appName istructs.AppQName, partID istructs.PartitionID, proc cluster.ProcessorKind) (IAppPartition, error) {
+	for ctx.Err() == nil {
+		ap, err := aps.Borrow(appName, partID, proc)
+		if err == nil {
+			return ap, nil
+		}
+		if errors.Is(err, ErrNotAvailableEngines) {
+			time.Sleep(AppPartitionBorrowRetryDelay)
+			continue
+		}
+		return nil, err
+	}
+	return nil, ctx.Err()
 }

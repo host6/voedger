@@ -20,6 +20,16 @@ func newApplication() *Application {
 func (a *Application) read(app istructs.IAppStructs, rateLimits map[appdef.QName]map[istructs.RateLimitKind]istructs.RateLimit) {
 	a.Packages = make(map[string]*Package)
 
+	app.AppDef().Packages(func(localName, fullPath string) {
+		if localName == appdef.SysPackage {
+			return
+		}
+		pkg := newPackage()
+		pkg.Name = localName
+		pkg.Path = fullPath
+		a.Packages[localName] = pkg
+	})
+
 	a.Name = app.AppQName()
 
 	app.AppDef().Types(func(typ appdef.IType) {

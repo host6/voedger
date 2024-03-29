@@ -31,7 +31,7 @@ func TestWrongTypes(t *testing.T) {
 		}
 	}
 	done := make(chan struct{})
-	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter)
+	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs)
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 
 	appDef, appStructsProvider, appTokens := getTestCfg(require, nil)
@@ -39,7 +39,7 @@ func TestWrongTypes(t *testing.T) {
 	appParts, cleanAppParts, err := appparts.New(appStructsProvider)
 	require.NoError(err)
 	defer cleanAppParts()
-	appParts.DeployApp(appName, appDef, appPartsCount, appEngines)
+	appParts.DeployApp(appName, appDef, partCount, appEngines)
 	appParts.DeployAppPartitions(appName, []istructs.PartitionID{partID})
 
 	queryProcessor := ProvideServiceFactory()(
@@ -276,11 +276,10 @@ func TestWrongTypes(t *testing.T) {
 		},
 	}
 
-	query := appDef.Query(qNameFunction)
 	sysToken := getSystemToken(appTokens)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			qm := NewQueryMessage(context.Background(), appName, partID, 1, nil, []byte(test.body), query, "", sysToken)
+			qm := NewQueryMessage(context.Background(), appName, partID, wsID, nil, []byte(test.body), qNameFunction, "", sysToken)
 			serviceChannel <- qm
 			err := <-errs
 			require.Contains(err.Error(), test.err)

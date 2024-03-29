@@ -20,13 +20,10 @@ import (
 )
 
 func provideRefIntegrityValidation(cfg *istructsmem.AppConfigType, appDefBuilder appdef.IAppDefBuilder) {
-	registryProjector := func(partition istructs.PartitionID) istructs.Projector {
-		return istructs.Projector{
-			Name: qNameRecordsRegistryProjector,
-			Func: provideRecordsRegistryProjector(cfg),
-		}
-	}
-	cfg.AddSyncProjectors(registryProjector)
+	cfg.AddSyncProjectors(istructs.Projector{
+		Name: qNameRecordsRegistryProjector,
+		Func: provideRecordsRegistryProjector(cfg),
+	})
 	cfg.AddCUDValidators(provideRefIntegrityValidator())
 }
 
@@ -127,7 +124,7 @@ func writeRegistry(st istructs.IState, intents istructs.IIntents, idToStore istr
 func provideRefIntegrityValidator() istructs.CUDValidator {
 	return istructs.CUDValidator{
 		Match: func(cud istructs.ICUDRow, wsid istructs.WSID, cmdQName appdef.QName) bool {
-			return !coreutils.IsDummyWS(wsid) && cmdQName != QNameCommandInit
+			return cmdQName != QNameCommandInit
 		},
 		Validate: func(ctx context.Context, appStructs istructs.IAppStructs, cudRow istructs.ICUDRow, wsid istructs.WSID, cmdQName appdef.QName) (err error) {
 			if err = CheckRefIntegrity(cudRow, appStructs, wsid); err == nil {

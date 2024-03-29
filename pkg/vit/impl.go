@@ -9,7 +9,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"runtime"
 	"strconv"
 	"sync"
@@ -26,6 +25,7 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
+	"github.com/voedger/voedger/pkg/itokensjwt"
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/state/smtptest"
 	"github.com/voedger/voedger/pkg/sys/authnz"
@@ -34,7 +34,7 @@ import (
 	"github.com/voedger/voedger/pkg/vvm"
 )
 
-func NewVIT(t *testing.T, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
+func NewVIT(t testing.TB, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
 	useCas := coreutils.IsCassandraStorage()
 	if !vitCfg.isShared {
 		vit = newVit(t, vitCfg, useCas)
@@ -67,7 +67,7 @@ func NewVIT(t *testing.T, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
 	return vit
 }
 
-func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
+func newVit(t testing.TB, vitCfg *VITConfig, useCas bool) *VIT {
 	cfg := vvm.NewVVMDefaultConfig()
 
 	// only dynamic ports are used in tests
@@ -75,6 +75,9 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 	cfg.MetricsServicePort = 0
 
 	cfg.TimeFunc = coreutils.TimeFunc(func() time.Time { return ts.now() })
+	if !coreutils.IsTest() {
+		cfg.SecretsReader = itokensjwt.ProvideTestSecretsReader(cfg.SecretsReader)
+	}
 
 	emailMessagesChan := make(chan smtptest.Message, 1) // must be buffered
 	cfg.ActualizerStateOpts = append(cfg.ActualizerStateOpts, state.WithEmailMessagesChan(emailMessagesChan))
@@ -106,6 +109,14 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 	vvm, err := vvm.ProvideVVM(&cfg, 0)
 	require.NoError(t, err)
 
+	// register workspace templates
+	for _, app := range vitPreConfig.vitApps {
+		ep := vvm.AppsExtensionPoints[app.name]
+		for _, tf := range app.wsTemplateFuncs {
+			tf(ep)
+		}
+	}
+
 	vit := &VIT{
 		VoedgerVM:            vvm,
 		VVMConfig:            &cfg,
@@ -124,19 +135,6 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 	require.NoError(t, vit.Launch())
 
 	for _, app := range vitPreConfig.vitApps {
-		// deploy app and partitions
-		as, err := vit.AppStructs(app.name)
-		require.NoError(t, err)
-
-		if !app.name.IsSys() {
-			vit.VVM.APIs.IAppPartitions.DeployApp(app.name, as.AppDef(), app.deployment.PartsCount, app.deployment.EnginePoolSize)
-			appParts := []istructs.PartitionID{}
-			for pid := 0; pid < app.deployment.PartsCount; pid++ {
-				appParts = append(appParts, istructs.PartitionID(pid))
-			}
-			vit.VVM.APIs.IAppPartitions.DeployAppPartitions(app.name, appParts)
-		}
-
 		// generate verified value tokens if queried
 		//                desiredValue token
 		verifiedValues := map[string]string{}
@@ -179,6 +177,7 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 			}
 		}
 
+		// time.Sleep(10 * time.Second)
 		sysToken, err := payloads.GetSystemPrincipalToken(vit, app.name)
 		require.NoError(vit.T, err)
 		for _, wsd := range app.ws {
@@ -196,6 +195,9 @@ func newVit(t *testing.T, vitCfg *VITConfig, useCas bool) *VIT {
 
 			handleWSParam(vit, appWorkspaces[wsd.Name], appWorkspaces, verifiedValues, sysToken)
 		}
+	}
+	if vitPreConfig.postInitFunc != nil {
+		vitPreConfig.postInitFunc(vit)
 	}
 	return vit
 }
@@ -241,34 +243,13 @@ func handleWSParam(vit *VIT, appWS *AppWorkspace, appWorkspaces map[string]*AppW
 	}
 }
 
-func NewVITLocalCassandra(t *testing.T, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
-	vit = newVit(t, vitCfg, true)
+func NewVITLocalCassandra(tb testing.TB, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
+	vit = newVit(tb, vitCfg, true)
 	for _, opt := range opts {
 		opt(vit)
 	}
 
 	return vit
-}
-
-// WSID as wsid[0] or 1, system owner
-// command processor will skip initialization check for that workspace
-func (vit *VIT) DummyWS(appQName istructs.AppQName, awsid ...istructs.WSID) *AppWorkspace {
-	wsid := istructs.WSID(1)
-	if len(awsid) > 0 {
-		wsid = awsid[0]
-	}
-	coreutils.AddDummyWS(wsid)
-	sysPrn := vit.GetSystemPrincipal(appQName)
-	return &AppWorkspace{
-		WorkspaceDescriptor: WorkspaceDescriptor{
-			WSParams: WSParams{
-				Kind:      appdef.NullQName,
-				ClusterID: istructs.MainClusterID,
-			},
-			WSID: wsid,
-		},
-		Owner: sysPrn,
-	}
 }
 
 func (vit *VIT) WS(appQName istructs.AppQName, wsName string) *AppWorkspace {
@@ -367,17 +348,9 @@ func (vit *VIT) PostWSSys(ws *AppWorkspace, funcName string, body string, opts .
 	return vit.PostApp(ws.Owner.AppQName, ws.WSID, funcName, body, opts...)
 }
 
-func (vit *VIT) PostFree(url string, body string, opts ...coreutils.ReqOptFunc) *coreutils.HTTPResponse {
-	vit.T.Helper()
-	opts = append(opts, coreutils.WithMethod(http.MethodPost))
-	res, err := coreutils.Req(url, body, opts...)
-	require.NoError(vit.T, err)
-	return res
-}
-
 func (vit *VIT) Post(url string, body string, opts ...coreutils.ReqOptFunc) *coreutils.HTTPResponse {
 	vit.T.Helper()
-	res, err := coreutils.FederationPOST(vit.IFederation.URL(), url, body, opts...)
+	res, err := vit.POST(url, body, opts...)
 	require.NoError(vit.T, err)
 	return res
 }
@@ -385,14 +358,14 @@ func (vit *VIT) Post(url string, body string, opts ...coreutils.ReqOptFunc) *cor
 func (vit *VIT) PostApp(appQName istructs.AppQName, wsid istructs.WSID, funcName string, body string, opts ...coreutils.ReqOptFunc) *coreutils.FuncResponse {
 	vit.T.Helper()
 	url := fmt.Sprintf("api/%s/%d/%s", appQName, wsid, funcName)
-	res, err := coreutils.FederationFunc(vit.IFederation.URL(), url, body, opts...)
+	res, err := vit.Func(url, body, opts...)
 	require.NoError(vit.T, err)
 	return res
 }
 
 func (vit *VIT) Get(url string, opts ...coreutils.ReqOptFunc) *coreutils.HTTPResponse {
 	vit.T.Helper()
-	res, err := coreutils.FederationReq(vit.IFederation.URL(), url, "", opts...)
+	res, err := vit.GET(url, "", opts...)
 	require.NoError(vit.T, err)
 	return res
 }
@@ -478,6 +451,7 @@ func (vit *VIT) MockBuckets(appQName istructs.AppQName, rateLimitName string, bs
 // no emails during testEmailsAwaitingTimeout -> test failed
 // an email was sent but CaptureEmail is not called -> test will be failed on VIT.TearDown()
 func (vit *VIT) CaptureEmail() (msg smtptest.Message) {
+	vit.T.Helper()
 	tmr := time.NewTimer(testEmailsAwaitingTimeout)
 	select {
 	case msg = <-vit.emailCaptor:
@@ -486,6 +460,43 @@ func (vit *VIT) CaptureEmail() (msg smtptest.Message) {
 		vit.T.Fatal("no email messages")
 	}
 	return
+}
+
+// sets delay on IAppStorage.Get() in mem implementation
+// will be automatically reset to 0 on TearDown
+func (vit *VIT) SetMemStorageGetDelay(delay time.Duration) {
+	vit.T.Helper()
+	vit.iterateDelaySetters(func(delaySetter istorage.IStorageDelaySetter) {
+		delaySetter.SetTestDelayGet(delay)
+		vit.cleanups = append(vit.cleanups, func(vit *VIT) {
+			delaySetter.SetTestDelayGet(0)
+		})
+	})
+}
+
+// sets delay on IAppStorage.Put() in mem implementation
+// will be automatically reset to 0 on TearDown
+func (vit *VIT) SetMemStoragePutDelay(delay time.Duration) {
+	vit.T.Helper()
+	vit.iterateDelaySetters(func(delaySetter istorage.IStorageDelaySetter) {
+		delaySetter.SetTestDelayPut(delay)
+		vit.cleanups = append(vit.cleanups, func(vit *VIT) {
+			delaySetter.SetTestDelayPut(0)
+		})
+	})
+}
+
+func (vit *VIT) iterateDelaySetters(cb func(delaySetter istorage.IStorageDelaySetter)) {
+	vit.T.Helper()
+	for anyAppQName := range vit.VVMAppsBuilder {
+		as, err := vit.AppStorage(anyAppQName)
+		require.NoError(vit.T, err)
+		delaySetter, ok := as.(istorage.IStorageDelaySetter)
+		if !ok {
+			vit.T.Fatal("IAppStorage implementation is not in-mem")
+		}
+		cb(delaySetter)
+	}
 }
 
 func (ts *timeService) now() time.Time {
@@ -520,7 +531,7 @@ func ScanSSE(data []byte, atEOF bool) (advance int, token []byte, err error) {
 	return 0, nil, nil
 }
 
-func (ec emailCaptor) checkEmpty(t *testing.T) {
+func (ec emailCaptor) checkEmpty(t testing.TB) {
 	select {
 	case _, ok := <-ec:
 		if ok {

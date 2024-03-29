@@ -111,10 +111,50 @@ func ObjectToMap(obj istructs.IObject, appDef appdef.IAppDef, opts ...MapperOpt)
 		var childMap map[string]interface{}
 		cont := []map[string]interface{}{}
 		obj.Children(container, func(c istructs.IObject) {
+
 			childMap = ObjectToMap(c, appDef, opts...)
 			cont = append(cont, childMap)
 		})
 		res[container] = cont
 	})
 	return res
+}
+
+type cudsOpts struct {
+	filter     func(appdef.QName) bool
+	mapperOpts []MapperOpt
+}
+
+type CUDsOpt func(*cudsOpts)
+
+func WithFilter(filterFunc func(appdef.QName) bool) CUDsOpt {
+	return func(co *cudsOpts) {
+		co.filter = filterFunc
+	}
+}
+
+func WithMapperOpts(opts ...MapperOpt) CUDsOpt {
+	return func(co *cudsOpts) {
+		co.mapperOpts = opts
+	}
+}
+
+func CUDsToMap(event istructs.IDbEvent, appDef appdef.IAppDef, optFuncs ...CUDsOpt) []map[string]interface{} {
+	cuds := make([]map[string]interface{}, 0)
+	opts := cudsOpts{}
+	for _, f := range optFuncs {
+		f(&opts)
+	}
+	event.CUDs(func(rec istructs.ICUDRow) {
+		if opts.filter != nil && !opts.filter(rec.QName()) {
+			return
+		}
+		cudData := make(map[string]interface{})
+		cudData["sys.ID"] = rec.ID()
+		cudData["sys.QName"] = rec.QName().String()
+		cudData["IsNew"] = rec.IsNew()
+		cudData["fields"] = FieldsToMap(rec, appDef, opts.mapperOpts...)
+		cuds = append(cuds, cudData)
+	})
+	return cuds
 }

@@ -729,22 +729,23 @@ func Test_EventUpdateRawCud(t *testing.T) {
 	docName := appdef.NewQName("test", "cDoc")
 	recName := appdef.NewQName("test", "cRec")
 
-	appDef := appdef.New()
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
 
 	t.Run("must ok to construct application", func(t *testing.T) {
-		doc := appDef.AddCDoc(docName)
+		doc := adb.AddCDoc(docName)
 		doc.AddField("new", appdef.DataKind_bool, true)
 		doc.AddField("rec", appdef.DataKind_RecordID, false)
 		doc.AddField("emptied", appdef.DataKind_string, false)
 		doc.AddContainer("rec", recName, 0, 1)
 
-		rec := appDef.AddCRecord(recName)
+		rec := adb.AddCRecord(recName)
 		rec.AddField("data", appdef.DataKind_string, false)
 	})
 
 	cfgs := func() AppConfigsType {
 		cfgs := make(AppConfigsType, 1)
-		cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+		cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
 		return cfgs
 	}()
 
@@ -910,19 +911,22 @@ func Test_SingletonCDocEvent(t *testing.T) {
 	docName, doc2Name := appdef.NewQName("test", "cDoc"), appdef.NewQName("test", "cDoc2")
 	docID := istructs.NullRecordID
 
-	appDef := appdef.New()
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
 
 	t.Run("must ok to construct singleton CDoc", func(t *testing.T) {
-		doc := appDef.AddSingleton(docName)
+		doc := adb.AddCDoc(docName)
+		doc.SetSingleton()
 		doc.AddField("option", appdef.DataKind_int64, true)
 
-		doc2 := appDef.AddSingleton(doc2Name)
+		doc2 := adb.AddCDoc(doc2Name)
+		doc2.SetSingleton()
 		doc2.AddField("option", appdef.DataKind_int64, true)
 	})
 
 	cfgs := func() AppConfigsType {
 		cfgs := make(AppConfigsType, 1)
-		cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+		cfgs.AddConfig(istructs.AppQName_test1_app1, adb)
 		return cfgs
 	}()
 
@@ -1688,7 +1692,7 @@ func Test_objectType_FillFromJSON(t *testing.T) {
 				require.Equal(test.testObj, o.QName())
 				require.EqualValues(1, o.AsInt32("int32"))
 				require.EqualValues(2, o.AsInt64("int64"))
-				require.EqualValues(3.3, o.AsFloat32("float32"))
+				require.EqualValues(float32(3.3), o.AsFloat32("float32"))
 				require.EqualValues(4.4, o.AsFloat64("float64"))
 				require.EqualValues(true, o.AsBool("bool"))
 				require.EqualValues("test", o.AsString("string"))

@@ -7,42 +7,22 @@ package state
 import (
 	"context"
 
-	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
 func implProvideCommandProcessorState(ctx context.Context, appStructsFunc AppStructsFunc, partitionIDFunc PartitionIDFunc,
 	wsidFunc WSIDFunc, secretReader isecrets.ISecretReader, cudFunc CUDFunc, principalsFunc PrincipalsFunc,
-	tokenFunc TokenFunc, intentsLimit int, cmdResultBuilderFunc CmdResultBuilderFunc) IHostState {
-	bs := newHostState("CommandProcessor", intentsLimit)
+	tokenFunc TokenFunc, intentsLimit int, cmdResultBuilderFunc CmdResultBuilderFunc, argFunc ArgFunc, unloggedArgFunc UnloggedArgFunc) IHostState {
+	bs := newHostState("CommandProcessor", intentsLimit, appStructsFunc)
 
-	bs.addStorage(View, &viewRecordsStorage{
-		ctx:             ctx,
-		viewRecordsFunc: func() istructs.IViewRecords { return appStructsFunc().ViewRecords() },
-		appDefFunc:      func() appdef.IAppDef { return appStructsFunc().AppDef() },
-		wsidFunc:        wsidFunc,
-	}, S_GET|S_GET_BATCH)
-
-	bs.addStorage(Record, &recordsStorage{
-		recordsFunc: func() istructs.IRecords { return appStructsFunc().Records() },
-		cudFunc:     cudFunc,
-		appDefFunc:  func() appdef.IAppDef { return appStructsFunc().AppDef() },
-		wsidFunc:    wsidFunc,
-	}, S_GET|S_GET_BATCH|S_INSERT|S_UPDATE)
+	bs.addStorage(View, newViewRecordsStorage(ctx, appStructsFunc, wsidFunc, nil), S_GET|S_GET_BATCH)
+	bs.addStorage(Record, newRecordsStorage(appStructsFunc, wsidFunc, cudFunc), S_GET|S_GET_BATCH|S_INSERT|S_UPDATE)
 
 	bs.addStorage(WLog, &wLogStorage{
 		ctx:        ctx,
 		eventsFunc: func() istructs.IEvents { return appStructsFunc().Events() },
-		appDefFunc: func() appdef.IAppDef { return appStructsFunc().AppDef() },
 		wsidFunc:   wsidFunc,
-	}, S_GET)
-
-	bs.addStorage(PLog, &pLogStorage{
-		ctx:             ctx,
-		eventsFunc:      func() istructs.IEvents { return appStructsFunc().Events() },
-		appDefFunc:      func() appdef.IAppDef { return appStructsFunc().AppDef() },
-		partitionIDFunc: partitionIDFunc,
 	}, S_GET)
 
 	bs.addStorage(AppSecret, &appSecretsStorage{secretReader: secretReader}, S_GET)
@@ -55,6 +35,12 @@ func implProvideCommandProcessorState(ctx context.Context, appStructsFunc AppStr
 	bs.addStorage(Result, &cmdResultStorage{
 		cmdResultBuilderFunc: cmdResultBuilderFunc,
 	}, S_INSERT)
+
+	bs.addStorage(CommandContext, &commandContextStorage{
+		argFunc:         argFunc,
+		unloggedArgFunc: unloggedArgFunc,
+		wsidFunc:        wsidFunc,
+	}, S_GET)
 
 	return bs
 }

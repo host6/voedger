@@ -14,31 +14,31 @@ import (
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
-type predicate func(appDef appdef.IAppDef, qName appdef.QName) bool
+type predicate func(iws appdef.IWorkspace, qName appdef.QName) bool
 
 type Filter struct {
 	predicates []predicate
-	appDef     appdef.IAppDef
+	iWorkspace appdef.IWorkspace
 }
 
-func NewFilter(appDef appdef.IAppDef, eventTypes []string, epJournalPredicates extensionpoints.IExtensionPoint) (Filter, error) {
+func NewFilter(iws appdef.IWorkspace, eventTypes []string, epJournalPredicates extensionpoints.IExtensionPoint) (Filter, error) {
 	pp := make([]predicate, len(eventTypes))
 	for i, eventType := range eventTypes {
 		p, ok := epJournalPredicates.Find(eventType)
 		if !ok {
 			return Filter{}, fmt.Errorf("invalid event type: %s", eventType)
 		}
-		pp[i] = p.(func(appDef appdef.IAppDef, qName appdef.QName) bool)
+		pp[i] = p.(func(iws appdef.IWorkspace, qName appdef.QName) bool)
 	}
 	return Filter{
 		predicates: pp,
-		appDef:     appDef,
+		iWorkspace: iws,
 	}, nil
 }
 
 func (f Filter) isMatch(qName appdef.QName) bool {
 	for _, p := range f.predicates {
-		if p(f.appDef, qName) {
+		if p(f.iWorkspace, qName) {
 			return true
 		}
 	}
@@ -68,18 +68,7 @@ func NewEventObject(event istructs.IWLogEvent, appDef appdef.IAppDef, f Filter, 
 		data["args"] = coreutils.ObjectToMap(event.ArgumentObject(), appDef, opts...)
 		noArgs = false
 	}
-	cuds := make([]map[string]interface{}, 0)
-	event.CUDs(func(rec istructs.ICUDRow) {
-		if !f.isMatch(rec.QName()) {
-			return
-		}
-		cud := make(map[string]interface{})
-		cud["sys.ID"] = rec.ID()
-		cud["sys.QName"] = rec.QName().String()
-		cud["IsNew"] = rec.IsNew()
-		cud["fields"] = coreutils.FieldsToMap(rec, appDef, opts...)
-		cuds = append(cuds, cud)
-	})
+	cuds := coreutils.CUDsToMap(event, appDef, coreutils.WithFilter(f.isMatch), coreutils.WithMapperOpts(opts...))
 	data["cuds"] = cuds
 	bb, err = json.Marshal(&data)
 	eo := &EventObject{

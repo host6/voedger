@@ -15,7 +15,7 @@ import (
 
 var ErrDirContainsNoSchemaFiles = errors.New("no schema files in directory")
 var ErrNoQualifiedName = errors.New("empty qualified name")
-var ErrEmptyFileAstList = errors.New("empty file ast list")
+var ErrEmptyFileAstList = errors.New("no valid schema files")
 var ErrFunctionParamsIncorrect = errors.New("function parameters do not match")
 var ErrFunctionResultIncorrect = errors.New("function result do not match")
 var ErrPrimaryKeyRedefined = errors.New("redefinition of primary key")
@@ -40,8 +40,18 @@ var ErrPackageWithSameNameAlreadyIncludedInApp = errors.New("package with the sa
 var ErrStorageDeclaredOnlyInSys = errors.New("storages are only declared in sys package")
 var ErrPkgFolderNotFound = errors.New("pkg folder not found")
 
+var ErrScheduledProjectorNotInAppWorkspace = errors.New("scheduled projector must be in app workspace")
+
+func ErrLocalPackageNameRedeclared(localPkgName, newLocalPkgName string) error {
+	return fmt.Errorf("local package name %s was redeclared as %s", localPkgName, newLocalPkgName)
+}
+
 func ErrAppDoesNotDefineUseOfPackage(name string) error {
 	return fmt.Errorf("application does not define use of package %s", name)
+}
+
+func ErrInvalidCronSchedule(schedule string) error {
+	return fmt.Errorf("invalid cron schedule: %s", schedule)
 }
 
 func ErrUndefinedCommand(name DefQName) error {
@@ -105,6 +115,10 @@ func ErrReferenceToAbstractTable(tblName string) error {
 	return fmt.Errorf("reference to abstract table %s", tblName)
 }
 
+func ErrReferenceToTableNotInWorkspace(tblName string) error {
+	return fmt.Errorf("table %s not included into workspace", tblName)
+}
+
 func ErrNestedAbstractTable(tblName string) error {
 	return fmt.Errorf("nested abstract table %s", tblName)
 }
@@ -149,12 +163,12 @@ func ErrStorageRequiresEntity(name string) error {
 	return fmt.Errorf("storage %s requires entity", name)
 }
 
-func ErrStorageNotInProjectorState(name string) error {
-	return fmt.Errorf("storage %s is not available in the state of projectors", name)
+func ErrStorageNotInState(name string) error {
+	return fmt.Errorf("this kind of extension cannot use storage %s in the state", name)
 }
 
-func ErrStorageNotInProjectorIntents(name string) error {
-	return fmt.Errorf("storage %s is not available in the intents of projectors", name)
+func ErrStorageNotInIntents(name string) error {
+	return fmt.Errorf("this kind of extension cannot use storage %s in the intents", name)
 }
 
 func ErrRedefined(name string) error {

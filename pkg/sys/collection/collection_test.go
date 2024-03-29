@@ -17,10 +17,13 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/iauthnzimpl"
+	"github.com/voedger/voedger/pkg/iextengine"
+	"github.com/voedger/voedger/pkg/in10n"
+	"github.com/voedger/voedger/pkg/in10nmem"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/iratesce"
+	"github.com/voedger/voedger/pkg/isecretsimpl"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -28,21 +31,20 @@ import (
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/itokensjwt"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
-	"github.com/voedger/voedger/pkg/pipeline"
 	queryprocessor "github.com/voedger/voedger/pkg/processors/query"
 	"github.com/voedger/voedger/pkg/projectors"
 	"github.com/voedger/voedger/pkg/state"
+	wsdescutil "github.com/voedger/voedger/pkg/utils/wsdesc"
+	"github.com/voedger/voedger/pkg/vvm/engines"
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 )
 
 var cocaColaDocID istructs.RecordID
-var collectionQuery appdef.IQuery
-var getCDocQuery appdef.IQuery
-var stateQuery appdef.IQuery
+var qNameTestWSKind = appdef.NewQName(appdef.SysPackage, "test_ws")
 
 const maxPrepareQueries = 10
 
-func buildAppParts(t *testing.T) (appParts appparts.IAppPartitions, cleanup func()) {
+func deployTestApp(t *testing.T) (appParts appparts.IAppPartitions, appStructs istructs.IAppStructs, cleanup func()) {
 	require := require.New(t)
 
 	cfgs := make(istructsmem.AppConfigsType, 1)
@@ -54,6 +56,8 @@ func buildAppParts(t *testing.T) (appParts appparts.IAppPartitions, cleanup func
 	{
 		Provide(cfg, adb)
 
+		adb.AddPackage("test", "test.org/test")
+
 		// this should be done in tests only. Runtime -> the projector is defined in sys.sql already
 		adb.AddCDoc(istructs.QNameCDoc)
 		adb.AddODoc(istructs.QNameODoc)
@@ -61,33 +65,53 @@ func buildAppParts(t *testing.T) (appParts appparts.IAppPartitions, cleanup func
 		adb.AddCRecord(istructs.QNameCRecord)
 		adb.AddORecord(istructs.QNameORecord)
 		adb.AddWRecord(istructs.QNameWRecord)
-		adb.AddProjector(QNameProjectorCollection).
-			AddEvent(istructs.QNameCRecord, appdef.ProjectorEventKind_Insert, appdef.ProjectorEventKind_Update).
-			AddIntent(state.View, QNameCollectionView).
-			SetSync(true)
+
+		prj := adb.AddProjector(QNameProjectorCollection)
+		prj.SetSync(true).
+			Events().Add(istructs.QNameCRecord, appdef.ProjectorEventKind_Insert, appdef.ProjectorEventKind_Update)
+		prj.Intents().
+			Add(state.View, QNameCollectionView) // this view will be added below
 	}
 	{
 		// fill IAppDef with funcs. That is done here manually because we o not use sys.sql here
 		qNameCollectionParams := appdef.NewQName(appdef.SysPackage, "CollectionParams")
 
 		// will add func definitions to AppDef manually because local test does not use sql. In runtime these definitions will come from sys.sql
+		adb.AddObject(qNameCollectionParams).
+			AddField(field_Schema, appdef.DataKind_string, true).
+			AddField(field_ID, appdef.DataKind_RecordID, false)
+
 		adb.AddQuery(qNameQueryCollection).
-			SetParam(adb.AddObject(qNameCollectionParams).
-				AddField(field_Schema, appdef.DataKind_string, true).
-				AddField(field_ID, appdef.DataKind_RecordID, false).(appdef.IType).QName()).
+			SetParam(qNameCollectionParams).
 			SetResult(appdef.QNameANY)
 
+		qNameGetCDocParams := appdef.NewQName(appdef.SysPackage, "GetCDocParams")
+		adb.AddObject(qNameGetCDocParams).
+			AddField(field_ID, appdef.DataKind_int64, true)
+
+		qNameGetCDocResult := appdef.NewQName(appdef.SysPackage, "GetCDocResult")
+		adb.AddObject(qNameGetCDocResult).
+			AddField("Result", appdef.DataKind_string, true)
+
 		adb.AddQuery(qNameQueryGetCDoc).
-			SetParam(adb.AddObject(appdef.NewQName(appdef.SysPackage, "GetCDocParams")).
-				AddField(field_ID, appdef.DataKind_int64, true).(appdef.IType).QName()).
-			SetResult(adb.AddObject(appdef.NewQName(appdef.SysPackage, "GetCDocResult")).
-				AddField("Result", appdef.DataKind_string, true).(appdef.IType).QName())
+			SetParam(qNameGetCDocParams).
+			SetResult(qNameGetCDocResult)
+
+		qNameStateParams := appdef.NewQName(appdef.SysPackage, "StateParams")
+		adb.AddObject(qNameStateParams).
+			AddField(field_After, appdef.DataKind_int64, true)
+
+		qNameStateResult := appdef.NewQName(appdef.SysPackage, "StateResult")
+		adb.AddObject(qNameStateResult).
+			AddField(field_State, appdef.DataKind_string, true)
 
 		adb.AddQuery(qNameQueryState).
-			SetParam(adb.AddObject(appdef.NewQName(appdef.SysPackage, "StateParams")).
-				AddField(field_After, appdef.DataKind_int64, true).(appdef.IType).QName()).
-			SetResult(adb.AddObject(appdef.NewQName(appdef.SysPackage, "StateResult")).
-				AddField(field_State, appdef.DataKind_string, true).(appdef.IType).QName())
+			SetParam(qNameStateParams).
+			SetResult(qNameStateResult)
+
+		wsdescutil.AddWorkspaceDescriptorStubDef(adb)
+
+		adb.AddCDoc(qNameTestWSKind).SetSingleton()
 	}
 	{ // "modify" function
 		adb.AddCommand(test.modifyCmdName)
@@ -137,35 +161,77 @@ func buildAppParts(t *testing.T) (appParts appparts.IAppPartitions, cleanup func
 			AddField(test.articlePriceExceptionsPriceIdent, appdef.DataKind_float32, true)
 	}
 
-	// TODO: remove it after https://github.com/voedger/voedger/issues/56
-	appDef, err := adb.Build()
-	require.NoError(err)
-
 	// kept here to keep local tests working without sql
 	projectors.ProvideViewDef(adb, QNameCollectionView, func(b appdef.IViewBuilder) {
-		b.KeyBuilder().PartKeyBuilder().AddField(Field_PartKey, appdef.DataKind_int32)
-		b.KeyBuilder().ClustColsBuilder().
+		b.Key().PartKey().AddField(Field_PartKey, appdef.DataKind_int32)
+		b.Key().ClustCols().
 			AddField(Field_DocQName, appdef.DataKind_QName).
 			AddRefField(field_DocID).
 			AddRefField(field_ElementID)
-		b.ValueBuilder().
+		b.Value().
 			AddField(Field_Record, appdef.DataKind_Record, true).
 			AddField(state.ColOffset, appdef.DataKind_int64, true)
 	})
 
-	collectionQuery = appDef.Query(qNameQueryCollection)
-	getCDocQuery = appDef.Query(qNameQueryGetCDoc)
-	stateQuery = appDef.Query(qNameQueryState)
+	{
+		// Workspace
+		wsBuilder := adb.AddWorkspace(appdef.NewQName(appdef.SysPackage, "test_wsWS"))
+		wsBuilder.SetDescriptor(qNameTestWSKind)
+		wsBuilder.AddType(qNameQueryCollection)
+		wsBuilder.AddType(qNameQueryGetCDoc)
+		wsBuilder.AddType(qNameQueryState)
+		wsBuilder.AddType(test.modifyCmdName)
+		wsBuilder.AddType(test.tableArticles)
+		wsBuilder.AddType(test.tableDepartments)
+		wsBuilder.AddType(test.tablePeriods)
+		wsBuilder.AddType(test.tablePrices)
+		wsBuilder.AddType(test.tableArticlePrices)
+		wsBuilder.AddType(test.tableArticlePriceExceptions)
+		wsBuilder.AddType(QNameCollectionView)
+	}
 
-	provider := istructsmem.Provide(cfgs, iratesce.TestBucketsFactory,
+	// TODO: remove it after https://github.com/voedger/voedger/issues/56
+	appDef, err := adb.Build()
+	require.NoError(err)
+
+	appStructsProvider := istructsmem.Provide(cfgs, iratesce.TestBucketsFactory,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), asp)
 
-	appParts, cleanup, err = appparts.New(provider)
+	secretReader := isecretsimpl.ProvideSecretReader()
+	n10nBroker, n10nBrokerCleanup := in10nmem.ProvideEx2(in10n.Quotas{
+		Channels:                1000,
+		ChannelsPerSubject:      10,
+		Subscriptions:           1000,
+		SubscriptionsPerSubject: 10,
+	}, time.Now)
+
+	appParts, appPartsCleanup, err := appparts.NewWithActualizerWithExtEnginesFactories(appStructsProvider,
+		projectors.NewSyncActualizerFactoryFactory(projectors.ProvideSyncActualizerFactory(), secretReader, n10nBroker),
+		func(app istructs.AppQName) iextengine.ExtensionEngineFactories {
+			return engines.ProvideExtEngineFactories(
+				engines.ExtEngineFactoriesConfig{
+					AppConfig:   cfgs.GetConfig(app),
+					WASMCompile: false,
+				},
+			)
+		},
+	)
 	require.NoError(err)
-	appParts.DeployApp(test.appQName, appDef, test.appPartsCount, test.appEngines)
+	appParts.DeployApp(test.appQName, appDef, test.totalPartitions, test.appEngines)
 	appParts.DeployAppPartitions(test.appQName, []istructs.PartitionID{test.partition})
 
-	return appParts, cleanup
+	// create stub for cdoc.sys.WorkspaceDescriptor to make query processor work
+	as, err := appStructsProvider.AppStructs(test.appQName)
+	require.NoError(err)
+	err = wsdescutil.CreateCDocWorkspaceDescriptorStub(as, test.partition, test.workspace, qNameTestWSKind, 1, 1)
+	require.NoError(err)
+
+	cleanup = func() {
+		appPartsCleanup()
+		n10nBrokerCleanup()
+	}
+
+	return appParts, as, cleanup
 }
 
 // Test executes 3 operations with CUDs:
@@ -177,27 +243,20 @@ func buildAppParts(t *testing.T) (appParts appparts.IAppPartitions, cleanup func
 func TestBasicUsage_Collection(t *testing.T) {
 	require := require.New(t)
 
-	appParts, cleanup := buildAppParts(t)
+	appParts, appStructs, cleanup := deployTestApp(t)
 	defer cleanup()
 
 	// Command processor
-	appPart, err := appParts.Borrow(test.appQName, test.partition, cluster.ProcessorKind_Command)
-	require.NoError(err)
-	defer appPart.Release()
-	as := appPart.AppStructs()
-
-	actualizer := provideSyncActualizer(context.Background(), as, test.partition)
-	processor := pipeline.NewSyncPipeline(context.Background(), "partition processor", pipeline.WireSyncOperator("actualizer", actualizer))
-	defer actualizer.Close()
+	processor := testProcessor(appParts)
 
 	// ID and Offset generators
 	idGen := newIdsGenerator()
 
-	normalPriceID, happyHourPriceID, _ := insertPrices(require, as, &idGen)
-	coldDrinks, _ := insertDepartments(require, as, &idGen)
+	normalPriceID, happyHourPriceID, _ := insertPrices(require, appStructs, &idGen)
+	coldDrinks, _ := insertDepartments(require, appStructs, &idGen)
 
 	{ // CUDs: Insert coca-cola
-		event := saveEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
+		event := saveEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
 			newArticleCUD(event, 1, coldDrinks, test.cocaColaNumber, "Coca-cola")
 			newArPriceCUD(event, 1, 2, normalPriceID, 2.4)
 			newArPriceCUD(event, 1, 3, happyHourPriceID, 1.8)
@@ -211,15 +270,15 @@ func TestBasicUsage_Collection(t *testing.T) {
 	cocaColaHappyHourPriceElementId := idGen.idmap[3]
 
 	{ // CUDs: modify coca-cola number and normal price
-		event := saveEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
-			updateArticleCUD(event, as, cocaColaDocID, test.cocaColaNumber2, "Coca-cola")
-			updateArPriceCUD(event, as, cocaColaNormalPriceElementId, normalPriceID, 2.2)
+		event := saveEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
+			updateArticleCUD(event, appStructs, cocaColaDocID, test.cocaColaNumber2, "Coca-cola")
+			updateArPriceCUD(event, appStructs, cocaColaNormalPriceElementId, normalPriceID, 2.2)
 		}))
 		require.NoError(processor.SendSync(event))
 	}
 
 	{ // CUDs: insert fanta
-		event := saveEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
+		event := saveEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
 			newArticleCUD(event, 7, coldDrinks, test.fantaNumber, "Fanta")
 			newArPriceCUD(event, 7, 8, normalPriceID, 2.1)
 			newArPriceCUD(event, 7, 9, happyHourPriceID, 1.7)
@@ -232,14 +291,14 @@ func TestBasicUsage_Collection(t *testing.T) {
 
 	// Check expected projection values
 	{ // coca-cola
-		requireArticle(require, "Coca-cola", test.cocaColaNumber2, as, cocaColaDocID)
-		requireArPrice(require, normalPriceID, 2.2, as, cocaColaDocID, cocaColaNormalPriceElementId)
-		requireArPrice(require, happyHourPriceID, 1.8, as, cocaColaDocID, cocaColaHappyHourPriceElementId)
+		requireArticle(require, "Coca-cola", test.cocaColaNumber2, appStructs, cocaColaDocID)
+		requireArPrice(require, normalPriceID, 2.2, appStructs, cocaColaDocID, cocaColaNormalPriceElementId)
+		requireArPrice(require, happyHourPriceID, 1.8, appStructs, cocaColaDocID, cocaColaHappyHourPriceElementId)
 	}
 	{ // fanta
-		requireArticle(require, "Fanta", test.fantaNumber, as, fantaDocID)
-		requireArPrice(require, normalPriceID, 2.1, as, fantaDocID, fantaNormalPriceElementId)
-		requireArPrice(require, happyHourPriceID, 1.7, as, fantaDocID, fantaHappyHourPriceElementId)
+		requireArticle(require, "Fanta", test.fantaNumber, appStructs, fantaDocID)
+		requireArPrice(require, normalPriceID, 2.1, appStructs, fantaDocID, fantaNormalPriceElementId)
+		requireArPrice(require, happyHourPriceID, 1.7, appStructs, fantaDocID, fantaHappyHourPriceElementId)
 	}
 
 }
@@ -247,23 +306,17 @@ func TestBasicUsage_Collection(t *testing.T) {
 func Test_updateChildRecord(t *testing.T) {
 	require := require.New(t)
 
-	appParts, cleanup := buildAppParts(t)
+	_, appStructs, cleanup := deployTestApp(t)
 	defer cleanup()
-
-	// Command processor
-	appPart, err := appParts.Borrow(test.appQName, test.partition, cluster.ProcessorKind_Command)
-	require.NoError(err)
-	defer appPart.Release()
-	as := appPart.AppStructs()
 
 	// ID and Offset generators
 	idGen := newIdsGenerator()
 
-	normalPriceID, _, _ := insertPrices(require, as, &idGen)
-	coldDrinks, _ := insertDepartments(require, as, &idGen)
+	normalPriceID, _, _ := insertPrices(require, appStructs, &idGen)
+	coldDrinks, _ := insertDepartments(require, appStructs, &idGen)
 
 	{ // CUDs: Insert coca-cola
-		saveEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
+		saveEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
 			newArticleCUD(event, 1, coldDrinks, test.cocaColaNumber, "Coca-cola")
 			newArPriceCUD(event, 1, 2, normalPriceID, 2.4)
 		}))
@@ -272,12 +325,12 @@ func Test_updateChildRecord(t *testing.T) {
 	cocaColaNormalPriceElementId := idGen.idmap[2]
 
 	{ // CUDs: modify normal price
-		saveEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
-			updateArPriceCUD(event, as, cocaColaNormalPriceElementId, normalPriceID, 2.2)
+		saveEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
+			updateArPriceCUD(event, appStructs, cocaColaNormalPriceElementId, normalPriceID, 2.2)
 		}))
 	}
 
-	rec, err := as.Records().Get(test.workspace, true, cocaColaNormalPriceElementId)
+	rec, err := appStructs.Records().Get(test.workspace, true, cocaColaNormalPriceElementId)
 	require.NoError(err)
 	require.NotNil(rec)
 	require.Equal(float32(2.2), rec.AsFloat32(test.articlePricesPriceIdent))
@@ -307,27 +360,18 @@ update coca-cola:
 		- holiday: 0.9
 */
 
-func cp_Collection_3levels(t *testing.T, appParts appparts.IAppPartitions) {
-	var err error
+func cp_Collection_3levels(t *testing.T, appParts appparts.IAppPartitions, appStructs istructs.IAppStructs) {
 	require := require.New(t)
 
 	// Command processor
-	appPart, err := appParts.Borrow(test.appQName, test.partition, cluster.ProcessorKind_Command)
-	require.NoError(err)
-	defer appPart.Release()
-	as := appPart.AppStructs()
+	processor := testProcessor(appParts)
 
 	// ID and Offset generators
 	idGen := newIdsGenerator()
 
-	// Command processor
-	actualizer := provideSyncActualizer(context.Background(), as, test.partition)
-	processor := pipeline.NewSyncPipeline(context.Background(), "partition processor", pipeline.WireSyncOperator("actualizer", actualizer))
-	defer actualizer.Close()
-
-	normalPriceID, happyHourPriceID, eventPrices := insertPrices(require, as, &idGen)
-	coldDrinks, eventDepartments := insertDepartments(require, as, &idGen)
-	holiday, newyear, eventPeriods := insertPeriods(require, as, &idGen)
+	normalPriceID, happyHourPriceID, eventPrices := insertPrices(require, appStructs, &idGen)
+	coldDrinks, eventDepartments := insertDepartments(require, appStructs, &idGen)
+	holiday, newyear, eventPeriods := insertPeriods(require, appStructs, &idGen)
 
 	for _, event := range []istructs.IPLogEvent{eventPrices, eventDepartments, eventPeriods} {
 		require.NoError(processor.SendSync(event))
@@ -335,7 +379,7 @@ func cp_Collection_3levels(t *testing.T, appParts appparts.IAppPartitions) {
 
 	// insert coca-cola
 	{
-		event := saveEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
+		event := saveEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
 			newArticleCUD(event, 1, coldDrinks, test.cocaColaNumber, "Coca-cola")
 			newArPriceCUD(event, 1, 2, normalPriceID, 2.0)
 			newArPriceCUD(event, 1, 3, happyHourPriceID, 1.5)
@@ -355,7 +399,7 @@ func cp_Collection_3levels(t *testing.T, appParts appparts.IAppPartitions) {
 
 	// insert fanta
 	{
-		event := saveEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
+		event := saveEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
 			newArticleCUD(event, 6, coldDrinks, test.fantaNumber, "Fanta")
 			newArPriceCUD(event, 6, 7, normalPriceID, 2.1)
 			{
@@ -379,9 +423,9 @@ func cp_Collection_3levels(t *testing.T, appParts appparts.IAppPartitions) {
 
 	// modify coca-cola
 	{
-		event := saveEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
+		event := saveEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
 			newArPriceExceptionCUD(event, cocaColaNormalPriceElementId, 15, holiday, 1.8)
-			updateArPriceExceptionCUD(event, as, cocaColaHappyHourExceptionHolidayElementId, holiday, 0.9)
+			updateArPriceExceptionCUD(event, appStructs, cocaColaHappyHourExceptionHolidayElementId, holiday, 0.9)
 		}))
 		require.NoError(processor.SendSync(event))
 	}
@@ -391,47 +435,47 @@ func cp_Collection_3levels(t *testing.T, appParts appparts.IAppPartitions) {
 	// Check expected projection values
 	{ // coca-cola
 		docId := cocaColaDocID
-		requireArticle(require, "Coca-cola", test.cocaColaNumber, as, docId)
-		requireArPrice(require, normalPriceID, 2.0, as, docId, cocaColaNormalPriceElementId)
+		requireArticle(require, "Coca-cola", test.cocaColaNumber, appStructs, docId)
+		requireArPrice(require, normalPriceID, 2.0, appStructs, docId, cocaColaNormalPriceElementId)
 		{
-			requireArPriceException(require, holiday, 1.8, as, docId, cocaColaNormalExceptionHolidayElementId)
+			requireArPriceException(require, holiday, 1.8, appStructs, docId, cocaColaNormalExceptionHolidayElementId)
 		}
-		requireArPrice(require, happyHourPriceID, 1.5, as, docId, cocaColaHappyHourPriceElementId)
+		requireArPrice(require, happyHourPriceID, 1.5, appStructs, docId, cocaColaHappyHourPriceElementId)
 		{
-			requireArPriceException(require, holiday, 0.9, as, docId, cocaColaHappyHourExceptionHolidayElementId)
-			requireArPriceException(require, newyear, 0.8, as, docId, cocaColaHappyHourExceptionNewYearElementId)
+			requireArPriceException(require, holiday, 0.9, appStructs, docId, cocaColaHappyHourExceptionHolidayElementId)
+			requireArPriceException(require, newyear, 0.8, appStructs, docId, cocaColaHappyHourExceptionNewYearElementId)
 		}
 	}
 	{ // fanta
 		docId := fantaDocID
-		requireArticle(require, "Fanta", test.fantaNumber, as, docId)
-		requireArPrice(require, normalPriceID, 2.1, as, docId, fantaNormalPriceElementId)
+		requireArticle(require, "Fanta", test.fantaNumber, appStructs, docId)
+		requireArPrice(require, normalPriceID, 2.1, appStructs, docId, fantaNormalPriceElementId)
 		{
-			requireArPriceException(require, holiday, 1.6, as, docId, fantaNormalExceptionHolidayElementId)
-			requireArPriceException(require, newyear, 1.2, as, docId, fantaNormalExceptionNewYearElementId)
+			requireArPriceException(require, holiday, 1.6, appStructs, docId, fantaNormalExceptionHolidayElementId)
+			requireArPriceException(require, newyear, 1.2, appStructs, docId, fantaNormalExceptionNewYearElementId)
 		}
-		requireArPrice(require, happyHourPriceID, 1.6, as, docId, fantaHappyHourPriceElementId)
+		requireArPrice(require, happyHourPriceID, 1.6, appStructs, docId, fantaHappyHourPriceElementId)
 		{
-			requireArPriceException(require, holiday, 1.1, as, docId, fantaHappyHourExceptionHolidayElementId)
+			requireArPriceException(require, holiday, 1.1, appStructs, docId, fantaHappyHourExceptionHolidayElementId)
 		}
 	}
 }
 
 func Test_Collection_3levels(t *testing.T) {
-	appParts, cleanup := buildAppParts(t)
+	appParts, appStructs, cleanup := deployTestApp(t)
 	defer cleanup()
 
-	cp_Collection_3levels(t, appParts)
+	cp_Collection_3levels(t, appParts, appStructs)
 }
 
 func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 	require := require.New(t)
 
-	appParts, cleanup := buildAppParts(t)
+	appParts, appStructs, cleanup := deployTestApp(t)
 	defer cleanup()
 
 	// Fill the collection projection
-	cp_Collection_3levels(t, appParts)
+	cp_Collection_3levels(t, appParts, appStructs)
 
 	request := []byte(`{
 						"args":{
@@ -453,7 +497,7 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 	serviceChannel := make(iprocbus.ServiceChannel)
 	out := newTestSender()
 
-	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter)
+	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs)
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, time.Now)
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
@@ -466,7 +510,7 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, request, collectionQuery, "", sysToken)
+	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, request, qNameQueryCollection, "", sysToken)
 	<-out.done
 
 	out.requireNoError(require)
@@ -551,11 +595,11 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 func TestBasicUsage_QueryFunc_CDoc(t *testing.T) {
 	require := require.New(t)
 
-	appParts, cleanup := buildAppParts(t)
+	appParts, appStructs, cleanup := deployTestApp(t)
 	defer cleanup()
 
 	// Fill the collection projection
-	cp_Collection_3levels(t, appParts)
+	cp_Collection_3levels(t, appParts, appStructs)
 
 	request := fmt.Sprintf(`{
 		"args":{
@@ -571,7 +615,7 @@ func TestBasicUsage_QueryFunc_CDoc(t *testing.T) {
 	serviceChannel := make(iprocbus.ServiceChannel)
 	out := newTestSender()
 
-	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter)
+	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs)
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, time.Now)
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
@@ -582,7 +626,7 @@ func TestBasicUsage_QueryFunc_CDoc(t *testing.T) {
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, []byte(request), getCDocQuery, "", sysToken)
+	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, []byte(request), qNameQueryGetCDoc, "", sysToken)
 	<-out.done
 
 	out.requireNoError(require)
@@ -681,16 +725,16 @@ func TestBasicUsage_QueryFunc_CDoc(t *testing.T) {
 func TestBasicUsage_State(t *testing.T) {
 	require := require.New(t)
 
-	appParts, cleanup := buildAppParts(t)
+	appParts, appStructs, cleanup := deployTestApp(t)
 	defer cleanup()
 
 	// Fill the collection projection
-	cp_Collection_3levels(t, appParts)
+	cp_Collection_3levels(t, appParts, appStructs)
 
 	serviceChannel := make(iprocbus.ServiceChannel)
 	out := newTestSender()
 
-	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter)
+	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs)
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, time.Now)
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
@@ -702,7 +746,7 @@ func TestBasicUsage_State(t *testing.T) {
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
 	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, []byte(`{"args":{"After":0},"elements":[{"fields":["State"]}]}`),
-		stateQuery, "", sysToken)
+		qNameQueryState, "", sysToken)
 	<-out.done
 
 	out.requireNoError(require)
@@ -850,16 +894,16 @@ func TestBasicUsage_State(t *testing.T) {
 func TestState_withAfterArgument(t *testing.T) {
 	require := require.New(t)
 
-	appParts, cleanup := buildAppParts(t)
+	appParts, appStructs, cleanup := deployTestApp(t)
 	defer cleanup()
 
 	// Fill the collection projection
-	cp_Collection_3levels(t, appParts)
+	cp_Collection_3levels(t, appParts, appStructs)
 
 	serviceChannel := make(iprocbus.ServiceChannel)
 	out := newTestSender()
 
-	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter)
+	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs)
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, time.Now)
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
@@ -871,7 +915,7 @@ func TestState_withAfterArgument(t *testing.T) {
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
 	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, []byte(`{"args":{"After":5},"elements":[{"fields":["State"]}]}`),
-		stateQuery, "", sysToken)
+		qNameQueryState, "", sysToken)
 	<-out.done
 
 	out.requireNoError(require)
@@ -1059,62 +1103,43 @@ func newModify(app istructs.IAppStructs, gen *idsGeneratorType, cb eventCallback
 func Test_Idempotency(t *testing.T) {
 	require := require.New(t)
 
-	appParts, cleanup := buildAppParts(t)
+	appParts, appStructs, cleanup := deployTestApp(t)
 	defer cleanup()
 
 	// create command processor
-	appPart, err := appParts.Borrow(test.appQName, test.partition, cluster.ProcessorKind_Command)
-	require.NoError(err)
-	defer appPart.Release()
-
-	as := appPart.AppStructs()
-	actualizer := provideSyncActualizer(context.Background(), as, test.partition)
-	processor := pipeline.NewSyncPipeline(context.Background(), "partition processor", pipeline.WireSyncOperator("actualizer", actualizer))
-	defer actualizer.Close()
+	processor := testProcessor(appParts)
 
 	// ID and Offset generators
 	idGen := newIdsGenerator()
 
-	coldDrinks, _ := insertDepartments(require, as, &idGen)
+	coldDrinks, _ := insertDepartments(require, appStructs, &idGen)
 
 	// CUDs: Insert coca-cola
-	event1 := createEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
+	event1 := createEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
 		newArticleCUD(event, 1, coldDrinks, test.cocaColaNumber, "Coca-cola")
 	}))
-	require.NoError(as.Records().Apply(event1))
+	require.NoError(appStructs.Records().Apply(event1))
 	cocaColaDocID = idGen.idmap[1]
 	require.NoError(processor.SendSync(event1))
 
 	// CUDs: modify coca-cola number and normal price
-	event2 := createEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
-		updateArticleCUD(event, as, cocaColaDocID, test.cocaColaNumber2, "Coca-cola")
+	event2 := createEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
+		updateArticleCUD(event, appStructs, cocaColaDocID, test.cocaColaNumber2, "Coca-cola")
 	}))
-	require.NoError(as.Records().Apply(event2))
+	require.NoError(appStructs.Records().Apply(event2))
 	require.NoError(processor.SendSync(event2))
 
 	// simulate sending event with the same offset
 	idGen.decOffset()
-	event2copy := createEvent(require, as, &idGen, newModify(as, &idGen, func(event istructs.IRawEventBuilder) {
-		updateArticleCUD(event, as, cocaColaDocID, test.cocaColaNumber, "Coca-cola")
+	event2copy := createEvent(require, appStructs, &idGen, newModify(appStructs, &idGen, func(event istructs.IRawEventBuilder) {
+		updateArticleCUD(event, appStructs, cocaColaDocID, test.cocaColaNumber, "Coca-cola")
 	}))
-	require.NoError(as.Records().Apply(event2copy))
+	require.NoError(appStructs.Records().Apply(event2copy))
 	require.NoError(processor.SendSync(event2copy))
 
 	// Check expected projection values
 	{ // coca-cola
-		requireArticle(require, "Coca-cola", test.cocaColaNumber2, as, cocaColaDocID)
+		requireArticle(require, "Coca-cola", test.cocaColaNumber2, appStructs, cocaColaDocID)
 	}
 
-}
-
-// should be used in tests only. Sync Actualizer per app will be wired in production
-func provideSyncActualizer(ctx context.Context, as istructs.IAppStructs, partitionID istructs.PartitionID) pipeline.ISyncOperator {
-	actualizerConfig := projectors.SyncActualizerConf{
-		Ctx:        ctx,
-		AppStructs: func() istructs.IAppStructs { return as },
-		Partition:  partitionID,
-		N10nFunc:   func(view appdef.QName, wsid istructs.WSID, offset istructs.Offset) {},
-	}
-	actualizerFactory := projectors.ProvideSyncActualizerFactory()
-	return actualizerFactory(actualizerConfig, collectionProjectorFactory(as.AppDef()))
 }

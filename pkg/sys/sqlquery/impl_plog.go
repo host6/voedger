@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
-func readPlog(ctx context.Context, wsid istructs.WSID, numCommandProcessors coreutils.CommandProcessorsCount, offset istructs.Offset, count int, appStructs istructs.IAppStructs, f *filter, callback istructs.ExecQueryCallback) error {
+func readPlog(ctx context.Context, wsid istructs.WSID, numCommandProcessors coreutils.CommandProcessorsCount, offset istructs.Offset, count int,
+	appStructs istructs.IAppStructs, f *filter, callback istructs.ExecQueryCallback, appDef appdef.IAppDef) error {
 	if !f.acceptAll {
 		for field := range f.fields {
 			if !plogDef[field] {
@@ -26,52 +28,14 @@ func readPlog(ctx context.Context, wsid istructs.WSID, numCommandProcessors core
 		if f.filter("PlogOffset") {
 			data["PlogOffset"] = plogOffset
 		}
-		if f.filter("QName") {
-			data["QName"] = event.QName().String()
-		}
-		if f.filter("ArgumentObject") {
-			data["ArgumentObject"] = coreutils.ObjectToMap(event.ArgumentObject(), appStructs.AppDef())
-		}
-		if f.filter("CUDs") {
-			cuds := make([]map[string]interface{}, 0)
-			event.CUDs(func(rec istructs.ICUDRow) {
-				cudData := make(map[string]interface{})
-				cudData["sys.ID"] = rec.ID()
-				cudData["sys.QName"] = rec.QName().String()
-				cudData["IsNew"] = rec.IsNew()
-				cudData["fields"] = coreutils.FieldsToMap(rec, appStructs.AppDef())
-				cuds = append(cuds, cudData)
-			})
-			data["CUDs"] = cuds
-		}
-		if f.filter("RegisteredAt") {
-			data["RegisteredAt"] = event.RegisteredAt()
-		}
-		if f.filter("Synced") {
-			data["Synced"] = event.Synced()
-		}
-		if f.filter("DeviceID") {
-			data["DeviceID"] = event.DeviceID()
-		}
-		if f.filter("SyncedAt") {
-			data["SyncedAt"] = event.SyncedAt()
-		}
-		if f.filter("Error") {
-			if event.Error() != nil {
-				errorData := make(map[string]interface{})
-				errorData["ErrStr"] = event.Error().ErrStr()
-				errorData["QNameFromParams"] = event.Error().QNameFromParams().String()
-				errorData["ValidEvent"] = event.Error().ValidEvent()
-				errorData["OriginalEventBytes"] = event.Error().OriginalEventBytes()
-				data["Error"] = errorData
-			}
-		}
 		if f.filter("Workspace") {
 			data["Workspace"] = event.Workspace()
 		}
 		if f.filter("WLogOffset") {
 			data["WLogOffset"] = event.WLogOffset()
 		}
+
+		renderDbEvent(data, f, event, appDef)
 
 		bb, err := json.Marshal(data)
 		if err != nil {

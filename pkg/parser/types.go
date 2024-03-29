@@ -21,9 +21,9 @@ type FileSchemaAST struct {
 }
 
 type PackageSchemaAST struct {
-	Name                 string // Fill on the analysis stage, when the APPLICATION statement is found
-	QualifiedPackageName string
-	Ast                  *SchemaAST
+	Name string // Fill on the analysis stage, when the APPLICATION statement is found
+	Path string
+	Ast  *SchemaAST
 }
 
 type AppSchemaAST struct {
@@ -32,6 +32,8 @@ type AppSchemaAST struct {
 
 	// key = Fully Qualified Name
 	Packages map[string]*PackageSchemaAST
+
+	LocalNameToFullPath map[string]string
 }
 
 type IReadFS interface {
@@ -40,8 +42,8 @@ type IReadFS interface {
 }
 
 type PackageFS struct {
-	QualifiedPackageName string
-	FS                   IReadFS
+	Path string
+	FS   IReadFS
 }
 
 type Ident string
@@ -220,6 +222,18 @@ type WorkspaceStmt struct {
 	Inherits   []DefQName           `parser:"('INHERITS' @@ (',' @@)* )? '('"`
 	Descriptor *WsDescriptorStmt    `parser:"('DESCRIPTOR' @@)?"`
 	Statements []WorkspaceStatement `parser:"@@? (';' @@)* ';'? ')'"`
+
+	// filled on the analysis stage
+	qNames []appdef.QName
+}
+
+func (s *WorkspaceStmt) containsQName(qName appdef.QName) bool {
+	for i := 0; i < len(s.qNames); i++ {
+		if s.qNames[i] == qName {
+			return true
+		}
+	}
+	return false
 }
 
 func (s WorkspaceStmt) GetName() string { return string(s.Name) }
@@ -242,7 +256,8 @@ type AlterWorkspaceStmt struct {
 	A          int                  `parser:"'('"`
 	Statements []WorkspaceStatement `parser:"@@? (';' @@)* ';'? ')'"`
 
-	alteredWorkspace *WorkspaceStmt // filled on the analysis stage
+	alteredWorkspace    *WorkspaceStmt    // filled on the analysis stage
+	alteredWorkspacePkg *PackageSchemaAST // filled on the analysis stage
 }
 
 func (s *AlterWorkspaceStmt) Iterate(callback func(stmt interface{})) {
@@ -401,7 +416,7 @@ func (s *Statement) SetComments(comments []string) {
 	s.Comments = comments
 }
 
-type ProjectorStorage struct {
+type StateStorage struct {
 	Storage  DefQName   `parser:"@@"`
 	Entities []DefQName `parser:"( '(' @@ (',' @@)* ')')?"`
 
@@ -423,9 +438,10 @@ type ProjectorCommandAction struct {
 }
 
 type ProjectorTrigger struct {
+	CronSchedule  *string                 `parser:"('CRON' @String) | ("`
 	ExecuteAction *ProjectorCommandAction `parser:"'AFTER' (@@"`
 	TableActions  []ProjectionTableAction `parser:"| (@@ ('OR' @@)* ))"`
-	QNames        []DefQName              `parser:"'ON' (('(' @@ (',' @@)* ')') | @@)!"`
+	QNames        []DefQName              `parser:"'ON' (('(' @@ (',' @@)* ')') | @@)!)"`
 
 	qNames []appdef.QName // filled on the analysis stage
 }
@@ -435,8 +451,8 @@ type ProjectorStmt struct {
 	Sync            bool               `parser:"@'SYNC'?"`
 	Name            Ident              `parser:"'PROJECTOR' @Ident"`
 	Triggers        []ProjectorTrigger `parser:"@@ ('OR' @@)*"`
-	State           []ProjectorStorage `parser:"('STATE'   '(' @@ (',' @@)* ')' )?"`
-	Intents         []ProjectorStorage `parser:"('INTENTS' '(' @@ (',' @@)* ')' )?"`
+	State           []StateStorage     `parser:"('STATE'   '(' @@ (',' @@)* ')' )?"`
+	Intents         []StateStorage     `parser:"('INTENTS' '(' @@ (',' @@)* ')' )?"`
 	IncludingErrors bool               `parser:"@('INCLUDING' 'ERRORS')?"`
 	Engine          EngineType         // Initialized with 1st pass
 }
@@ -673,6 +689,8 @@ type CommandStmt struct {
 	Name          Ident           `parser:"'COMMAND' @Ident"`
 	Param         *AnyOrVoidOrDef `parser:"('(' @@? "`
 	UnloggedParam *AnyOrVoidOrDef `parser:"(','? UNLOGGED @@)? ')')?"`
+	State         []StateStorage  `parser:"('STATE'   '(' @@ (',' @@)* ')' )?"`
+	Intents       []StateStorage  `parser:"('INTENTS' '(' @@ (',' @@)* ')' )?"`
 	Returns       *AnyOrVoidOrDef `parser:"('RETURNS' @@)?"`
 	With          []WithItem      `parser:"('WITH' @@ (',' @@)* )?"`
 	Engine        EngineType      // Initialized with 1st pass
@@ -696,6 +714,7 @@ type QueryStmt struct {
 	Statement
 	Name    Ident           `parser:"'QUERY' @Ident"`
 	Param   *AnyOrVoidOrDef `parser:"('(' @@? ')')?"`
+	State   []StateStorage  `parser:"('STATE'   '(' @@ (',' @@)* ')' )?"`
 	Returns AnyOrVoidOrDef  `parser:"'RETURNS' @@"`
 	With    []WithItem      `parser:"('WITH' @@ (',' @@)* )?"`
 	Engine  EngineType      // Initialized with 1st pass
@@ -727,7 +746,7 @@ type TableStmt struct {
 	Items         []TableItemExpr `parser:"'(' @@? (',' @@)* ')'"`
 	With          []WithItem      `parser:"('WITH' @@ (',' @@)* )?"`
 	tableTypeKind appdef.TypeKind // filled on the analysis stage
-	singletone    bool
+	singleton     bool
 }
 
 func (s *TableStmt) GetName() string { return string(s.Name) }

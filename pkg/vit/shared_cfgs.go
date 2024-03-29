@@ -28,18 +28,24 @@ const (
 	TestEmail       = "123@123.com"
 	TestEmail2      = "124@124.com"
 	TestServicePort = 10000
-	app1PkgName     = "app1pkg"
-	app2PkgName     = "app2pkg"
+
+	app1PkgName = "app1pkg"
+	app1PkgPath = "github.com/voedger/voedger/pkg/vit/app1pkg"
+
+	app2PkgName = "app2pkg"
+	app2PkgPath = "github.com/voedger/voedger/pkg/vit/app2pkg"
 )
 
 var (
 	QNameApp1_TestWSKind                     = appdef.NewQName(app1PkgName, "test_ws")
+	QNameApp1_TestWSKind_another             = appdef.NewQName(app1PkgName, "test_ws_another")
 	QNameTestView                            = appdef.NewQName(app1PkgName, "View")
 	QNameApp1_TestEmailVerificationDoc       = appdef.NewQName(app1PkgName, "Doc")
 	QNameApp1_DocConstraints                 = appdef.NewQName(app1PkgName, "DocConstraints")
 	QNameApp1_DocConstraintsString           = appdef.NewQName(app1PkgName, "DocConstraintsString")
 	QNameApp1_DocConstraintsFewUniques       = appdef.NewQName(app1PkgName, "DocConstraintsFewUniques")
 	QNameApp1_DocConstraintsOldAndNewUniques = appdef.NewQName(app1PkgName, "DocConstraintsOldAndNewUniques")
+	QNameApp1_CDocCategory                   = appdef.NewQName(app1PkgName, "category")
 	QNameCmdRated                            = appdef.NewQName(app1PkgName, "RatedCmd")
 	QNameQryRated                            = appdef.NewQName(app1PkgName, "RatedQry")
 	QNameODoc1                               = appdef.NewQName(app1PkgName, "odoc1")
@@ -58,6 +64,7 @@ var (
 			WithChildWorkspace(QNameApp1_TestWSKind, "test_ws", "test_template", "", "login", map[string]interface{}{"IntFld": 42},
 				WithChild(QNameApp1_TestWSKind, "test_ws2", "test_template", "", "login", map[string]interface{}{"IntFld": 42},
 					WithSubject(TestEmail, istructs.SubjectKind_User, []appdef.QName{iauthnz.QNameRoleWorkspaceOwner}))),
+			WithChildWorkspace(QNameApp1_TestWSKind_another, "test_ws_another", "", "", "login", map[string]interface{}{}),
 		),
 		WithApp(istructs.AppQName_test1_app2, ProvideApp2, WithUserLogin("login", "1")),
 		WithVVMConfig(func(cfg *vvm.VVMConfig) {
@@ -71,39 +78,44 @@ var (
 			cfg.BLOBMaxSize = app1_BLOBMaxSize
 		}),
 		WithCleanup(func(_ *VIT) {
-			MockCmdExec = func(input string) error { panic("") }
+			MockCmdExec = func(input string, args istructs.ExecCommandArgs) error { panic("") }
 			MockQryExec = func(input string, callback istructs.ExecQueryCallback) error { panic("") }
 		}),
 	)
 	MockQryExec func(input string, callback istructs.ExecQueryCallback) error
-	MockCmdExec func(input string) error
+	MockCmdExec func(input string, args istructs.ExecCommandArgs) error
 )
 
-func ProvideApp2(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) apps.AppPackages {
+func ProvideApp2(apis apps.APIs, cfg *istructsmem.AppConfigType, adb appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) apps.BuiltInAppDef {
 	buildInfo, ok := debug.ReadBuildInfo()
 	if !ok {
 		panic("no build info")
 	}
-	sysPackageFS := sys.Provide(cfg, adf, TestSMTPCfg, ep, nil, apis.TimeFunc, apis.ITokens, apis.IFederation, apis.IAppStructsProvider, apis.IAppTokensFactory,
+	sysPackageFS := sys.Provide(cfg, adb, TestSMTPCfg, ep, nil, apis.TimeFunc, apis.ITokens, apis.IFederation, apis.IAppStructsProvider, apis.IAppTokensFactory,
 		apis.NumCommandProcessors, buildInfo, apis.IAppStorageProvider)
 	app2PackageFS := parser.PackageFS{
-		QualifiedPackageName: "github.com/voedger/voedger/pkg/vit/app2pkg",
-		FS:                   SchemaTestApp2FS,
+		Path: app2PkgPath,
+		FS:   SchemaTestApp2FS,
 	}
 	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app2PkgName, "testCmd"), istructsmem.NullCommandExec))
-	return apps.AppPackages{
-		AppQName: istructs.AppQName_test1_app2,
-		Packages: []parser.PackageFS{sysPackageFS, app2PackageFS},
+	ep.AddNamed(apps.EPIsDeviceAllowedFunc, func(as istructs.IAppStructs, requestWSID istructs.WSID, deviceProfileWSID istructs.WSID) (ok bool, err error) {
+		// simulate we could not work in any non-profile WS
+		return false, err
+	})
+	return apps.BuiltInAppDef{
+		AppQName:                istructs.AppQName_test1_app2,
+		Packages:                []parser.PackageFS{sysPackageFS, app2PackageFS},
+		AppDeploymentDescriptor: TestAppDeploymentDescriptor,
 	}
 }
 
-func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) apps.AppPackages {
+func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adb appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) apps.BuiltInAppDef {
 	// sys package
 	buildInfo, ok := debug.ReadBuildInfo()
 	if !ok {
 		panic("no build info")
 	}
-	sysPackageFS := sys.Provide(cfg, adf, TestSMTPCfg, ep, nil, apis.TimeFunc, apis.ITokens, apis.IFederation, apis.IAppStructsProvider, apis.IAppTokensFactory,
+	sysPackageFS := sys.Provide(cfg, adb, TestSMTPCfg, ep, nil, apis.TimeFunc, apis.ITokens, apis.IFederation, apis.IAppStructsProvider, apis.IAppTokensFactory,
 		apis.NumCommandProcessors, buildInfo, apis.IAppStorageProvider)
 
 	// for rates test
@@ -137,7 +149,7 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 		appdef.NewQName(app1PkgName, "MockCmd"),
 		func(args istructs.ExecCommandArgs) (err error) {
 			input := args.ArgumentObject.AsString(field_Input)
-			return MockCmdExec(input)
+			return MockCmdExec(input, args)
 		},
 	))
 
@@ -181,21 +193,23 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 		istructsmem.NullCommandExec,
 	))
 
-	cfg.AddAsyncProjectors(func(istructs.PartitionID) istructs.Projector {
-		return istructs.Projector{
+	cfg.AddAsyncProjectors(
+		istructs.Projector{
 			Name: appdef.NewQName(app1PkgName, "ProjDummy"),
-			Func: func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
-				return nil
-			},
-		}
-	})
+			Func: func(istructs.IPLogEvent, istructs.IState, istructs.IIntents) (err error) { return nil },
+		},
+	)
+
+	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app1PkgName, "testCmd"), istructsmem.NullCommandExec))
+	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app1PkgName, "TestCmdRawArg"), istructsmem.NullCommandExec))
 
 	app1PackageFS := parser.PackageFS{
-		QualifiedPackageName: "github.com/voedger/voedger/pkg/vit/app1pkg",
-		FS:                   SchemaTestApp1FS,
+		Path: app1PkgPath,
+		FS:   SchemaTestApp1FS,
 	}
-	return apps.AppPackages{
-		AppQName: istructs.AppQName_test1_app1,
-		Packages: []parser.PackageFS{sysPackageFS, app1PackageFS},
+	return apps.BuiltInAppDef{
+		AppQName:                istructs.AppQName_test1_app1,
+		Packages:                []parser.PackageFS{sysPackageFS, app1PackageFS},
+		AppDeploymentDescriptor: TestAppDeploymentDescriptor,
 	}
 }

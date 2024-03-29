@@ -5,19 +5,26 @@
 package state
 
 import (
-	"encoding/json"
 	"fmt"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
-	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
 type recordsStorage struct {
-	recordsFunc recordsFunc
-	cudFunc     CUDFunc
-	appDefFunc  appDefFunc
-	wsidFunc    WSIDFunc
+	recordsFunc      recordsFunc
+	cudFunc          CUDFunc
+	wsidFunc         WSIDFunc
+	wsTypeVailidator wsTypeVailidator
+}
+
+func newRecordsStorage(appStructsFunc AppStructsFunc, wsidFunc WSIDFunc, cudFunc CUDFunc) *recordsStorage {
+	return &recordsStorage{
+		recordsFunc:      func() istructs.IRecords { return appStructsFunc().Records() },
+		wsidFunc:         wsidFunc,
+		cudFunc:          cudFunc,
+		wsTypeVailidator: newWsTypeValidator(appStructsFunc),
+	}
 }
 
 func (s *recordsStorage) NewKeyBuilder(entity appdef.QName, _ istructs.IStateKeyBuilder) istructs.IStateKeyBuilder {
@@ -32,6 +39,10 @@ func (s *recordsStorage) NewKeyBuilder(entity appdef.QName, _ istructs.IStateKey
 func (s *recordsStorage) Get(key istructs.IStateKeyBuilder) (value istructs.IStateValue, err error) {
 	k := key.(*recordsKeyBuilder)
 	if k.singleton != appdef.NullQName {
+		err = s.wsTypeVailidator.validate(k.wsid, k.singleton)
+		if err != nil {
+			return nil, err
+		}
 		singleton, e := s.recordsFunc().GetSingleton(k.wsid, k.singleton)
 		if e != nil {
 			return nil, e
@@ -67,6 +78,10 @@ func (s *recordsStorage) GetBatch(items []GetBatchItem) (err error) {
 	for itemIdx, item := range items {
 		k := item.key.(*recordsKeyBuilder)
 		if k.singleton != appdef.NullQName {
+			err = s.wsTypeVailidator.validate(k.wsid, k.singleton)
+			if err != nil {
+				return err
+			}
 			gg = append(gg, getSingletonParams{
 				wsid:    k.wsid,
 				qname:   k.singleton,
@@ -107,15 +122,18 @@ func (s *recordsStorage) GetBatch(items []GetBatchItem) (err error) {
 }
 func (s *recordsStorage) Validate([]ApplyBatchItem) (err error)   { return }
 func (s *recordsStorage) ApplyBatch([]ApplyBatchItem) (err error) { return }
-func (s *recordsStorage) ProvideValueBuilder(key istructs.IStateKeyBuilder, _ istructs.IStateValueBuilder) istructs.IStateValueBuilder {
-	rw := s.cudFunc().Create(key.(*recordsKeyBuilder).entity)
-	return &recordsValueBuilder{rw: rw}
+func (s *recordsStorage) ProvideValueBuilder(key istructs.IStateKeyBuilder, _ istructs.IStateValueBuilder) (istructs.IStateValueBuilder, error) {
+	kb := key.(*recordsKeyBuilder)
+	if kb.entity == appdef.NullQName {
+		return nil, errEntityRequiredForValueBuilder
+	}
+	err := s.wsTypeVailidator.validate(kb.wsid, kb.entity)
+	if err != nil {
+		return nil, err
+	}
+	rw := s.cudFunc().Create(kb.entity)
+	return &recordsValueBuilder{rw: rw}, nil
 }
-func (s *recordsStorage) ProvideValueBuilderForUpdate(_ istructs.IStateKeyBuilder, existingValue istructs.IStateValue, _ istructs.IStateValueBuilder) istructs.IStateValueBuilder {
-	return &recordsValueBuilder{rw: s.cudFunc().Update(existingValue.AsRecord(""))}
-}
-func (s *recordsStorage) ToJSON(sv istructs.IStateValue, _ ...interface{}) (string, error) {
-	obj := coreutils.FieldsToMap(sv, s.appDefFunc())
-	bb, err := json.Marshal(&obj)
-	return string(bb), err
+func (s *recordsStorage) ProvideValueBuilderForUpdate(_ istructs.IStateKeyBuilder, existingValue istructs.IStateValue, _ istructs.IStateValueBuilder) (istructs.IStateValueBuilder, error) {
+	return &recordsValueBuilder{rw: s.cudFunc().Update(existingValue.AsRecord(""))}, nil
 }

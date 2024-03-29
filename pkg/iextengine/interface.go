@@ -40,6 +40,7 @@ type ExtEngineConfig struct {
 type IExtensionIO interface {
 	istructs.IState
 	istructs.IIntents
+	istructs.IPkgNameResolver
 }
 
 // 1 package = 1 ext engine instance
@@ -47,23 +48,14 @@ type IExtensionIO interface {
 // Extension engine is not thread safe
 type IExtensionEngine interface {
 	SetLimits(limits ExtensionLimits)
-	Invoke(ctx context.Context, extName ExtQName, io IExtensionIO) (err error)
+	Invoke(ctx context.Context, extName appdef.FullQName, io IExtensionIO) (err error)
 	Close(ctx context.Context)
 }
 
-type IExtensionEngineFactories map[appdef.ExtensionEngineKind]IExtensionEngineFactory
-
-type ExtQName struct {
-	PackageName string // Fully qualified package name
-	ExtName     string
-}
-
-func (n ExtQName) String() string {
-	return n.PackageName + "." + n.ExtName
-}
+type ExtensionEngineFactories map[appdef.ExtensionEngineKind]IExtensionEngineFactory
 
 type BuiltInExtFunc func(ctx context.Context, io IExtensionIO) error
-type BuiltInExtFuncs map[ExtQName]BuiltInExtFunc // Provided to construct factory of engines
+type BuiltInExtFuncs map[appdef.FullQName]BuiltInExtFunc // Provided to construct factory of engines
 
 type ExtensionPackage struct {
 	QualifiedName  string

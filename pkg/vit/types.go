@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/extensionpoints"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/state/smtptest"
@@ -21,7 +20,7 @@ import (
 // Voedger Integration Test
 type VIT struct {
 	lock sync.Mutex
-	T    *testing.T
+	T    testing.TB
 	*vvm.VoedgerVM
 	*vvm.VVMConfig
 	cleanups             []func(vit *VIT)
@@ -48,10 +47,11 @@ type VITConfig struct {
 type vitApps map[istructs.AppQName]*app // указатель потому, что к app потом будут опции применяться ([]logins, например)
 
 type vitPreConfig struct {
-	vvmCfg    *vvm.VVMConfig
-	vitApps   vitApps
-	cleanups  []func(vit *VIT)
-	initFuncs []func()
+	vvmCfg       *vvm.VVMConfig
+	vitApps      vitApps
+	cleanups     []func(vit *VIT)
+	initFuncs    []func()
+	postInitFunc func(vit *VIT)
 }
 
 type vitConfigOptFunc func(*vitPreConfig)
@@ -120,7 +120,6 @@ func (p *Principal) GetAppQName() istructs.AppQName { return p.AppQName }
 
 type app struct {
 	name                  istructs.AppQName
-	deployment            cluster.AppDeploymentDescriptor
 	logins                []Login
 	ws                    map[string]WSParams
 	wsTemplateFuncs       []func(extensionpoints.IExtensionPoint)

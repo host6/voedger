@@ -19,13 +19,13 @@ import (
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
-func provideQryCDoc(cfg *istructsmem.AppConfigType, appDefBuilder appdef.IAppDefBuilder) {
+func provideQryCDoc(cfg *istructsmem.AppConfigType) {
 	cfg.Resources.Add(istructsmem.NewQueryFunction(
 		qNameQueryGetCDoc,
-		execQryCDoc(appDefBuilder)))
+		provideExecQryCDoc(cfg.AppDef)))
 }
 
-func execQryCDoc(appDef appdef.IAppDef) istructsmem.ExecQueryClosure {
+func provideExecQryCDoc(appDef appdef.IAppDef) istructsmem.ExecQueryClosure {
 	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 		rkb, err := args.State.KeyBuilder(state.Record, appdef.NullQName)
 		if err != nil {
@@ -86,10 +86,13 @@ func execQryCDoc(appDef appdef.IAppDef) istructsmem.ExecQueryClosure {
 		return callback(&cdocObject{data: string(bytes)})
 	}
 }
+
 func convert(doc istructs.IObject, appDef appdef.IAppDef, refs map[istructs.RecordID]bool, parent istructs.RecordID) (obj map[string]interface{}, err error) {
 	if doc == nil {
 		return nil, nil
 	}
+	// unable to use ObjectToMap because of filter:
+	// field of the root is filtering -> no problem, field of a container is filtering -> `doc` var here ir root, it does not contain fields of container -> panic
 	obj = coreutils.FieldsToMap(doc, appDef, coreutils.Filter(func(fieldName string, kind appdef.DataKind) bool {
 		if skipField(fieldName) {
 			return false

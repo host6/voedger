@@ -17,8 +17,8 @@ import (
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 	"github.com/voedger/voedger/pkg/pipeline"
+	"github.com/voedger/voedger/pkg/projectors"
 	"github.com/voedger/voedger/pkg/state"
-	"github.com/voedger/voedger/pkg/sys/builtin"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 )
@@ -38,7 +38,7 @@ type ICommandMessage interface {
 	Sender() ibus.ISender
 	PartitionID() istructs.PartitionID
 	RequestCtx() context.Context
-	Command() appdef.ICommand
+	QName() appdef.QName
 	Token() string
 	Host() string
 }
@@ -80,7 +80,9 @@ type cmdWorkpiece struct {
 	cmdResultBuilder             istructs.IObjectBuilder
 	cmdResult                    istructs.IObject
 	resources                    istructs.IResources
-	cmdFunc                      istructs.ICommandFunction
+	cmdExec                      func(args istructs.ExecCommandArgs) error
+	iCommand                     appdef.ICommand
+	iWorkspace                   appdef.IWorkspace
 	appPartitionRestartScheduled bool
 }
 
@@ -105,7 +107,7 @@ type implICommandMessage struct {
 	sender      ibus.ISender
 	partitionID istructs.PartitionID
 	requestCtx  context.Context
-	command     appdef.ICommand
+	qName       appdef.QName
 	token       string
 	host        string
 }
@@ -126,7 +128,8 @@ type hostStateProvider struct {
 
 func newHostStateProvider(ctx context.Context, pid istructs.PartitionID, secretReader isecrets.ISecretReader) *hostStateProvider {
 	p := &hostStateProvider{}
-	p.state = state.ProvideCommandProcessorStateFactory()(ctx, p.getAppStructs, state.SimplePartitionIDFunc(pid), p.getWSID, secretReader, p.getCUD, p.getPrincipals, p.getToken, builtin.MaxCUDs, p.getCmdResultBuilder)
+	// TODO: provide ArgFunc & UnloggedArgFunc
+	p.state = state.ProvideCommandProcessorStateFactory()(ctx, p.getAppStructs, state.SimplePartitionIDFunc(pid), p.getWSID, secretReader, p.getCUD, p.getPrincipals, p.getToken, projectors.DefaultIntentsLimit, p.getCmdResultBuilder, nil, nil)
 	return p
 }
 
@@ -138,7 +141,8 @@ func (p *hostStateProvider) getPrincipals() []iauthnz.Principal {
 }
 func (p *hostStateProvider) getToken() string                             { return p.token }
 func (p *hostStateProvider) getCmdResultBuilder() istructs.IObjectBuilder { return p.cmdResultBuilder }
-func (p *hostStateProvider) get(appStructs istructs.IAppStructs, wsid istructs.WSID, cud istructs.ICUD, principals []iauthnz.Principal, token string, cmdResultBuilder istructs.IObjectBuilder) state.IHostState {
+func (p *hostStateProvider) get(appStructs istructs.IAppStructs, wsid istructs.WSID, cud istructs.ICUD, principals []iauthnz.Principal, token string,
+	cmdResultBuilder istructs.IObjectBuilder) state.IHostState {
 	p.as = appStructs
 	p.wsid = wsid
 	p.cud = cud
