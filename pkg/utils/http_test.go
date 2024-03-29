@@ -267,6 +267,10 @@ func TestFederationFunc(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	federationURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	require.NoError(err)
+	federation, cleanup := NewIFederation(func() *url.URL {
+		return federationURL
+	})
+	defer cleanup()
 
 	t.Run("basic", func(t *testing.T) {
 		handler = func(w http.ResponseWriter, r *http.Request) {
@@ -280,7 +284,7 @@ func TestFederationFunc(t *testing.T) {
 				"Result":{"Int":42,"Str":"Str","sys.Container":"","sys.QName":"app1pkg.TestCmdResult"}
 			}`))
 		}
-		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`)
+		resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`)
 		require.NoError(err)
 		resp.Println()
 		require.Equal(int64(13), resp.CurrentWLogOffset)
@@ -364,7 +368,7 @@ func TestFederationFunc(t *testing.T) {
 					require.NoError(err)
 					c.handler(string(body), w, r)
 				}
-				resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, c.opts...)
+				resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, c.opts...)
 				var fe FuncError
 				if errors.As(err, &fe) {
 					require.Equal(c.expectedErr, err)
@@ -385,7 +389,7 @@ func TestFederationFunc(t *testing.T) {
 				w.WriteHeader(http.StatusInternalServerError)
 				w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"sys.SomeErrorQName","Data":"additional data"}}`))
 			}
-			resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError))
+			resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError))
 			require.NoError(err)
 			resp.Println()
 			resp.RequireContainsError(t, "something")
@@ -400,13 +404,13 @@ func TestFederationFunc(t *testing.T) {
 				w.Write([]byte(fmt.Sprintf(`{"sys.Error":{"HTTPStatus":500,"Message":"%s","QName":"sys.SomeErrorQName","Data":"additional data"}}`,
 					errorMessage)))
 			}
-			resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError,
+			resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError,
 				"expected error message"))
 			require.Error(err)
 			require.Nil(resp)
 
 			errorMessage = "expected error message"
-			resp, err = FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError,
+			resp, err = federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError,
 				"expected error message"))
 			require.NoError(err)
 			resp.RequireContainsError(t, "expected")
@@ -421,7 +425,7 @@ func TestFederationFunc(t *testing.T) {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(`{"sections":[{"type":"","elements":[[[["Hello", "world"]]],[[["next"]]]]}]}`))
 		}
-		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError))
+		resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithExpectedCode(http.StatusInternalServerError))
 		require.NoError(err)
 		resp.Println()
 		require.Equal("Hello", resp.SectionRow()[0].(string))
@@ -440,19 +444,19 @@ func TestFederationFunc(t *testing.T) {
 			}
 			statusCode = http.StatusOK
 		}
-		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`)
+		resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`)
 		require.NoError(err)
 		resp.Println()
 	})
 
-	t.Run("discard responce", func(t *testing.T) {
+	t.Run("discard response", func(t *testing.T) {
 		handler = func(w http.ResponseWriter, r *http.Request) {
 			_, err := io.ReadAll(r.Body)
 			require.NoError(err)
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"sections":[{"type":"","elements":[[[["Hello", "world"]]],[[["next"]]]]}]}`))
 		}
-		resp, err := FederationFunc(federationURL, "/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithDiscardResponse())
+		resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, WithDiscardResponse())
 		require.NoError(err)
 		require.Nil(resp)
 	})
