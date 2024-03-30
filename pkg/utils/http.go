@@ -409,32 +409,22 @@ func (f *implIFederation) Func(relativeURL string, body string, optFuncs ...ReqO
 		return nil, nil
 	}
 	if isUnexpectedCode {
-		m := map[string]interface{}{}
-		if err = json.Unmarshal([]byte(httpResp.Body), &m); err != nil {
-			return nil, err
-		}
-		if httpResp.HTTPResp.StatusCode == http.StatusOK {
-			return nil, FuncError{
-				SysError: SysError{
-					HTTPStatus: http.StatusOK,
-				},
-				ExpectedHTTPCodes: httpResp.expectedHTTPCodes,
-			}
-		}
-		sysErrorMap := m["sys.Error"].(map[string]interface{})
-		errQName, err := appdef.ParseQName(sysErrorMap["QName"].(string))
-		if err != nil {
-			errQName = appdef.NewQName("<err>", sysErrorMap["QName"].(string))
-		}
-		return nil, FuncError{
-			SysError: SysError{
-				HTTPStatus: int(sysErrorMap["HTTPStatus"].(float64)),
-				Message:    sysErrorMap["Message"].(string),
-				QName:      errQName,
-				Data:       sysErrorMap["Data"].(string),
-			},
+		funcErr := FuncError{
 			ExpectedHTTPCodes: httpResp.expectedHTTPCodes,
+			SysError: SysError{
+				HTTPStatus: http.StatusOK,
+			},
 		}
+		if httpResp.HTTPResp.StatusCode != http.StatusOK {
+			m := map[string]interface{}{}
+			if err = json.Unmarshal([]byte(httpResp.Body), &m); err != nil {
+				return nil, err
+			}
+			sysErrorMap := m["sys.Error"].(map[string]interface{})
+			funcErr.SysError.HTTPStatus = int(sysErrorMap["HTTPStatus"].(float64))
+			funcErr.SysError.Message = sysErrorMap["Message"].(string)
+		}
+		return nil, funcErr
 	}
 	res := &FuncResponse{
 		HTTPResponse: httpResp,
