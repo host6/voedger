@@ -421,8 +421,14 @@ func (f *implIFederation) Func(relativeURL string, body string, optFuncs ...ReqO
 				return nil, err
 			}
 			sysErrorMap := m["sys.Error"].(map[string]interface{})
+			errQName, err := appdef.ParseQName(sysErrorMap["QName"].(string))
+			if err != nil {
+				errQName = appdef.NewQName("<err>", sysErrorMap["QName"].(string))
+			}
 			funcErr.SysError.HTTPStatus = int(sysErrorMap["HTTPStatus"].(float64))
 			funcErr.SysError.Message = sysErrorMap["Message"].(string)
+			funcErr.SysError.QName = errQName
+			funcErr.SysError.Data = sysErrorMap["Data"].(string)
 		}
 		return nil, funcErr
 	}
