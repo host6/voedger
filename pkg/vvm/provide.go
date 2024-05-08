@@ -84,6 +84,16 @@ func ProvideVVM(vvmCfg *VVMConfig, vvmIdx VVMIdxType) (voedgerVM *VoedgerVM, err
 		},
 		ProcessorChannel_Query,
 	)
+
+	vvmCfg.addProcessorChannel(
+		// BLOB processors
+		// all BLOB processors sits on a single channel like query processors
+		iprocbusmem.ChannelGroup{
+			NumChannels:       1,
+			ChannelBufferSize: 0,
+		},
+		ProcessorChannel_BLOB,
+	)
 	vvmCfg.Quotas = in10n.Quotas{
 		Channels:                int(DefaultQuotasChannelsFactor * vvmCfg.NumCommandProcessors),
 		ChannelsPerSubject:      DefaultQuotasChannelsPerSubject,
@@ -507,6 +517,14 @@ func provideCommandChannelFactory(sch ServiceChannelFactory) CommandChannelFacto
 	}
 }
 
+func provideBLOBProcessors(numBLOLBprocessors istructs.NumBLOBProcessors, bc BLOBChannel, blobProcessorFactory blob.ServiceFactory) OperatorBLOBProcessors {
+	forks := make([]pipeline.ForkOperatorOptionFunc, numBLOLBprocessors)
+	for i := 0; i < int(numBLOLBprocessors); i++ {
+		forks[i] = pipeline.ForkBranch((pipeline.ServiceOperator(blobProcessorFactory(iprocbus.ServiceChannel(bc)))))
+	}
+	return pipeline.ForkOperator(pipeline.ForkSame, forks[0], forks[1:]...)
+}
+
 func provideQueryProcessors(qpCount istructs.NumQueryProcessors, qc QueryChannel, appParts appparts.IAppPartitions, qpFactory queryprocessor.ServiceFactory,
 	imetrics imetrics.IMetrics, vvm commandprocessor.VVMName, mpq MaxPrepareQueriesType, authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer) OperatorQueryProcessors {
 	forks := make([]pipeline.ForkOperatorOptionFunc, qpCount)
@@ -606,7 +624,8 @@ func provideOperatorAppServices(apf AppServiceFactory, appsArtefacts AppsArtefac
 }
 
 func provideServicePipeline(vvmCtx context.Context, opCommandProcessors OperatorCommandProcessors, opQueryProcessors OperatorQueryProcessors, opAppServices OperatorAppServicesFactory,
-	routerServiceOp RouterServiceOperator, metricsServiceOp MetricsServiceOperator, appPartsCtl IAppPartsCtlPipelineService, bootstrapOp BootstrapOperator) ServicePipeline {
+	routerServiceOp RouterServiceOperator, metricsServiceOp MetricsServiceOperator, appPartsCtl IAppPartsCtlPipelineService, bootstrapOp BootstrapOperator,
+	opBLOBProcessors OperatorBLOBProcessors) ServicePipeline {
 	return pipeline.NewSyncPipeline(vvmCtx, "ServicePipeline",
 		pipeline.WireSyncOperator("services", pipeline.ForkOperator(pipeline.ForkSame,
 
@@ -614,6 +633,7 @@ func provideServicePipeline(vvmCtx context.Context, opCommandProcessors Operator
 			pipeline.ForkBranch(pipeline.ForkOperator(pipeline.ForkSame,
 				pipeline.ForkBranch(opQueryProcessors),
 				pipeline.ForkBranch(opCommandProcessors),
+				pipeline.ForkBranch(opBLOBProcessors),
 				pipeline.ForkBranch(opAppServices(vvmCtx)), // vvmCtx here is for AsyncActualizerConf at AsyncActualizerFactory only
 				pipeline.ForkBranch(pipeline.ServiceOperator(appPartsCtl)),
 			)),

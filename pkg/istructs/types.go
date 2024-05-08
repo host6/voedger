@@ -113,3 +113,4 @@ type NumAppWorkspaces int
 type NumAppPartitions int
 type NumCommandProcessors int
 type NumQueryProcessors int
+type NumBLOBProcessors int

@@ -11,37 +11,37 @@ import (
 	"time"
 
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/processors/blob"
 	"golang.org/x/crypto/acme/autocert"
 
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
 	"github.com/voedger/voedger/pkg/in10n"
-	"github.com/voedger/voedger/pkg/iprocbusmem"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
 // port == 443 -> httpsService + ACMEService, otherwise -> HTTPService only, ACMEService is nil
-func Provide(vvmCtx context.Context, rp RouterParams, aBusTimeout time.Duration, broker in10n.IN10nBroker, bp *BlobberParams, autocertCache autocert.Cache,
-	bus ibus.IBus, numsAppsWorkspaces map[istructs.AppQName]istructs.NumAppWorkspaces) (httpSrv IHTTPService, acmeSrv IACMEService) {
+func Provide(vvmCtx context.Context, rp RouterParams, aBusTimeout time.Duration, broker in10n.IN10nBroker, autocertCache autocert.Cache,
+	bus ibus.IBus, numsAppsWorkspaces map[istructs.AppQName]istructs.NumAppWorkspaces, blobProcBus blob.BLOBProcBus) (httpSrv IHTTPService, acmeSrv IACMEService) {
 	httpService := &httpService{
 		RouterParams:       rp,
 		n10n:               broker,
-		BlobberParams:      bp,
 		bus:                bus,
 		busTimeout:         aBusTimeout,
 		numsAppsWorkspaces: numsAppsWorkspaces,
+		blobProcBus:        blobProcBus,
 	}
-	if bp != nil {
-		bp.procBus = iprocbusmem.Provide(bp.ServiceChannels)
-		for i := 0; i < bp.BLOBWorkersNum; i++ {
-			httpService.blobWG.Add(1)
-			go func() {
-				defer httpService.blobWG.Done()
-				blobMessageHandler(vvmCtx, bp.procBus.ServiceChannel(0, 0), bp.BLOBStorage, bus, aBusTimeout)
-			}()
-		}
+	// if bp != nil {
+	// 	bp.procBus = iprocbusmem.Provide(bp.ServiceChannels)
+	// 	for i := 0; i < bp.BLOBWorkersNum; i++ {
+	// 		httpService.blobWG.Add(1)
+	// 		go func() {
+	// 			defer httpService.blobWG.Done()
+	// 			blobMessageHandler(vvmCtx, bp.procBus.ServiceChannel(0, 0), bp.BLOBStorage, bus, aBusTimeout)
+	// 		}()
+	// 	}
 
-	}
+	// }
 	if rp.Port != HTTPSPort {
 		return httpService, nil
 	}

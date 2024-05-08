@@ -94,13 +94,13 @@ func writeSectionedResponse(requestCtx context.Context, w http.ResponseWriter, s
 			}
 
 			if !sectionsOpened {
-				if ok = writeResponse(w, `"sections":[`); !ok {
+				if ok = coreutils.WriteResponse(w, `"sections":[`); !ok {
 					return false
 				}
 				closer = "]"
 				sectionsOpened = true
 			} else {
-				if ok = writeResponse(w, ","); !ok {
+				if ok = coreutils.WriteResponse(w, ","); !ok {
 					return false
 				}
 			}
@@ -136,12 +136,12 @@ func writeSectionedResponse(requestCtx context.Context, w http.ResponseWriter, s
 			jsonErr := jsonableErr.ToJSON()
 			jsonErr = strings.TrimPrefix(jsonErr, "{")
 			jsonErr = strings.TrimSuffix(jsonErr, "}")
-			writeResponse(w, fmt.Sprintf(`%s%s}`, closer, jsonErr))
+			coreutils.WriteResponse(w, fmt.Sprintf(`%s%s}`, closer, jsonErr))
 		} else {
-			writeResponse(w, fmt.Sprintf(`%s"status":%d,"errorDescription":"%s"}`, closer, http.StatusInternalServerError, *secErr))
+			coreutils.WriteResponse(w, fmt.Sprintf(`%s"status":%d,"errorDescription":"%s"}`, closer, http.StatusInternalServerError, *secErr))
 		}
 	} else if sectionedResponseStarted {
-		writeResponse(w, fmt.Sprintf(`%s}`, closer))
+		coreutils.WriteResponse(w, fmt.Sprintf(`%s}`, closer))
 	}
 }
 
@@ -163,7 +163,7 @@ func startSectionedResponse(w http.ResponseWriter) bool {
 	w.Header().Set(coreutils.ContentType, coreutils.ApplicationJSON)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(http.StatusOK)
-	return writeResponse(w, "{")
+	return coreutils.WriteResponse(w, "{")
 }
 
 func writeSection(w http.ResponseWriter, isec ibus.ISection, requestCtx context.Context) bool {
@@ -177,16 +177,16 @@ func writeSection(w http.ResponseWriter, isec ibus.ISection, requestCtx context.
 		// ctx.Done() is tracked by ibusnats implementation: writing to section elem channel -> read here, ctxdone -> close elem channel
 		for val, ok := sec.Next(requestCtx); ok; val, ok = sec.Next(requestCtx) {
 			if isFirst {
-				if !writeResponse(w, fmt.Sprintf(`,"elements":[%s`, string(val))) {
+				if !coreutils.WriteResponse(w, fmt.Sprintf(`,"elements":[%s`, string(val))) {
 					return false
 				}
 				isFirst = false
 				closer = "]}"
-			} else if !writeResponse(w, fmt.Sprintf(`,%s`, string(val))) {
+			} else if !coreutils.WriteResponse(w, fmt.Sprintf(`,%s`, string(val))) {
 				return false
 			}
 		}
-		if !writeResponse(w, closer) {
+		if !coreutils.WriteResponse(w, closer) {
 			return false
 		}
 	case ibus.IObjectSection:
@@ -194,7 +194,7 @@ func writeSection(w http.ResponseWriter, isec ibus.ISection, requestCtx context.
 			return false
 		}
 		val := sec.Value(requestCtx)
-		if !writeResponse(w, fmt.Sprintf(`,"elements":%s}`, string(val))) {
+		if !coreutils.WriteResponse(w, fmt.Sprintf(`,"elements":%s}`, string(val))) {
 			return false
 		}
 	case ibus.IMapSection:
@@ -206,16 +206,16 @@ func writeSection(w http.ResponseWriter, isec ibus.ISection, requestCtx context.
 		// ctx.Done() is tracked by ibusnats implementation: writing to section elem channel -> read here, ctxdone -> close elem channel
 		for name, val, ok := sec.Next(requestCtx); ok; name, val, ok = sec.Next(requestCtx) {
 			if isFirst {
-				if !writeResponse(w, fmt.Sprintf(`,"elements":{%q:%s`, name, string(val))) {
+				if !coreutils.WriteResponse(w, fmt.Sprintf(`,"elements":{%q:%s`, name, string(val))) {
 					return false
 				}
 				isFirst = false
 				closer = "}}"
-			} else if !writeResponse(w, fmt.Sprintf(`,%q:%s`, name, string(val))) {
+			} else if !coreutils.WriteResponse(w, fmt.Sprintf(`,%q:%s`, name, string(val))) {
 				return false
 			}
 		}
-		if !writeResponse(w, closer) {
+		if !coreutils.WriteResponse(w, closer) {
 			return false
 		}
 	}
@@ -236,7 +236,7 @@ func writeSectionHeader(w http.ResponseWriter, sec ibus.IDataSection) bool {
 		}
 		_, _ = buf.WriteString("]") // error impossible
 	}
-	if !writeResponse(w, string(buf.Bytes())) {
+	if !coreutils.WriteResponse(w, string(buf.Bytes())) {
 		return false
 	}
 	return true

@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"testing"
@@ -578,4 +579,25 @@ func NewIFederation(federationURL func() *url.URL) (federation IFederation, clea
 		federationURL: federationURL,
 	}
 	return fed, fed.httpClient.CloseIdleConnections
+}
+
+func WriteTextResponse(w http.ResponseWriter, msg string, code int) {
+	w.Header().Set(ContentType, "text/plain")
+	w.WriteHeader(code)
+	WriteResponse(w, msg)
+}
+
+// onBeforeWriteResponse provided in tests only
+func WriteResponse(w http.ResponseWriter, data string, onBeforeWriteResponse ...func(w http.ResponseWriter)) bool {
+	if len(onBeforeWriteResponse) != 0 {
+		// happens in tests only
+		onBeforeWriteResponse[0](w)
+	}
+	if _, err := w.Write([]byte(data)); err != nil {
+		stack := debug.Stack()
+		log.Println("failed to write response:", err, "\n", string(stack))
+		return false
+	}
+	w.(http.Flusher).Flush()
+	return true
 }

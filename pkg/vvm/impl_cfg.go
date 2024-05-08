@@ -41,12 +41,12 @@ func NewVVMDefaultConfig() VVMConfig {
 		Name:                   commandprocessor.VVMName(hostname),
 		VVMAppsBuilder:         VVMAppsBuilder{},
 		BusTimeout:             BusTimeout(ibus.DefaultTimeout),
-		BlobberServiceChannels: router.BlobberServiceChannels{
-			{
-				NumChannels:       1,
-				ChannelBufferSize: 0,
-			},
-		},
+		// BlobberServiceChannels: router.BlobberServiceChannels{
+		// 	{
+		// 		NumChannels:       1,
+		// 		ChannelBufferSize: 0,
+		// 	},
+		// },
 		NumCommandProcessors: DefaultNumCommandProcessors,
 		NumQueryProcessors:   DefaultNumQueryProcessors,
 		StorageCacheSize:     DefaultCacheSize,

@@ -23,7 +23,6 @@ const (
 	DefaultCacheSize                                                   = 1024 * 1024 * 1024 // 1Gb
 	ShortestPossibleFunctionNameLen                                    = len("q.a.a")
 	DefaultBLOBWorkersNum                                              = 10
-	DefaultRetryAfterSecondsOn503                                      = 1
 	DefaultMaxPrepareQueries                                           = 10
 	DefaultBLOBMaxSize                                                 = router.BLOBMaxSizeType(20971520) // 20Mb
 	DefaultVVMPort                                                     = router.DefaultPort
@@ -34,6 +33,7 @@ const (
 const (
 	ProcessorChannel_Command ProcessorChannelType = iota
 	ProcessorChannel_Query
+	ProcessorChannel_BLOB
 )
 
 var (

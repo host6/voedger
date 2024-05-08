@@ -116,14 +116,12 @@ func (s *httpService) registerHandlers(busTimeout time.Duration, numsAppsWorkspa
 		Browser sees that hosts differs: from localhost to alpha -> need CORS -> denies POST and executes the same request with OPTIONS header
 		-> need to allow OPTIONS
 	*/
-	if s.BlobberParams != nil {
-		s.router.Handle(fmt.Sprintf("/blob/{%s}/{%s}/{%s:[0-9]+}", AppOwner, AppName, WSID), corsHandler(s.blobWriteRequestHandler())).
-			Methods("POST", "OPTIONS").
-			Name("blob write")
-		s.router.Handle(fmt.Sprintf("/blob/{%s}/{%s}/{%s:[0-9]+}/{%s:[0-9]+}", AppOwner, AppName, WSID, blobID), corsHandler(s.blobReadRequestHandler())).
-			Methods("POST", "GET", "OPTIONS").
-			Name("blob read")
-	}
+	s.router.Handle(fmt.Sprintf("/blob/{%s}/{%s}/{%s:[0-9]+}", AppOwner, AppName, WSID), corsHandler(s.blobWriteRequestHandler())).
+		Methods("POST", "OPTIONS").
+		Name("blob write")
+	s.router.Handle(fmt.Sprintf("/blob/{%s}/{%s}/{%s:[0-9]+}/{%s:[0-9]+}", AppOwner, AppName, WSID, blobID), corsHandler(s.blobReadRequestHandler())).
+		Methods("POST", "GET", "OPTIONS").
+		Name("blob read")
 	s.router.HandleFunc(fmt.Sprintf("/api/{%s}/{%s}/{%s:[0-9]+}/{%s:[a-zA-Z0-9_/.]+}", AppOwner, AppName,
 		WSID, ResourceName), corsHandler(RequestHandler(s.bus, busTimeout, numsAppsWorkspaces))).
 		Methods("POST", "PATCH", "OPTIONS").Name("api")
@@ -169,14 +167,14 @@ func RequestHandler(bus ibus.IBus, busTimeout time.Duration, numsAppsWorkspaces 
 		res, sections, secErr, err := bus.SendRequest2(requestCtx, queueRequest, busTimeout)
 		if err != nil {
 			logger.Error("IBus.SendRequest2 failed on ", queueRequest.Resource, ":", err, ". Body:\n", string(queueRequest.Body))
-			WriteTextResponse(resp, err.Error(), http.StatusInternalServerError)
+			coreutils.WriteTextResponse(resp, err.Error(), http.StatusInternalServerError)
 			return
 		}
 
 		if sections == nil {
 			resp.Header().Set(coreutils.ContentType, res.ContentType)
 			resp.WriteHeader(res.StatusCode)
-			writeResponse(resp, string(res.Data))
+			coreutils.WriteResponse(resp, string(res.Data))
 			return
 		}
 		writeSectionedResponse(requestCtx, resp, sections, secErr, cancel)

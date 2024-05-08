@@ -17,11 +17,10 @@ import (
 
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
-	"github.com/voedger/voedger/pkg/iblobstorage"
 	"github.com/voedger/voedger/pkg/in10n"
-	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/iprocbusmem"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/processors/blob"
 )
 
 type RouterParams struct {
@@ -39,7 +38,7 @@ type RouterParams struct {
 
 type httpService struct {
 	RouterParams
-	*BlobberParams
+	blobProcBus        blob.BLOBProcBus
 	router             *mux.Router
 	server             *http.Server
 	listener           net.Listener
@@ -59,18 +58,18 @@ type acmeService struct {
 	http.Server
 }
 
-type BLOBMaxSizeType int64
+// type BLOBMaxSizeType int64
 
 type BlobberServiceChannels []iprocbusmem.ChannelGroup
 
-type BlobberParams struct {
-	ServiceChannels        []iprocbusmem.ChannelGroup
-	BLOBStorage            iblobstorage.IBLOBStorage
-	BLOBWorkersNum         int
-	procBus                iprocbus.IProcBus
-	RetryAfterSecondsOn503 int
-	BLOBMaxSize            BLOBMaxSizeType
-}
+// type BlobberParams struct {
+// 	ServiceChannels        []iprocbusmem.ChannelGroup
+// 	BLOBStorage            iblobstorage.IBLOBStorage
+// 	BLOBWorkersNum         int
+// 	procBus                iprocbus.IProcBus
+// 	RetryAfterSecondsOn503 int
+// 	BLOBMaxSize            BLOBMaxSizeType
+// }
 
 type route struct {
 	targetURL  *url.URL
