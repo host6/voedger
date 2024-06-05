@@ -7,6 +7,7 @@ package cobrau
 
 import (
 	"context"
+	"log"
 	"os"
 	"os/signal"
 	"sync"
@@ -22,8 +23,11 @@ func ExecCommandAndCatchInterrupt(cmd *cobra.Command) error {
 		return
 	}
 
-	return goAndCatchInterrupt(cmdExec)
-
+	err := goAndCatchInterrupt(cmdExec)
+	if err != nil {
+		log.Println(cmd.UseLine())
+	}
+	return err
 }
 
 func goAndCatchInterrupt(f func(ctx context.Context) error) (err error) {

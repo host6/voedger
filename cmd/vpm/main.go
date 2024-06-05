@@ -31,7 +31,7 @@ func execRootCmd(args []string, ver string) error {
 	params := &vpmParams{}
 	rootCmd := cobrau.PrepareRootCmd(
 		"vpm",
-		"",
+		"vpm is a extensions manager for voedger framework",
 		args,
 		ver,
 		newCompileCmd(params),
@@ -97,22 +97,17 @@ func initGlobalFlags(cmd *cobra.Command, params *vpmParams) {
 
 func exactArgs(n int) cobra.PositionalArgs {
 	return func(cmd *cobra.Command, args []string) error {
-		runHelpFuncInstead := func(cmd *cobra.Command, args []string) error {
-			if err := cmd.Help(); err != nil {
-				return err
-			}
-			return nil
-		}
 		switch {
-		case len(args) == 1 && args[0] == "help":
-			cmd.RunE = runHelpFuncInstead
-			return nil
-		case len(args) != n:
-			strCountOfArgs := strconv.Itoa(n)
-			if n == 0 {
-				strCountOfArgs = "no"
+		case len(args) >= 1 && args[0] == "help", len(args) == 0 && n > 0:
+			cmd.RunE = func(*cobra.Command, []string) error {
+				return cmd.Help()
 			}
-			return fmt.Errorf("'%s' accepts %s arg(s). Run '%s help'", cmd.CommandPath(), strCountOfArgs, cmd.CommandPath())
+		case len(args) != n:
+			strCountOfArgs := strconv.Itoa(n) + " arg(s)"
+			if n == 0 {
+				strCountOfArgs = "no args"
+			}
+			return fmt.Errorf("'%s' accepts %s. Run '%s help'", cmd.CommandPath(), strCountOfArgs, cmd.CommandPath())
 		}
 		return nil
 	}
