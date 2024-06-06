@@ -37,7 +37,9 @@ func (s *asyncActualizerContextState) error() error {
 	return s.err
 }
 
-func isAcceptable(event istructs.IPLogEvent, wantErrors bool, triggeringQNames map[appdef.QName][]appdef.ProjectorEventKind, appDef appdef.IAppDef) bool {
+func isAcceptable(event istructs.IPLogEvent, wantErrors bool, triggeringQNames map[appdef.QName][]appdef.ProjectorEventKind, appDef appdef.IAppDef,
+	iWorkspace appdef.IWorkspace) bool {
+
 	switch event.QName() {
 	case istructs.QNameForError:
 		return wantErrors

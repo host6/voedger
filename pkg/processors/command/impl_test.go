@@ -35,7 +35,7 @@ import (
 	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/projectors"
 	coreutils "github.com/voedger/voedger/pkg/utils"
-	wsdescutil "github.com/voedger/voedger/pkg/utils/testwsdesc"
+	wsdescutil "github.com/voedger/voedger/pkg/utils/wsdesc"
 	"github.com/voedger/voedger/pkg/vvm/engines"
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 	"github.com/voedger/voedger/staging/src/github.com/untillpro/ibusmem"

@@ -72,6 +72,7 @@ func newSyncBranch(conf SyncActualizerConf, projector istructs.Projector, servic
 	fn = pipeline.ForkBranch(pipeline.NewSyncPipeline(conf.Ctx, pipelineName,
 		pipeline.WireFunc("Projector",
 			func(ctx context.Context, work interface{}) error {
+				// workpiece of the cmd proc here
 				appPart := work.(interface{ AppPartition() appparts.IAppPartition }).AppPartition()
 				appDef := appPart.AppStructs().AppDef()
 				prj := appDef.Projector(projector.Name)

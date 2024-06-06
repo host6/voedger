@@ -16,7 +16,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
-	wsdescutil "github.com/voedger/voedger/pkg/utils/testwsdesc"
+	wsdescutil "github.com/voedger/voedger/pkg/utils/wsdesc"
 	it "github.com/voedger/voedger/pkg/vit"
 	sys_test_template "github.com/voedger/voedger/pkg/vit/testdata"
 )

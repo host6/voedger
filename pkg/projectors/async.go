@@ -15,6 +15,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/goutils/iterate"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	wsdescutil "github.com/voedger/voedger/pkg/utils/wsdesc"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
@@ -409,7 +410,17 @@ func (p *asyncProjector) DoAsync(ctx context.Context, work pipeline.IWorkpiece) 
 		p.aametrics.Set(aaCurrentOffset, p.partition, p.projector.Name, float64(w.pLogOffset))
 	}
 
-	if !isAcceptable(w.event, p.iProjector.WantErrors(), p.iProjector.Events().Map(), p.iProjector.App()) {
+	iWorkspace, err := wsdescutil.IWorkspaceFromCurrentState(p.state, p.iProjector.App())
+	if err != nil {
+		return nil, err
+	}
+	tp := iWorkspace.Type(p.projector.Name)
+	if tp.Kind() == appdef.TypeKind_null {
+		// the projector is not defined in the workspace of the event -> skip
+		return nil, err
+	}
+
+	if !isAcceptable(w.event, p.iProjector.WantErrors(), p.iProjector.Events().Map(), p.iProjector.App(), iWorkspace) {
 		return nil, nil
 	}
 

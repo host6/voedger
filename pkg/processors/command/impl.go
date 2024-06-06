@@ -85,6 +85,11 @@ func (c *cmdWorkpiece) GetAppStructs() istructs.IAppStructs {
 	return c.appStructs
 }
 
+// need for sync actualizer to chek if the projector exists in the workspace of the event
+func (c *cmdWorkpiece) IWorkspace() appdef.IWorkspace {
+	return c.iWorkspace
+}
+
 // borrows app partition for command
 func (c *cmdWorkpiece) borrow() (err error) {
 	if c.appPart, err = c.appParts.Borrow(c.cmdMes.AppQName(), c.cmdMes.PartitionID(), appparts.ProcessorKind_Command); err != nil {
