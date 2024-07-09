@@ -384,7 +384,7 @@ func DummyWS(wsKind appdef.QName, wsid istructs.WSID, ownerPrn *Principal) *AppW
 // then calls testAfterRestart() with the new VIT
 // cfg must be owned
 func TestRestartPreservingStorage(t *testing.T, cfg *VITConfig, testBeforeRestart, testAfterRestart func(t *testing.T, vit *VIT)) {
-	require.False(t, cfg.isShared, "storage restart could be done on Own VIT Config only")
+	require.False(t, cfg.isShared, "storage restart could be done on Owned VIT Config only")
 	var sharedStorageFactory istorage.IAppStorageFactory
 	suffix := t.Name() + uuid.NewString()
 	cfg.opts = append(cfg.opts, WithVVMConfig(func(cfg *vvm.VVMConfig) {
