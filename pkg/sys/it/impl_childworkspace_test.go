@@ -6,6 +6,7 @@ package sys_it
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -48,16 +49,17 @@ func TestBasicUsage_ChildWorkspaces(t *testing.T) {
 		// note: creating workspace at non-main cluster is unsupported for now
 		// because there are no AppWorkspaces in any cluster but Main (created automatically on VVM launch)
 		// also GetAppWSID() uses MainCluser, not the target one
+		val := strings.Repeat("a", 1000)
 		body := fmt.Sprintf(`
 			{
 				"args": {
 					"WSName": %q,
 					"WSKind": "app1pkg.test_ws",
-					"WSKindInitializationData": "{\"IntFld\": 10}",
+					"WSKindInitializationData": "{\"StrFld\": \"%s\"}",
 					"TemplateName": "test_template",
 					"WSClusterID": 1
 				}
-			}`, wsName)
+			}`, wsName, val)
 		vit.PostWS(parentWS, "c.sys.InitChildWorkspace", body)
 
 		// wait for finish
