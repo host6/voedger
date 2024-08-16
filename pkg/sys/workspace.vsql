@@ -328,6 +328,8 @@ ABSTRACT WORKSPACE Workspace (
 
 	EXTENSION ENGINE BUILTIN (
 
+		QUERY SqlQuery;
+
 		-- blobber
 
 		COMMAND UploadBLOBHelper;
@@ -390,7 +392,7 @@ ABSTRACT WORKSPACE Workspace (
 
 		-- sqlquery
 
-		QUERY SqlQuery(SqlQueryParams) RETURNS SqlQueryResult;
+
 
 		-- uniques
 
