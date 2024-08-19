@@ -12,15 +12,14 @@ import (
 )
 
 const (
-	nameCDOC                = "CDoc"
-	nameODOC                = "ODoc"
-	nameWDOC                = "WDoc"
-	nameCSingleton          = "CSingleton"
-	nameWSingleton          = "WSingleton"
-	nameSingletonDeprecated = "Singleton"
-	nameCRecord             = "CRecord"
-	nameORecord             = "ORecord"
-	nameWRecord             = "WRecord"
+	nameCDOC       = "CDoc"
+	nameODOC       = "ODoc"
+	nameWDOC       = "WDoc"
+	nameCSingleton = "CSingleton"
+	nameWSingleton = "WSingleton"
+	nameCRecord    = "CRecord"
+	nameORecord    = "ORecord"
+	nameWRecord    = "WRecord"
 )
 
 const rootWorkspaceName = "Workspace"
@@ -30,6 +29,8 @@ const ExportedPkgFolder = "pkg"
 
 const maxNestedTableContainerOccurrences = 100 // FIXME: 100 container occurrences
 const parserLookahead = 10
+const VSqlExt = ".vsql"
+const SqlExt = ".sql"
 
 var canNotReferenceTo = map[appdef.TypeKind][]appdef.TypeKind{
 	appdef.TypeKind_ODoc:       {},

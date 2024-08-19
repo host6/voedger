@@ -13,19 +13,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/sys"
 )
 
 func TestHostState_BasicUsage(t *testing.T) {
 	require := require.New(t)
 
 	factory := ProvideQueryProcessorStateFactory()
-	appStructs := mockedHostStateStructs()
-	hostState := factory(context.Background(), appStructs, nil, SimpleWSIDFunc(istructs.WSID(1)), nil, nil, nil, nil)
+	hostState := factory(context.Background(), mockedHostStateStructs, nil, SimpleWSIDFunc(istructs.WSID(1)), nil, nil, nil, nil, nil, nil, nil, nil, nil)
 
 	// Declare simple extension
 	extension := func(state istructs.IState) {
 		//Create key
-		key, err := state.KeyBuilder(View, testViewRecordQName1)
+		key, err := state.KeyBuilder(sys.Storage_View, testViewRecordQName1)
 		require.NoError(err)
 		key.PutInt64("pkFld", 64)
 
@@ -83,12 +83,31 @@ func mockedHostStateStructs() istructs.IAppStructs {
 		AddField("vFld", appdef.DataKind_int64, false).
 		AddField(ColOffset, appdef.DataKind_int64, false)
 
+	mockWorkspaceRecord := &mockRecord{}
+	mockWorkspaceRecord.On("AsQName", "WSKind").Return(testWSDescriptorQName)
+	mockWorkspaceRecord.On("QName").Return(qNameCDocWorkspaceDescriptor)
+	mockedRecords := &mockRecords{}
+	mockedRecords.On("GetSingleton", istructs.WSID(1), mock.Anything).Return(mockWorkspaceRecord, nil)
+
+	wsDesc := appDef.AddCDoc(testWSDescriptorQName)
+	wsDesc.AddField(field_WSKind, appdef.DataKind_bytes, false)
+
+	ws := appDef.AddWorkspace(testWSQName)
+	ws.AddType(testViewRecordQName1)
+	ws.SetDescriptor(testWSDescriptorQName)
+
+	app, err := appDef.Build()
+	if err != nil {
+		panic(err)
+	}
+
 	appStructs := &mockAppStructs{}
 	appStructs.
-		On("AppDef").Return(appDef).
+		On("AppDef").Return(app).
+		On("AppQName").Return(testAppQName).
 		On("ViewRecords").Return(viewRecords).
 		On("Events").Return(&nilEvents{}).
-		On("Records").Return(&nilRecords{})
+		On("Records").Return(mockedRecords)
 	return appStructs
 }
 func TestHostState_KeyBuilder_Should_return_unknown_storage_ID_error(t *testing.T) {
@@ -104,7 +123,7 @@ func TestHostState_CanExist(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -123,7 +142,7 @@ func TestHostState_CanExist(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).Return(errTest)
 		s := hostStateForTest(ms)
 		k, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -136,7 +155,7 @@ func TestHostState_CanExist(t *testing.T) {
 	t.Run("Should return get batch not supported by storage error", func(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
-		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName))
+		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName))
 		s, _ := emptyHostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
 		require.NoError(err)
@@ -152,7 +171,7 @@ func TestHostState_CanExistAll(t *testing.T) {
 		times := 0
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -176,7 +195,7 @@ func TestHostState_CanExistAll(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).Return(errTest)
 		s := hostStateForTest(ms)
 		k, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -189,7 +208,7 @@ func TestHostState_CanExistAll(t *testing.T) {
 	t.Run("Should return get not supported by storage error", func(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
-		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName))
+		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName))
 		s, _ := emptyHostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
 		require.NoError(err)
@@ -204,7 +223,7 @@ func TestHostState_MustExist(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -222,7 +241,7 @@ func TestHostState_MustExist(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -240,7 +259,7 @@ func TestHostState_MustExist(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).Return(errTest)
 		s := hostStateForTest(ms)
 		k, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -256,7 +275,7 @@ func TestHostState_MustExistAll(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -284,7 +303,7 @@ func TestHostState_MustExistAll(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).Return(errTest)
 		s := hostStateForTest(ms)
 		k, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -298,7 +317,7 @@ func TestHostState_MustExistAll(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -318,7 +337,7 @@ func TestHostState_MustExistAll(t *testing.T) {
 	t.Run("Should return get not supported by storage error", func(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
-		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName))
+		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName))
 		s, _ := emptyHostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
 		require.NoError(err)
@@ -333,7 +352,7 @@ func TestHostState_MustNotExist(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -351,7 +370,7 @@ func TestHostState_MustNotExist(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -369,7 +388,7 @@ func TestHostState_MustNotExist(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).Return(errTest)
 		s := hostStateForTest(ms)
 		k, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -385,7 +404,7 @@ func TestHostState_MustNotExistAll(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -406,7 +425,7 @@ func TestHostState_MustNotExistAll(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).Return(errTest)
 		s := hostStateForTest(ms)
 		k, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -420,7 +439,7 @@ func TestHostState_MustNotExistAll(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("GetBatch", mock.AnythingOfType("[]state.GetBatchItem")).
 			Return(nil).
 			Run(func(args mock.Arguments) {
@@ -440,7 +459,7 @@ func TestHostState_MustNotExistAll(t *testing.T) {
 	t.Run("Should return get not supported by storage error", func(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
-		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName))
+		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName))
 		s, _ := emptyHostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
 		require.NoError(err)
@@ -454,7 +473,7 @@ func TestHostState_Read(t *testing.T) {
 	t.Run("Should be ok", func(t *testing.T) {
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
 			On("Read", mock.Anything, mock.AnythingOfType("istructs.ValueCallback")).Return(nil)
 		s := hostStateForTest(ms)
 		k, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -467,7 +486,7 @@ func TestHostState_Read(t *testing.T) {
 	t.Run("Should return read not supported by storage error", func(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
-		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName))
+		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName))
 		s, _ := emptyHostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
 		require.NoError(err)
@@ -481,7 +500,7 @@ func TestHostState_NewValue(t *testing.T) {
 	t.Run("Should return error when intents limit exceeded", func(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
-		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName))
+		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName))
 		s, i := limitedIntentsHostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
 		require.NoError(err)
@@ -493,7 +512,7 @@ func TestHostState_NewValue(t *testing.T) {
 	t.Run("Should return insert not supported by storage error", func(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
-		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName))
+		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName))
 		s, i := emptyHostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
 		require.NoError(err)
@@ -507,7 +526,7 @@ func TestHostState_UpdateValue(t *testing.T) {
 	t.Run("Should return error when intents limit exceeded", func(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
-		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName))
+		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName))
 		s, i := limitedIntentsHostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
 		require.NoError(err)
@@ -519,7 +538,7 @@ func TestHostState_UpdateValue(t *testing.T) {
 	t.Run("Should return update not supported by storage error", func(t *testing.T) {
 		require := require.New(t)
 		ms := &mockStorage{}
-		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName))
+		ms.On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName))
 		s, i := emptyHostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
 		require.NoError(err)
@@ -533,8 +552,8 @@ func TestHostState_ValidateIntents(t *testing.T) {
 	t.Run("Should be ok", func(t *testing.T) {
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
-			On("ProvideValueBuilder", mock.Anything, mock.Anything).Return(&viewValueBuilder{}).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
+			On("ProvideValueBuilder", mock.Anything, mock.Anything).Return(&viewValueBuilder{}, nil).
 			On("Validate", mock.Anything).Return(nil)
 		s := hostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -557,8 +576,8 @@ func TestHostState_ValidateIntents(t *testing.T) {
 	t.Run("Should return validation error", func(t *testing.T) {
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
-			On("ProvideValueBuilder", mock.Anything, mock.Anything).Return(&viewValueBuilder{}).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
+			On("ProvideValueBuilder", mock.Anything, mock.Anything).Return(&viewValueBuilder{}, nil).
 			On("Validate", mock.Anything).Return(errTest)
 		s := hostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -575,8 +594,8 @@ func TestHostState_ApplyIntents(t *testing.T) {
 	t.Run("Should be ok", func(t *testing.T) {
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
-			On("ProvideValueBuilder", mock.Anything, mock.Anything).Return(&viewValueBuilder{}).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
+			On("ProvideValueBuilder", mock.Anything, mock.Anything).Return(&viewValueBuilder{}, nil).
 			On("ApplyBatch", mock.Anything).Return(nil)
 		s := hostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -591,8 +610,8 @@ func TestHostState_ApplyIntents(t *testing.T) {
 	t.Run("Should return apply batch error", func(t *testing.T) {
 		ms := &mockStorage{}
 		ms.
-			On("NewKeyBuilder", appdef.NullQName, nil).Return(newKeyBuilder(testStorage, appdef.NullQName)).
-			On("ProvideValueBuilder", mock.Anything, mock.Anything).Return(&viewValueBuilder{}).
+			On("NewKeyBuilder", appdef.NullQName, nil).Return(newMapKeyBuilder(testStorage, appdef.NullQName)).
+			On("ProvideValueBuilder", mock.Anything, mock.Anything).Return(&viewValueBuilder{}, nil).
 			On("ApplyBatch", mock.Anything).Return(errTest)
 		s := hostStateForTest(ms)
 		kb, err := s.KeyBuilder(testStorage, appdef.NullQName)
@@ -611,7 +630,7 @@ func hostStateForTest(s IStateStorage) IHostState {
 	return hs
 }
 func emptyHostStateForTest(s IStateStorage) (istructs.IState, istructs.IIntents) {
-	bs := ProvideQueryProcessorStateFactory()(context.Background(), &nilAppStructs{}, nil, nil, nil, nil, nil, nil).(*hostState)
+	bs := ProvideQueryProcessorStateFactory()(context.Background(), nilAppStructsFunc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil).(*queryProcessorState)
 	bs.addStorage(testStorage, s, math.MinInt)
 	return bs, bs
 }

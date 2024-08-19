@@ -19,7 +19,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/in10n"
 	istructs "github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
@@ -116,10 +116,10 @@ func (nb *N10nBroker) Subscribe(channelID in10n.ChannelID, projectionKey in10n.P
 		return ErrMetricDoesNotExists
 	}
 
-	if nb.numSubscriptions >= nb.quotas.Subsciptions {
+	if nb.numSubscriptions >= nb.quotas.Subscriptions {
 		return in10n.ErrQuotaExceeded_Subsciptions
 	}
-	if metric.numSubscriptions >= nb.quotas.SubsciptionsPerSubject {
+	if metric.numSubscriptions >= nb.quotas.SubscriptionsPerSubject {
 		return in10n.ErrQuotaExceeded_SubsciptionsPerSubject
 	}
 

@@ -8,8 +8,8 @@ package istructsmem
 import (
 	"fmt"
 
-	"github.com/untillpro/goutils/iterate"
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/iterate"
 	"github.com/voedger/voedger/pkg/irates"
 	istorage "github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -21,18 +21,27 @@ import (
 )
 
 // AppConfigsType: map of applications configurators
-type AppConfigsType map[istructs.AppQName]*AppConfigType
+// does contain stateless resources
+type AppConfigsType map[appdef.AppQName]*AppConfigType
 
-// AddConfig: adds new config for specified application or replaces if exists
-func (cfgs *AppConfigsType) AddConfig(appName istructs.AppQName, appDef appdef.IAppDefBuilder) *AppConfigType {
-	c := newAppConfig(appName, appDef)
+// AddAppConfig: adds new config for specified application or replaces if exists
+func (cfgs *AppConfigsType) AddAppConfig(name appdef.AppQName, id istructs.ClusterAppID, def appdef.IAppDef,
+	wsCount istructs.NumAppWorkspaces) *AppConfigType {
+	c := newAppConfig(name, id, def, wsCount)
+	(*cfgs)[name] = c
+	return c
+}
+
+// AddBuiltInAppConfig: adds new config for specified builtin application or replaces if exists
+func (cfgs *AppConfigsType) AddBuiltInAppConfig(appName appdef.AppQName, appDef appdef.IAppDefBuilder) *AppConfigType {
+	c := newBuiltInAppConfig(appName, appDef)
 
 	(*cfgs)[appName] = c
 	return c
 }
 
 // GetConfig: gets config for specified application
-func (cfgs *AppConfigsType) GetConfig(appName istructs.AppQName) *AppConfigType {
+func (cfgs *AppConfigsType) GetConfig(appName appdef.AppQName) *AppConfigType {
 	c, ok := (*cfgs)[appName]
 	if !ok {
 		panic(fmt.Errorf("unable return configuration for unknown application «%v»: %w", appName, istructs.ErrAppNotFound))
@@ -42,12 +51,12 @@ func (cfgs *AppConfigsType) GetConfig(appName istructs.AppQName) *AppConfigType 
 
 // AppConfigType: configuration for application workflow
 type AppConfigType struct {
-	Name         istructs.AppQName
+	Name         appdef.AppQName
 	ClusterAppID istructs.ClusterAppID
 
 	appDefBuilder appdef.IAppDefBuilder
 	AppDef        appdef.IAppDef
-	Resources     Resources
+	Resources     Resources // does not contain stateless funcs
 
 	// Application configuration parameters
 	Params AppConfigParams
@@ -66,29 +75,21 @@ type AppConfigType struct {
 	asyncProjectors    istructs.Projectors
 	cudValidators      []istructs.CUDValidator
 	eventValidators    []istructs.EventValidator
+	numAppWorkspaces   istructs.NumAppWorkspaces
 }
 
-func newAppConfig(appName istructs.AppQName, appDef appdef.IAppDefBuilder) *AppConfigType {
+func newAppConfig(name appdef.AppQName, id istructs.ClusterAppID, def appdef.IAppDef, wsCount istructs.NumAppWorkspaces) *AppConfigType {
 	cfg := AppConfigType{
-		Name:            appName,
-		Params:          makeAppConfigParams(),
-		syncProjectors:  make(istructs.Projectors),
-		asyncProjectors: make(istructs.Projectors),
+		Name:             name,
+		ClusterAppID:     id,
+		Params:           makeAppConfigParams(),
+		syncProjectors:   make(istructs.Projectors),
+		asyncProjectors:  make(istructs.Projectors),
+		numAppWorkspaces: wsCount,
 	}
 
-	qNameID, ok := istructs.ClusterApps[appName]
-	if !ok {
-		panic(fmt.Errorf("unable construct configuration for unknown application «%v»: %w", appName, istructs.ErrAppNotFound))
-	}
-	cfg.ClusterAppID = qNameID
-
-	cfg.appDefBuilder = appDef
-	app, err := appDef.Build()
-	if err != nil {
-		panic(fmt.Errorf("%v: unable build application: %w", appName, err))
-	}
-	cfg.AppDef = app
-	cfg.Resources = newResources(&cfg)
+	cfg.AppDef = def
+	cfg.Resources = NewResources()
 
 	cfg.dynoSchemes = dynobuf.New()
 
@@ -103,6 +104,23 @@ func newAppConfig(appName istructs.AppQName, appDef appdef.IAppDefBuilder) *AppC
 	return &cfg
 }
 
+func newBuiltInAppConfig(appName appdef.AppQName, appDef appdef.IAppDefBuilder) *AppConfigType {
+	id, ok := istructs.ClusterApps[appName]
+	if !ok {
+		panic(fmt.Errorf("unable construct configuration for unknown application «%v»: %w", appName, istructs.ErrAppNotFound))
+	}
+
+	def, err := appDef.Build()
+	if err != nil {
+		panic(fmt.Errorf("%v: unable build application: %w", appName, err))
+	}
+
+	cfg := newAppConfig(appName, id, def, 0)
+	cfg.appDefBuilder = appDef
+
+	return cfg
+}
+
 // prepare: prepares application configuration to use. It creates config globals and must be called from thread-safe code
 func (cfg *AppConfigType) prepare(buckets irates.IBuckets, appStorage istorage.IAppStorage) error {
 	// if cfg.QNameID == istructs.NullClusterAppID {…} — unnecessary check. QNameIDmust be checked before prepare()
@@ -111,11 +129,14 @@ func (cfg *AppConfigType) prepare(buckets irates.IBuckets, appStorage istorage.I
 		return nil
 	}
 
-	app, err := cfg.appDefBuilder.Build()
-	if err != nil {
-		return fmt.Errorf("%v: unable rebuild changed application: %w", cfg.Name, err)
+	if cfg.appDefBuilder != nil {
+		// BuiltIn application, appDefBuilder can be changed after add config
+		app, err := cfg.appDefBuilder.Build()
+		if err != nil {
+			return fmt.Errorf("%v: unable rebuild changed application: %w", cfg.Name, err)
+		}
+		cfg.AppDef = app
 	}
-	cfg.AppDef = app
 
 	cfg.dynoSchemes.Prepare(cfg.AppDef)
 
@@ -128,7 +149,7 @@ func (cfg *AppConfigType) prepare(buckets irates.IBuckets, appStorage istorage.I
 	}
 
 	// prepare QNames
-	if err := cfg.qNames.Prepare(cfg.storage, cfg.versions, cfg.AppDef, &cfg.Resources); err != nil {
+	if err := cfg.qNames.Prepare(cfg.storage, cfg.versions, cfg.AppDef); err != nil {
 		return err
 	}
 
@@ -149,40 +170,16 @@ func (cfg *AppConfigType) prepare(buckets irates.IBuckets, appStorage istorage.I
 		return err
 	}
 
+	if cfg.numAppWorkspaces <= 0 {
+		return fmt.Errorf("%s: %w", cfg.Name, ErrNumAppWorkspacesNotSet)
+	}
+
 	cfg.prepared = true
 	return nil
 }
 
-func (cfg *AppConfigType) validateResources() error {
-	err := iterate.ForEachError(cfg.AppDef.Types, func(tp appdef.IType) error {
-		switch tp.Kind() {
-		case appdef.TypeKind_Query, appdef.TypeKind_Command:
-			r := cfg.Resources.QueryResource(tp.QName())
-			if r.QName() == appdef.NullQName {
-				return fmt.Errorf("exec of func %s is not defined", tp.QName())
-			}
-		case appdef.TypeKind_Projector:
-			prj := tp.(appdef.IProjector)
-			_, syncFound := cfg.syncProjectors[prj.QName()]
-			_, asyncFound := cfg.asyncProjectors[prj.QName()]
-			if !syncFound && !asyncFound {
-				return fmt.Errorf("exec of %v is not defined", prj)
-			}
-			if syncFound && asyncFound {
-				return fmt.Errorf("exec for %v is defined twice: sync and async", prj)
-			}
-			if prj.Sync() && asyncFound {
-				return fmt.Errorf("exec of %v is defined as async", prj)
-			}
-			if !prj.Sync() && syncFound {
-				return fmt.Errorf("exec of %v is defined as sync", prj)
-			}
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
+func (cfg *AppConfigType) validateResources() (err error) {
+
 	err = iterate.ForEachError(cfg.Resources.Resources, func(qName appdef.QName) error {
 		if cfg.AppDef.Type(qName).Kind() == appdef.TypeKind_null {
 			return fmt.Errorf("exec of func %s is defined but the func is not defined in SQL", qName)
@@ -226,9 +223,41 @@ func (cfg *AppConfigType) AddEventValidators(eventValidators ...istructs.EventVa
 	cfg.eventValidators = append(cfg.eventValidators, eventValidators...)
 }
 
+func (cfg *AppConfigType) AsyncProjectors() istructs.Projectors {
+	return cfg.asyncProjectors
+}
+
 // Returns is application configuration prepared
 func (cfg *AppConfigType) Prepared() bool {
 	return cfg.prepared
+}
+
+func (cfg *AppConfigType) SyncProjectors() istructs.Projectors {
+	return cfg.syncProjectors
+}
+
+// need to build view.sys.NextBaseWSID and view.sys.projectionOffsets
+// could be called on application build stage only
+//
+// Should be used for built-in applications only.
+func (cfg *AppConfigType) AppDefBuilder() appdef.IAppDefBuilder {
+	if cfg.prepared {
+		panic("IAppStructsProvider.AppStructs() is called already for the app -> IAppDef is built already -> wrong to work with IAppDefBuilder")
+	}
+	return cfg.appDefBuilder
+}
+
+func (cfg *AppConfigType) NumAppWorkspaces() istructs.NumAppWorkspaces {
+	return cfg.numAppWorkspaces
+}
+
+// must be called after creating the AppConfigType because app will provide the deployment descriptor with the actual NumAppWorkspaces after willing the AppConfigType
+// so fisrt create AppConfigType, use it on app provide, then set the actual NumAppWorkspaces
+func (cfg *AppConfigType) SetNumAppWorkspaces(naw istructs.NumAppWorkspaces) {
+	if cfg.prepared {
+		panic("must not set NumAppWorkspaces after first IAppStructsProvider.AppStructs() call because the app is considered working")
+	}
+	cfg.numAppWorkspaces = naw
 }
 
 // Application configuration parameters

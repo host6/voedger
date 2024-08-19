@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -17,6 +18,7 @@ import (
 
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iblobstorage"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/iprocbus"
@@ -40,14 +42,17 @@ type RouterParams struct {
 type httpService struct {
 	RouterParams
 	*BlobberParams
-	router       *mux.Router
-	server       *http.Server
-	listener     net.Listener
-	n10n         in10n.IN10nBroker
-	blobWG       sync.WaitGroup
-	bus          ibus.IBus
-	busTimeout   time.Duration
-	appsWSAmount map[istructs.AppQName]istructs.AppWSAmount
+	listenAddress      string
+	router             *mux.Router
+	server             *http.Server
+	listener           net.Listener
+	n10n               in10n.IN10nBroker
+	blobWG             sync.WaitGroup
+	bus                ibus.IBus
+	busTimeout         time.Duration
+	numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces
+	name               string
+	listeningPort      atomic.Int32
 }
 
 type httpsService struct {
@@ -65,7 +70,6 @@ type BlobberServiceChannels []iprocbusmem.ChannelGroup
 
 type BlobberParams struct {
 	ServiceChannels        []iprocbusmem.ChannelGroup
-	ClusterAppBlobberID    istructs.ClusterAppID
 	BLOBStorage            iblobstorage.IBLOBStorage
 	BLOBWorkersNum         int
 	procBus                iprocbus.IProcBus
@@ -77,11 +81,6 @@ type route struct {
 	targetURL  *url.URL
 	isRewrite  bool
 	fromDomain string
-}
-
-type createChannelParamsType struct {
-	SubjectLogin  istructs.SubjectLogin
-	ProjectionKey []in10n.ProjectionKey
 }
 
 type subscriberParamsType struct {

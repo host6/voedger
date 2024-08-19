@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -26,8 +25,11 @@ import (
 func TestQNames(t *testing.T) {
 	require := require.New(t)
 
+	appName := istructs.AppQName_test1_app1
+
 	sp := istorageimpl.Provide(mem.Provide())
-	storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+	storage, err := sp.AppStorage(appName)
+	require.NoError(err)
 
 	versions := vers.New()
 	if err := versions.Prepare(storage); err != nil {
@@ -36,24 +38,16 @@ func TestQNames(t *testing.T) {
 
 	defName := appdef.NewQName("test", "doc")
 
-	resourceName := appdef.NewQName("test", "resource")
-	r := mockResources{}
-	r.On("Resources", mock.AnythingOfType("func(appdef.QName)")).
-		Run(func(args mock.Arguments) {
-			cb := args.Get(0).(func(appdef.QName))
-			cb(resourceName)
-		})
-
 	names := New()
 	if err := names.Prepare(storage, versions,
 		func() appdef.IAppDef {
-			appDefBuilder := appdef.New()
-			appDefBuilder.AddCDoc(defName)
-			appDef, err := appDefBuilder.Build()
+			adb := appdef.New()
+			adb.AddPackage("test", "test.com/test")
+			adb.AddCDoc(defName)
+			appDef, err := adb.Build()
 			require.NoError(err)
 			return appDef
-		}(),
-		&r); err != nil {
+		}()); err != nil {
 		panic(err)
 	}
 
@@ -72,7 +66,6 @@ func TestQNames(t *testing.T) {
 		}
 
 		sID := check(names, defName)
-		rID := check(names, resourceName)
 
 		t.Run("must be ok to load early stored names", func(t *testing.T) {
 			versions1 := vers.New()
@@ -81,12 +74,11 @@ func TestQNames(t *testing.T) {
 			}
 
 			names1 := New()
-			if err := names1.Prepare(storage, versions, nil, nil); err != nil {
+			if err := names1.Prepare(storage, versions, nil); err != nil {
 				panic(err)
 			}
 
 			require.Equal(sID, check(names1, defName))
-			require.Equal(rID, check(names1, resourceName))
 		})
 
 		t.Run("must be ok to redeclare names", func(t *testing.T) {
@@ -98,18 +90,17 @@ func TestQNames(t *testing.T) {
 			names2 := New()
 			if err := names2.Prepare(storage, versions,
 				func() appdef.IAppDef {
-					appdefBuilder := appdef.New()
-					appdefBuilder.AddCDoc(defName)
-					appDef, err := appdefBuilder.Build()
+					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
+					adb.AddCDoc(defName)
+					appDef, err := adb.Build()
 					require.NoError(err)
 					return appDef
-				}(),
-				nil); err != nil {
+				}()); err != nil {
 				panic(err)
 			}
 
 			require.Equal(sID, check(names2, defName))
-			require.Equal(rID, check(names2, resourceName))
 		})
 	})
 
@@ -129,9 +120,11 @@ func TestQNames(t *testing.T) {
 func TestQNamesPrepareErrors(t *testing.T) {
 	require := require.New(t)
 
+	appName := istructs.AppQName_test1_app1
+
 	t.Run("must be error if unknown system view version", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -141,13 +134,13 @@ func TestQNamesPrepareErrors(t *testing.T) {
 		versions.Put(vers.SysQNamesVersion, latestVersion+1)
 
 		names := New()
-		err := names.Prepare(storage, versions, nil, nil)
+		err := names.Prepare(storage, versions, nil)
 		require.ErrorIs(err, vers.ErrorInvalidVersion)
 	})
 
 	t.Run("must be error if invalid QName loaded from system view ", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -159,14 +152,14 @@ func TestQNamesPrepareErrors(t *testing.T) {
 		storage.Put(utils.ToBytes(consts.SysView_QNames, ver01), []byte(badName), utils.ToBytes(QNameID(512)))
 
 		names := New()
-		err := names.Prepare(storage, versions, nil, nil)
-		require.ErrorIs(err, appdef.ErrInvalidQNameStringRepresentation)
+		err := names.Prepare(storage, versions, nil)
+		require.ErrorIs(err, appdef.ErrConvertError)
 		require.ErrorContains(err, badName)
 	})
 
 	t.Run("must be ok if deleted QName loaded from system view ", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -177,13 +170,13 @@ func TestQNamesPrepareErrors(t *testing.T) {
 		storage.Put(utils.ToBytes(consts.SysView_QNames, ver01), []byte("test.deleted"), utils.ToBytes(NullQNameID))
 
 		names := New()
-		err := names.Prepare(storage, versions, nil, nil)
+		err := names.Prepare(storage, versions, nil)
 		require.NoError(err)
 	})
 
 	t.Run("must be error if invalid (small) QNameID loaded from system view ", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -194,14 +187,14 @@ func TestQNamesPrepareErrors(t *testing.T) {
 		storage.Put(utils.ToBytes(consts.SysView_QNames, ver01), []byte(istructs.QNameForError.String()), utils.ToBytes(QNameIDForError))
 
 		names := New()
-		err := names.Prepare(storage, versions, nil, nil)
+		err := names.Prepare(storage, versions, nil)
 		require.ErrorIs(err, ErrWrongQNameID)
 		require.ErrorContains(err, fmt.Sprintf("unexpected ID (%v)", QNameIDForError))
 	})
 
 	t.Run("must be error if too many QNames", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -211,15 +204,15 @@ func TestQNamesPrepareErrors(t *testing.T) {
 		names := New()
 		err := names.Prepare(storage, versions,
 			func() appdef.IAppDef {
-				appDefBuilder := appdef.New()
+				adb := appdef.New()
+				adb.AddPackage("test", "test.com/test")
 				for i := 0; i <= MaxAvailableQNameID; i++ {
-					appDefBuilder.AddObject(appdef.NewQName("test", fmt.Sprintf("name_%d", i)))
+					adb.AddObject(appdef.NewQName("test", fmt.Sprintf("name_%d", i)))
 				}
-				appDef, err := appDefBuilder.Build()
+				appDef, err := adb.Build()
 				require.NoError(err)
 				return appDef
-			}(),
-			nil)
+			}())
 		require.ErrorIs(err, ErrQNameIDsExceeds)
 	})
 
@@ -228,7 +221,7 @@ func TestQNamesPrepareErrors(t *testing.T) {
 		writeError := errors.New("storage write error")
 
 		t.Run("must be error if write some name failed", func(t *testing.T) {
-			storage := teststore.NewStorage()
+			storage := teststore.NewStorage(appName)
 
 			versions := vers.New()
 			if err := versions.Prepare(storage); err != nil {
@@ -240,18 +233,18 @@ func TestQNamesPrepareErrors(t *testing.T) {
 			names := New()
 			err := names.Prepare(storage, versions,
 				func() appdef.IAppDef {
-					appDefBuilder := appdef.New()
-					appDefBuilder.AddObject(qName)
-					appDef, err := appDefBuilder.Build()
+					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
+					adb.AddObject(qName)
+					appDef, err := adb.Build()
 					require.NoError(err)
 					return appDef
-				}(),
-				nil)
+				}())
 			require.ErrorIs(err, writeError)
 		})
 
 		t.Run("must be error if write system view version failed", func(t *testing.T) {
-			storage := teststore.NewStorage()
+			storage := teststore.NewStorage(appName)
 
 			versions := vers.New()
 			if err := versions.Prepare(storage); err != nil {
@@ -263,26 +256,14 @@ func TestQNamesPrepareErrors(t *testing.T) {
 			names := New()
 			err := names.Prepare(storage, versions,
 				func() appdef.IAppDef {
-					appDefBuilder := appdef.New()
-					appDefBuilder.AddObject(qName)
-					appDef, err := appDefBuilder.Build()
+					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
+					adb.AddObject(qName)
+					appDef, err := adb.Build()
 					require.NoError(err)
 					return appDef
-				}(),
-				nil)
+				}())
 			require.ErrorIs(err, writeError)
 		})
 	})
-}
-
-type mockResources struct {
-	mock.Mock
-}
-
-func (r *mockResources) QueryResource(resource appdef.QName) istructs.IResource {
-	return r.Called(resource).Get(0).(istructs.IResource)
-}
-
-func (r *mockResources) Resources(cb func(appdef.QName)) {
-	r.Called(cb)
 }

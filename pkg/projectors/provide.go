@@ -8,33 +8,38 @@ package projectors
 
 import (
 	"context"
+	"maps"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
-func ProvideAsyncActualizerFactory() AsyncActualizerFactory {
-	return asyncActualizerFactory
+func ProvideActualizers(cfg BasicAsyncActualizerConfig) IActualizersService {
+	return newActualizers(cfg)
 }
 
 func ProvideSyncActualizerFactory() SyncActualizerFactory {
 	return syncActualizerFactory
 }
 
-func ProvideOffsetsDef(appDef appdef.IAppDefBuilder) {
-	provideOffsetsDefImpl(appDef)
-}
-
 func ProvideViewDef(appDef appdef.IAppDefBuilder, qname appdef.QName, buildFunc ViewTypeBuilder) {
 	provideViewDefImpl(appDef, qname, buildFunc)
 }
 
-func NewSyncActualizerFactoryFactory(actualizerFactory SyncActualizerFactory, secretReader isecrets.ISecretReader, n10nBroker in10n.IN10nBroker) func(appStructs istructs.IAppStructs, partitionID istructs.PartitionID) pipeline.ISyncOperator {
+func NewSyncActualizerFactoryFactory(actualizerFactory SyncActualizerFactory, secretReader isecrets.ISecretReader,
+	n10nBroker in10n.IN10nBroker, statelessResources istructsmem.IStatelessResources) func(appStructs istructs.IAppStructs, partitionID istructs.PartitionID) pipeline.ISyncOperator {
 	return func(appStructs istructs.IAppStructs, partitionID istructs.PartitionID) pipeline.ISyncOperator {
-		if len(appStructs.SyncProjectors()) == 0 {
+		projectors := maps.Clone(appStructs.SyncProjectors())
+		statelessResources.Projectors(func(path string, projector istructs.Projector) {
+			if appStructs.AppDef().Projector(projector.Name).Sync() {
+				projectors[projector.Name] = projector
+			}
+		})
+		if len(projectors) == 0 {
 			return &pipeline.NOOP{}
 		}
 		conf := SyncActualizerConf{
@@ -54,6 +59,7 @@ func NewSyncActualizerFactoryFactory(actualizerFactory SyncActualizerFactory, se
 			},
 			IntentsLimit: DefaultIntentsLimit,
 		}
-		return actualizerFactory(conf, appStructs.SyncProjectors())
+
+		return actualizerFactory(conf, projectors)
 	}
 }

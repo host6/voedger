@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/alecthomas/participle/v2/lexer"
+	"github.com/robfig/cron/v3"
 
 	"github.com/voedger/voedger/pkg/appdef"
 )
@@ -46,6 +47,8 @@ func preAnalyse(c *basicContext, packages []*PackageSchemaAST) {
 			switch v := stmt.(type) {
 			case *TableStmt:
 				preAnalyseTable(v, ictx)
+			case *AlterWorkspaceStmt:
+				preAnalyseAlterWorkspace(v, ictx)
 			}
 		})
 	}
@@ -69,6 +72,8 @@ func analyse(c *basicContext, packages []*PackageSchemaAST) {
 				analyzeQuery(v, ictx)
 			case *ProjectorStmt:
 				analyseProjector(v, ictx)
+			case *JobStmt:
+				analyseJob(v, ictx)
 			case *TableStmt:
 				analyseTable(v, ictx)
 			case *TypeStmt:
@@ -157,6 +162,13 @@ func analyseGrant(grant *GrantStmt, c *iterateCtx) {
 		}
 	}
 
+	if grant.View {
+		err := resolveInCtx(grant.On, c, func(f *ViewStmt, _ *PackageSchemaAST) error { return nil })
+		if err != nil {
+			c.stmtErr(&grant.On.Pos, err)
+		}
+	}
+
 	if grant.Workspace {
 		err := resolveInCtx(grant.On, c, func(f *WorkspaceStmt, _ *PackageSchemaAST) error { return nil })
 		if err != nil {
@@ -164,7 +176,7 @@ func analyseGrant(grant *GrantStmt, c *iterateCtx) {
 		}
 	}
 
-	if grant.AllCommandsWithTag || grant.AllQueriesWithTag || grant.AllWorkspacesWithTag || (grant.AllTablesWithTag != nil) {
+	if grant.AllCommandsWithTag || grant.AllQueriesWithTag || grant.AllWorkspacesWithTag || (grant.AllTablesWithTag != nil) || (grant.AllViewsWithTag) {
 		err := resolveInCtx(grant.On, c, func(f *TagStmt, _ *PackageSchemaAST) error { return nil })
 		if err != nil {
 			c.stmtErr(&grant.On.Pos, err)
@@ -282,18 +294,6 @@ func analyseUseWorkspace(u *UseWorkspaceStmt, c *iterateCtx) {
 }
 
 func analyseAlterWorkspace(u *AlterWorkspaceStmt, c *iterateCtx) {
-	resolveFunc := func(w *WorkspaceStmt, schema *PackageSchemaAST) error {
-		if !w.Alterable && schema != c.pkg {
-			return ErrWorkspaceIsNotAlterable(u.Name.String())
-		}
-		u.alteredWorkspace = w
-		return nil
-	}
-	err := resolveInCtx(u.Name, c, resolveFunc)
-	if err != nil {
-		c.stmtErr(&u.Name.Pos, err)
-		return
-	}
 	// find all included statements
 
 	var iterTableItems func(ws *WorkspaceStmt, wsctx *wsCtx, items []TableItemExpr)
@@ -320,7 +320,9 @@ func analyseAlterWorkspace(u *AlterWorkspaceStmt, c *iterateCtx) {
 			}
 		})
 	}
-	iter(c.wsCtxs[u.alteredWorkspace], u)
+	if u.alteredWorkspace != nil {
+		iter(c.wsCtxs[u.alteredWorkspace], u)
+	}
 }
 
 func analyseStorage(u *StorageStmt, c *iterateCtx) {
@@ -393,6 +395,13 @@ func analyseView(view *ViewStmt, c *iterateCtx) {
 			} else {
 				fields[string(rf.Name.Value)] = i
 			}
+		} else if fe.RecordField != nil {
+			rf := fe.RecordField
+			if _, ok := fields[string(rf.Name.Value)]; ok {
+				c.stmtErr(&rf.Name.Pos, ErrRedefined(string(rf.Name.Value)))
+			} else {
+				fields[string(rf.Name.Value)] = i
+			}
 		}
 	}
 	if view.pkRef == nil {
@@ -404,6 +413,9 @@ func analyseView(view *ViewStmt, c *iterateCtx) {
 		index, ok := fields[string(pkf.Value)]
 		if !ok {
 			c.stmtErr(&pkf.Pos, ErrUndefinedField(string(pkf.Value)))
+		}
+		if view.Items[index].RecordField != nil {
+			c.stmtErr(&pkf.Pos, ErrViewFieldRecord(string(pkf.Value)))
 		}
 		fld := view.Items[index].Field
 		if fld != nil {
@@ -421,6 +433,9 @@ func analyseView(view *ViewStmt, c *iterateCtx) {
 		last := ccIndex == len(view.pkRef.ClusteringColumnsFields)-1
 		if !ok {
 			c.stmtErr(&ccf.Pos, ErrUndefinedField(string(ccf.Value)))
+		}
+		if view.Items[fieldIndex].RecordField != nil {
+			c.stmtErr(&ccf.Pos, ErrViewFieldRecord(string(ccf.Value)))
 		}
 		fld := view.Items[fieldIndex].Field
 		if fld != nil {
@@ -619,9 +634,30 @@ func checkIntents(intents []StateStorage, c *iterateCtx, scope checkScopeFunc) {
 	}
 }
 
+func preAnalyseAlterWorkspace(u *AlterWorkspaceStmt, c *iterateCtx) {
+	resolveFunc := func(w *WorkspaceStmt, schema *PackageSchemaAST) error {
+		if !w.Alterable && schema != c.pkg {
+			return ErrWorkspaceIsNotAlterable(u.Name.String())
+		}
+		u.alteredWorkspace = w
+		u.alteredWorkspacePkg = schema
+		return nil
+	}
+	err := resolveInCtx(u.Name, c, resolveFunc)
+	if err != nil {
+		c.stmtErr(&u.Name.Pos, err)
+		return
+	}
+}
+
 func analyseProjector(v *ProjectorStmt, c *iterateCtx) {
 	for i := range v.Triggers {
 		trigger := &v.Triggers[i]
+
+		if trigger.CronSchedule != nil {
+			c.stmtErr(&v.Pos, ErrScheduledProjectorDeprecated)
+		}
+
 		for _, qname := range trigger.QNames {
 			if len(trigger.TableActions) > 0 {
 
@@ -689,8 +725,17 @@ func analyseProjector(v *ProjectorStmt, c *iterateCtx) {
 			}
 		}
 	}
+
 	checkState(v.State, c, func(sc *StorageScope) bool { return sc.Projectors })
 	checkIntents(v.Intents, c, func(sc *StorageScope) bool { return sc.Projectors })
+}
+
+func analyseJob(j *JobStmt, c *iterateCtx) {
+	if _, e := cron.ParseStandard(*j.CronSchedule); e != nil {
+		c.stmtErr(&j.Pos, ErrInvalidCronSchedule(*j.CronSchedule))
+	}
+
+	checkState(j.State, c, func(sc *StorageScope) bool { return sc.Jobs })
 }
 
 // Note: function may update with argument
@@ -809,11 +854,19 @@ func analyseWorkspace(v *WorkspaceStmt, c *iterateCtx) {
 		}
 	}
 	if v.Descriptor != nil {
+		wc := &iterateCtx{
+			basicContext: c.basicContext,
+			collection:   v,
+			pkg:          c.pkg,
+			parent:       c,
+			wsCtxs:       c.wsCtxs,
+		}
 		if v.Abstract {
 			c.stmtErr(&v.Descriptor.Pos, ErrAbstractWorkspaceDescriptor)
 		}
-		analyseNestedTables(v.Descriptor.Items, appdef.TypeKind_CDoc, c)
-		analyseFieldSets(v.Descriptor.Items, c)
+		analyseNestedTables(v.Descriptor.Items, appdef.TypeKind_CDoc, wc)
+		analyseFields(v.Descriptor.Items, wc, true)
+		analyseFieldSets(v.Descriptor.Items, wc)
 	}
 
 	// find all included QNames
@@ -867,16 +920,18 @@ func includeFromInheritedWorkspaces(ws *WorkspaceStmt, c *iterateCtx) {
 		for _, inherits := range ws.Inherits {
 
 			inheritsAnything = true
-			baseWs, _, err := lookupInCtx[*WorkspaceStmt](inherits, wsctx.ictx)
+			var baseWs *WorkspaceStmt
+			err := resolveInCtx(inherits, wsctx.ictx, func(ws *WorkspaceStmt, _ *PackageSchemaAST) error {
+				baseWs = ws
+				if baseWs == sysWorkspace {
+					return ErrInheritanceFromSysWorkspaceNotAllowed
+				}
+				return nil
+			})
 			if err != nil {
 				c.stmtErr(&ws.Pos, err)
 				return
 			}
-			if baseWs == sysWorkspace {
-				c.stmtErr(&ws.Pos, ErrInheritanceFromSysWorkspaceNotAllowed)
-				return
-			}
-
 			for _, item := range added {
 				if item == baseWs {
 					return // circular reference
@@ -954,7 +1009,7 @@ func analyseFieldSets(items []TableItemExpr, c *iterateCtx) {
 	}
 }
 
-func lookupField(items []TableItemExpr, name Ident) bool {
+func lookupField(items []TableItemExpr, name Ident, c *iterateCtx) (found bool) {
 	for i := range items {
 		item := items[i]
 		if item.Field != nil {
@@ -962,8 +1017,17 @@ func lookupField(items []TableItemExpr, name Ident) bool {
 				return true
 			}
 		}
+		if item.FieldSet != nil {
+			if err := resolveInCtx(item.FieldSet.Type, c, func(t *TypeStmt, schema *PackageSchemaAST) error {
+				found = lookupField(t.Items, name, c)
+				return nil
+			}); err != nil {
+				c.stmtErr(&item.FieldSet.Pos, err)
+				return false
+			}
+		}
 	}
-	return false
+	return found
 }
 
 func analyseFields(items []TableItemExpr, c *iterateCtx, isTable bool) {
@@ -1044,7 +1108,7 @@ func analyseFields(items []TableItemExpr, c *iterateCtx, isTable bool) {
 				constraintNames[cname] = true
 			}
 			if item.Constraint.UniqueField != nil {
-				if ok := lookupField(items, item.Constraint.UniqueField.Field); !ok {
+				if ok := lookupField(items, item.Constraint.UniqueField.Field, c); !ok {
 					c.stmtErr(&item.Constraint.Pos, ErrUndefinedField(string(item.Constraint.UniqueField.Field)))
 					continue
 				}
@@ -1056,7 +1120,7 @@ func analyseFields(items []TableItemExpr, c *iterateCtx, isTable bool) {
 							continue
 						}
 					}
-					if ok := lookupField(items, field); !ok {
+					if ok := lookupField(items, field, c); !ok {
 						c.stmtErr(&item.Constraint.Pos, ErrUndefinedField(string(field)))
 						continue
 					}
@@ -1186,7 +1250,7 @@ func getTableTypeKind(table *TableStmt, pkg *PackageSchemaAST, c *iterateCtx) (k
 			if node.table.Name == nameWRecord {
 				kind = appdef.TypeKind_WRecord
 			}
-			if (node.table.Name == nameSingletonDeprecated) || (node.table.Name == nameCSingleton) {
+			if node.table.Name == nameCSingleton {
 				kind = appdef.TypeKind_CDoc
 				singleton = true
 			}

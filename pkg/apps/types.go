@@ -8,7 +8,6 @@ package apps
 import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/extensionpoints"
 	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -17,28 +16,28 @@ import (
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/parser"
 	coreutils "github.com/voedger/voedger/pkg/utils"
+	"github.com/voedger/voedger/pkg/utils/federation"
 )
 
 type APIs struct {
 	itokens.ITokens
 	istructs.IAppStructsProvider
-	istructsmem.AppConfigsType
 	istorage.IAppStorageProvider
 	payloads.IAppTokensFactory
-	coreutils.IFederation
+	federation.IFederation
 	coreutils.TimeFunc
-	NumCommandProcessors coreutils.CommandProcessorsCount
-	NumQueryProcessors   coreutils.QueryProcessorsCount
-	appparts.IAppPartitions
+	SidecarApps []appparts.SidecarApp
+	// IAppPartitions - wrong, wire cycle: `appparts.NewWithActualizerWithExtEnginesFactories(asp, actualizer, eef) IAppPartitions`` accepts engines.ProvideExtEngineFactories()
+	//                                     that requires filled AppConfigsType, but AppConfigsType requires apps.APIs with IAppPartitions
 }
 
-type AppBuilder func(apis APIs, cfg *istructsmem.AppConfigType, appDefBuilder appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) BuiltInAppDef
+type AppBuilder func(apis APIs, cfg *istructsmem.AppConfigType, ep extensionpoints.IExtensionPoint) BuiltInAppDef
 type SchemasExportedContent map[string]map[string][]byte // packageName->schemaFilePath->content
 type CLIParams struct {
 	Storage string
 }
 type BuiltInAppDef struct {
-	cluster.AppDeploymentDescriptor
-	AppQName istructs.AppQName
+	appparts.AppDeploymentDescriptor
+	AppQName appdef.AppQName
 	Packages []parser.PackageFS
 }

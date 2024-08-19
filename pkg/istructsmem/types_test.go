@@ -11,9 +11,8 @@ import (
 	"encoding/binary"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/testingu/require"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem/internal/qnames"
 )
@@ -25,12 +24,15 @@ func Test_rowNullType(t *testing.T) {
 
 	row.setQName(appdef.NullQName)
 	require.Equal(appdef.NullQName, row.QName())
+	require.Equal(appdef.NullType, row.typeDef())
 
 	row.setType(appdef.NullType)
 	require.Equal(appdef.NullQName, row.QName())
+	require.Equal(appdef.NullType, row.typeDef())
 
 	row.setType(nil)
 	require.Equal(appdef.NullQName, row.QName())
+	require.Equal(appdef.NullType, row.typeDef())
 }
 
 func Test_dynoBufValue(t *testing.T) {
@@ -70,11 +72,11 @@ func Test_dynoBufValue(t *testing.T) {
 	t.Run("test float32", func(t *testing.T) {
 		v, err := row.dynoBufValue(float32(7.7), appdef.DataKind_float32)
 		require.NoError(err)
-		require.EqualValues(7.7, v)
+		require.EqualValues(float32(7.7), v)
 
 		v, err = row.dynoBufValue(float64(7.7), appdef.DataKind_float32)
 		require.NoError(err)
-		require.EqualValues(7.7, v)
+		require.EqualValues(float32(7.7), v)
 
 		v, err = row.dynoBufValue("7.7", appdef.DataKind_float32)
 		require.ErrorIs(err, ErrWrongFieldType)
@@ -328,35 +330,59 @@ func Test_rowType_PutFromJSON(t *testing.T) {
 	require := require.New(t)
 	test := test()
 
-	bld := test.AppStructs.ObjectBuilder(test.testRow)
+	t.Run("basic", func(t *testing.T) {
 
-	data := map[string]any{
-		"int32":    float64(1),
-		"int64":    float64(2),
-		"float32":  float64(3),
-		"float64":  float64(4),
-		"bytes":    "BQY=", // []byte{5,6}
-		"string":   "str",
-		"QName":    test.testCDoc.String(),
-		"bool":     true,
-		"RecordID": float64(7),
-	}
+		bld := test.AppStructs.ObjectBuilder(test.testRow)
 
-	bld.PutFromJSON(data)
+		data := map[appdef.FieldName]any{
+			"int32":    float64(1),
+			"int64":    float64(2),
+			"float32":  float64(3),
+			"float64":  float64(4),
+			"bytes":    "BQY=", // []byte{5,6}
+			"string":   "str",
+			"QName":    test.testCDoc.String(),
+			"bool":     true,
+			"RecordID": float64(7),
+		}
 
-	row, err := bld.Build()
-	require.NoError(err)
+		bld.PutFromJSON(data)
 
-	require.EqualValues(test.testRow, row.QName())
-	require.EqualValues(1, row.AsInt32("int32"))
-	require.EqualValues(2, row.AsInt64("int64"))
-	require.EqualValues(3, row.AsFloat32("float32"))
-	require.EqualValues(4, row.AsFloat64("float64"))
-	require.Equal([]byte{5, 6}, row.AsBytes("bytes"))
-	require.Equal("str", row.AsString("string"))
-	require.Equal(test.testCDoc, row.AsQName("QName"))
-	require.True(row.AsBool("bool"))
-	require.EqualValues(7, row.AsRecordID("RecordID"))
+		row, err := bld.Build()
+		require.NoError(err)
+
+		require.EqualValues(test.testRow, row.QName())
+		require.EqualValues(1, row.AsInt32("int32"))
+		require.EqualValues(2, row.AsInt64("int64"))
+		require.EqualValues(3, row.AsFloat32("float32"))
+		require.EqualValues(4, row.AsFloat64("float64"))
+		require.Equal([]byte{5, 6}, row.AsBytes("bytes"))
+		require.Equal("str", row.AsString("string"))
+		require.Equal(test.testCDoc, row.AsQName("QName"))
+		require.True(row.AsBool("bool"))
+		require.EqualValues(7, row.AsRecordID("RecordID"))
+	})
+
+	t.Run("[]byte as bytes value instead of base64 string", func(t *testing.T) {
+		bld := test.AppStructs.ObjectBuilder(test.testRow)
+		data := map[appdef.FieldName]any{
+			"bytes": []byte{1, 2, 3},
+		}
+		bld.PutFromJSON(data)
+		row, err := bld.Build()
+		require.NoError(err)
+		require.Equal([]byte{1, 2, 3}, row.AsBytes("bytes"))
+	})
+
+	t.Run("wrong type -> error", func(t *testing.T) {
+		bld := test.AppStructs.ObjectBuilder(test.testRow)
+		data := map[appdef.FieldName]any{
+			"int32": uint8(42),
+		}
+		bld.PutFromJSON(data)
+		_, err := bld.Build()
+		require.ErrorIs(err, ErrWrongType)
+	})
 }
 
 func Test_rowType_PutAs_ComplexTypes(t *testing.T) {
@@ -471,7 +497,7 @@ func Test_rowType_PutErrors(t *testing.T) {
 
 			row.PutChars("QName", "welcome.2.error")
 
-			require.ErrorIs(row.build(), appdef.ErrInvalidQNameStringRepresentation)
+			require.ErrorIs(row.build(), appdef.ErrConvertError)
 		})
 
 		t.Run("PutChars to bytes-type fields non convertible base64 value must be error", func(t *testing.T) {
@@ -510,36 +536,38 @@ func Test_rowType_PutErrors(t *testing.T) {
 func Test_rowType_AsPanics(t *testing.T) {
 	t.Run("As××× unknown fields must panic", func(t *testing.T) {
 		require := require.New(t)
+
+		unknown := "unknownField"
 		row := newTestRow()
 
-		require.Panics(func() { row.AsInt32("unknownField") })
-		require.Panics(func() { row.AsInt64("unknownField") })
-		require.Panics(func() { row.AsFloat32("unknownField") })
-		require.Panics(func() { row.AsFloat64("unknownField") })
-		require.Panics(func() { row.AsBytes("unknownField") })
-		require.Panics(func() { row.AsString("unknownField") })
-		require.Panics(func() { row.AsQName("unknownField") })
-		require.Panics(func() { row.AsBool("unknownField") })
-		require.Panics(func() { row.AsRecordID("unknownField") })
-		require.Panics(func() { row.AsRecord("unknownField") })
-		require.Panics(func() { row.AsEvent("unknownField") })
+		require.Panics(func() { row.AsInt32(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsInt64(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsFloat32(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsFloat64(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsBytes(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsString(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsQName(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsBool(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsRecordID(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsRecord(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
+		require.Panics(func() { row.AsEvent(unknown) }, require.Is(ErrNameNotFound), require.Has(unknown))
 	})
 
 	t.Run("As××× from fields with invalid type cast must panic", func(t *testing.T) {
 		require := require.New(t)
 		row := newTestRow()
 
-		require.Panics(func() { row.AsInt32("raw") })
-		require.Panics(func() { row.AsInt64("string") })
-		require.Panics(func() { row.AsFloat32("bytes") })
-		require.Panics(func() { row.AsFloat64("bool") })
-		require.Panics(func() { row.AsBytes("QName") })
-		require.Panics(func() { row.AsString("RecordID") })
-		require.Panics(func() { row.AsQName("int32") })
-		require.Panics(func() { row.AsBool("int64") })
-		require.Panics(func() { row.AsRecordID("float32") })
-		require.Panics(func() { row.AsRecord("float64") })
-		require.Panics(func() { row.AsEvent("bool") })
+		require.Panics(func() { row.AsInt32("raw") }, require.Is(ErrNameNotFound), require.Has("raw"))
+		require.Panics(func() { row.AsInt64("string") }, require.Is(ErrNameNotFound), require.Has("string"))
+		require.Panics(func() { row.AsFloat32("bytes") }, require.Is(ErrNameNotFound), require.Has("bytes"))
+		require.Panics(func() { row.AsFloat64("bool") }, require.Is(ErrNameNotFound), require.Has("bool"))
+		require.Panics(func() { row.AsBytes("QName") }, require.Is(ErrNameNotFound), require.Has("QName"))
+		require.Panics(func() { row.AsString("RecordID") }, require.Is(ErrNameNotFound), require.Has("RecordID"))
+		require.Panics(func() { row.AsQName("int32") }, require.Is(ErrNameNotFound), require.Has("int32"))
+		require.Panics(func() { row.AsBool("int64") }, require.Is(ErrNameNotFound), require.Has("int64"))
+		require.Panics(func() { row.AsRecordID("float32") }, require.Is(ErrNameNotFound), require.Has("float32"))
+		require.Panics(func() { row.AsRecord("float64") }, require.Is(ErrNameNotFound), require.Has("float64"))
+		require.Panics(func() { row.AsEvent("bool") }, require.Is(ErrNameNotFound), require.Has("bool"))
 	})
 }
 
@@ -628,10 +656,10 @@ func Test_rowType_FieldNames(t *testing.T) {
 		row := makeRow(test.AppCfg)
 
 		cnt := 0
-		row.FieldNames(func(fieldName string) {
+		row.FieldNames(func(fieldName appdef.FieldName) {
 			cnt++
 		})
-		require.Equal(0, cnt)
+		require.Zero(cnt)
 	})
 
 	t.Run("new test row must have only QName field", func(t *testing.T) {
@@ -639,7 +667,7 @@ func Test_rowType_FieldNames(t *testing.T) {
 		row.setQName(test.testRow)
 
 		cnt := 0
-		row.FieldNames(func(fieldName string) {
+		row.FieldNames(func(fieldName appdef.FieldName) {
 			require.Equal(appdef.SystemField_QName, fieldName)
 			cnt++
 		})
@@ -650,8 +678,8 @@ func Test_rowType_FieldNames(t *testing.T) {
 		row := newTestRow()
 
 		cnt := 0
-		names := make(map[string]bool)
-		row.FieldNames(func(fieldName string) {
+		names := make(map[appdef.FieldName]bool)
+		row.FieldNames(func(fieldName appdef.FieldName) {
 			require.False(names[fieldName])
 			names[fieldName] = true
 			cnt++
@@ -664,8 +692,8 @@ func Test_rowType_FieldNames(t *testing.T) {
 		rec.PutRecordID(appdef.SystemField_ParentID, 5)
 		rec.PutString(appdef.SystemField_Container, "rec")
 
-		sys := make(map[string]interface{})
-		rec.FieldNames(func(fieldName string) {
+		sys := make(map[appdef.FieldName]interface{})
+		rec.FieldNames(func(fieldName appdef.FieldName) {
 			if appdef.IsSysField(fieldName) {
 				switch rec.fieldDef(fieldName).DataKind() {
 				case appdef.DataKind_QName:

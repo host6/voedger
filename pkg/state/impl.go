@@ -9,7 +9,16 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/state/smtptest"
 )
+
+type stateOpts struct {
+	messages                 chan smtptest.Message
+	federationCommandHandler FederationCommandHandler
+	federationBlobHandler    FederationBlobHandler
+	customHttpClient         IHttpClient
+	uniquesHandler           UniquesHandler
+}
 
 func SimpleWSIDFunc(wsid istructs.WSID) WSIDFunc {
 	return func() istructs.WSID { return wsid }

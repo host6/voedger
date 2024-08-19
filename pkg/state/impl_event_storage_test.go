@@ -10,7 +10,9 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
 	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
+	"github.com/voedger/voedger/pkg/sys"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iratesce"
@@ -19,7 +21,7 @@ import (
 	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/itokensjwt"
-	parser "github.com/voedger/voedger/pkg/parser"
+	"github.com/voedger/voedger/pkg/parser"
 )
 
 func TestEventStorage_Get(t *testing.T) {
@@ -27,7 +29,7 @@ func TestEventStorage_Get(t *testing.T) {
 	testQName := appdef.NewQName("main", "Command")
 
 	app := appStructs(
-		`APPLICATION test(); 
+		`APPLICATION test();
 		WORKSPACE ws1 (
 			TABLE t1 INHERITS CDoc (
 				x int32
@@ -80,30 +82,30 @@ func TestEventStorage_Get(t *testing.T) {
 		return event
 	}
 
-	s := ProvideAsyncActualizerStateFactory()(context.Background(), app, nil, nil, nil, nil, eventFunc, 0, 0)
+	s := ProvideAsyncActualizerStateFactory()(context.Background(), appStructsFunc(app), nil, nil, nil, nil, eventFunc, nil, nil, 0, 0)
 
 	require.Equal(event, s.PLogEvent())
 
-	kb, err := s.KeyBuilder(Event, appdef.NullQName)
+	kb, err := s.KeyBuilder(sys.Storage_Event, appdef.NullQName)
 	require.NoError(err)
 	value, err := s.MustExist(kb)
 	require.NotNil(value)
 	require.NoError(err)
 
-	require.Equal(int64(wsid), value.AsInt64(Field_Workspace))
-	require.Equal(int64(0), value.AsInt64(Field_RegisteredAt))
-	require.Equal(int64(0), value.AsInt64(Field_SyncedAt))
-	require.Equal(int64(0), value.AsInt64(Field_Offset))
-	require.Equal(int64(0), value.AsInt64(Field_WLogOffset))
-	require.Equal(int64(0), value.AsInt64(Field_DeviceID))
-	require.Equal(testQName, value.AsQName(Field_QName))
-	require.False(value.AsBool(Field_Synced))
+	require.Equal(int64(wsid), value.AsInt64(sys.Storage_Event_Field_Workspace))
+	require.Equal(int64(0), value.AsInt64(sys.Storage_Event_Field_RegisteredAt))
+	require.Equal(int64(0), value.AsInt64(sys.Storage_Event_Field_SyncedAt))
+	require.Equal(int64(0), value.AsInt64(sys.Storage_Event_Field_Offset))
+	require.Equal(int64(0), value.AsInt64(sys.Storage_Event_Field_WLogOffset))
+	require.Equal(int64(0), value.AsInt64(sys.Storage_Event_Field_DeviceID))
+	require.Equal(testQName, value.AsQName(sys.Storage_Event_Field_QName))
+	require.False(value.AsBool(sys.Storage_Event_Field_Synced))
 
-	v := value.AsValue(Field_ArgumentObject)
+	v := value.AsValue(sys.Storage_Event_Field_ArgumentObject)
 	require.NotNil(v)
 	require.Equal(int32(1), v.AsInt32("i"))
 
-	c := value.AsValue(Field_CUDs)
+	c := value.AsValue(sys.Storage_Event_Field_CUDs)
 	require.NotNil(c)
 	require.Equal(1, c.Length())
 	cud1 := c.GetAsValue(0)
@@ -112,7 +114,7 @@ func TestEventStorage_Get(t *testing.T) {
 	require.Equal(tQname, cud1.AsQName("sys.QName"))
 
 	// test sync actualizer state
-	syncState := ProvideSyncActualizerStateFactory()(context.Background(), app, nil, nil, nil, nil, eventFunc, 0)
+	syncState := ProvideSyncActualizerStateFactory()(context.Background(), appStructsFunc(app), nil, nil, nil, nil, eventFunc, 0)
 	require.Equal(event, syncState.PLogEvent())
 }
 
@@ -120,13 +122,11 @@ type (
 	appCfgCallback func(cfg *istructsmem.AppConfigType)
 )
 
-//go:embed sql_example_syspkg/*.sql
+//go:embed sql_example_syspkg/*.vsql
 var sfs embed.FS
 
 func appStructs(appdefSql string, prepareAppCfg appCfgCallback) istructs.IAppStructs {
-	appDef := appdef.New()
-
-	fs, err := parser.ParseFile("file1.sql", appdefSql)
+	fs, err := parser.ParseFile("file1.vsql", appdefSql)
 	if err != nil {
 		panic(err)
 	}
@@ -149,13 +149,22 @@ func appStructs(appdefSql string, prepareAppCfg appCfgCallback) istructs.IAppStr
 		panic(err)
 	}
 
+	// TODO: obtain app name from packages
+	// appName := packages.AppQName()
+	// require.Equal(t, istructs.AppQName_test1_app1, packages.AppQName())
+
+	appName := istructs.AppQName_test1_app1
+
+	appDef := appdef.New()
+
 	err = parser.BuildAppDefs(packages, appDef)
 	if err != nil {
 		panic(err)
 	}
 
 	cfgs := make(istructsmem.AppConfigsType, 1)
-	cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+	cfg := cfgs.AddBuiltInAppConfig(appName, appDef)
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 	if prepareAppCfg != nil {
 		prepareAppCfg(cfg)
 	}
@@ -167,7 +176,7 @@ func appStructs(appdefSql string, prepareAppCfg appCfgCallback) istructs.IAppStr
 		iratesce.TestBucketsFactory,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
 		storageProvider)
-	structs, err := prov.AppStructs(istructs.AppQName_test1_app1)
+	structs, err := prov.BuiltIn(appName)
 	if err != nil {
 		panic(err)
 	}

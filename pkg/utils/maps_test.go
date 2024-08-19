@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/voedger/voedger/pkg/istructs"
 )
 
 func TestBasicUsage_PairsToMap(t *testing.T) {
@@ -49,23 +50,32 @@ func TestPairsToMapErrors(t *testing.T) {
 	}
 }
 
-func TestMarshal(t *testing.T) {
+func TestMapToObject(t *testing.T) {
 	o := &TestObject{
 		Data: map[string]interface{}{},
 	}
 	require := require.New(t)
-	require.NoError(Marshal(o, map[string]interface{}{
-		"float64": float64(42),
-		"str":     "str1",
-		"bool":    true,
-		"any":     nil, // will be ignored
-	}))
-	require.Len(o.Data, 3)
+	require.NoError(MapToObject(map[string]interface{}{
+		"float64":  float64(42),
+		"float32":  float32(43),
+		"int32":    int32(44),
+		"int64":    int64(45),
+		"recordID": istructs.RecordID(46),
+		"str":      "str1",
+		"bool":     true,
+		"any":      nil, // will be ignored
+	}, o))
+	require.Len(o.Data, 7)
 	require.Equal(float64(42), o.Data["float64"])
+	require.Equal(float64(43), o.Data["float32"])
+	require.Equal(float64(44), o.Data["int32"])
+	require.Equal(float64(45), o.Data["int64"])
+	require.Equal(float64(46), o.Data["recordID"])
+
 	require.Equal("str1", o.Data["str"])
 	v, ok := o.Data["bool"].(bool)
 	require.True(ok)
 	require.True(v)
 
-	require.Error(Marshal(o, map[string]interface{}{"fld": 42}))
+	require.Error(MapToObject(map[string]interface{}{"fld": 42}, o))
 }

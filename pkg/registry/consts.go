@@ -32,7 +32,8 @@ const (
 	field_NewPwd            = "NewPwd"
 	field_AppName           = "AppName"
 	field_Login             = "Login"
-	decimalBase             = 10
+	field_TTLHours          = "TTLHours"
+	maxTokenTTLHours        = 168 // 1 week
 )
 
 var (
@@ -50,6 +51,6 @@ var (
 	errPasswordIsIncorrect                            = coreutils.NewHTTPErrorf(http.StatusUnauthorized, "password is incorrect")
 	errLoginOrPasswordIsIncorrect                     = coreutils.NewHTTPErrorf(http.StatusUnauthorized, "login or password is incorrect")
 
-	//go:embed appws.sql
+	//go:embed appws.vsql
 	schemasFS embed.FS
 )

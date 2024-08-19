@@ -6,9 +6,80 @@
 package appdef
 
 import (
-	"strconv"
 	"testing"
+
+	"github.com/stretchr/testify/require"
+	"github.com/voedger/voedger/pkg/utils/utils"
 )
+
+func Test_AppDefExtensions(t *testing.T) {
+
+	require := require.New(t)
+
+	var app IAppDef
+
+	cmdName := NewQName("test", "cmd")
+	qrName := NewQName("test", "query")
+	prjName := NewQName("test", "projector")
+	parName := NewQName("test", "param")
+	resName := NewQName("test", "res")
+
+	sysViews := NewQName("sys", "views")
+	viewName := NewQName("test", "view")
+
+	t.Run("Should be ok to build application with extensions", func(t *testing.T) {
+		adb := New()
+		adb.AddPackage("test", "test.com/test")
+
+		cmd := adb.AddCommand(cmdName)
+		cmd.SetEngine(ExtensionEngineKind_WASM)
+		cmd.
+			SetParam(parName).
+			SetResult(resName)
+
+		qry := adb.AddQuery(qrName)
+		qry.
+			SetParam(parName).
+			SetResult(QNameANY)
+
+		prj := adb.AddProjector(prjName)
+		prj.Events().
+			Add(cmdName, ProjectorEventKind_Execute)
+		prj.Intents().
+			Add(sysViews, viewName)
+
+		_ = adb.AddObject(parName)
+		_ = adb.AddObject(resName)
+
+		v := adb.AddView(viewName)
+		v.Key().PartKey().AddField("pk", DataKind_int64)
+		v.Key().ClustCols().AddField("cc", DataKind_string)
+		v.Value().AddField("f1", DataKind_int64, true)
+
+		a, err := adb.Build()
+		require.NoError(err)
+
+		app = a
+		require.NotNil(app)
+	})
+
+	t.Run("Should be ok to enumerate extensions", func(t *testing.T) {
+		var extNames []QName
+		app.Extensions(func(ex IExtension) {
+			extNames = append(extNames, ex.QName())
+		})
+		require.Len(extNames, 3)
+		require.Equal([]QName{cmdName, prjName, qrName}, extNames)
+	})
+
+	t.Run("Should be ok to find extension by name", func(t *testing.T) {
+		ext := app.Extension(cmdName)
+		require.NotNil(ext)
+		require.Equal(cmdName, ext.QName())
+
+		require.Nil(app.Extension(NewQName("test", "unknown")), "Should be nil if unknown extension")
+	})
+}
 
 func TestExtensionEngineKind_MarshalText(t *testing.T) {
 	tests := []struct {
@@ -26,7 +97,7 @@ func TestExtensionEngineKind_MarshalText(t *testing.T) {
 		},
 		{name: `ExtensionEngineKind_Count —> <number>`,
 			k:    ExtensionEngineKind_Count,
-			want: strconv.FormatUint(uint64(ExtensionEngineKind_Count), 10),
+			want: utils.UintToString(ExtensionEngineKind_Count),
 		},
 	}
 	for _, tt := range tests {
@@ -44,7 +115,7 @@ func TestExtensionEngineKind_MarshalText(t *testing.T) {
 
 	t.Run("100% cover ExtensionEngineKind.String()", func(t *testing.T) {
 		const tested = ExtensionEngineKind_Count + 1
-		want := "ExtensionEngineKind(" + strconv.FormatInt(int64(tested), 10) + ")"
+		want := "ExtensionEngineKind(" + utils.UintToString(tested) + ")"
 		got := tested.String()
 		if got != want {
 			t.Errorf("(ExtensionEngineKind_Count + 1).String() = %v, want %v", got, want)

@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/voedger/voedger/pkg/goutils/testingu/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iratesce"
@@ -22,14 +22,18 @@ import (
 func Test_KeyType(t *testing.T) {
 	require := require.New(t)
 
+	appName := istructs.AppQName_test1_app1
+
 	viewName := appdef.NewQName("test", "view")
 
 	appConfigs := func() AppConfigsType {
 		cfgs := make(AppConfigsType, 1)
 
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+
 		t.Run("must be ok to build view", func(t *testing.T) {
-			view := appDef.AddView(viewName)
+			view := adb.AddView(viewName)
 			view.Key().PartKey().
 				AddField("pk_int32", appdef.DataKind_int32).
 				AddField("pk_int64", appdef.DataKind_int64).
@@ -53,16 +57,17 @@ func Test_KeyType(t *testing.T) {
 				AddField("val_string", appdef.DataKind_string, false, appdef.MaxLen(1024))
 		})
 
-		_ = cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+		cfg := cfgs.AddBuiltInAppConfig(appName, adb)
+		cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 		return cfgs
 	}
 
 	appCfgs := appConfigs()
-	appCfg := appCfgs.GetConfig(istructs.AppQName_test1_app1)
+	appCfg := appCfgs.GetConfig(appName)
 
-	appProvider := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), teststore.NewStorageProvider(teststore.NewStorage()))
-	app, err := appProvider.AppStructs(istructs.AppQName_test1_app1)
+	appProvider := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), teststore.NewStorageProvider(teststore.NewStorage(appName)))
+	app, err := appProvider.BuiltIn(appName)
 	require.NoError(err)
 	require.NotNil(app)
 
@@ -94,6 +99,13 @@ func Test_KeyType(t *testing.T) {
 	})
 
 	require.NoError(key.build())
+
+	t.Run("should be ok IKeyBuilder.ToBytes()", func(t *testing.T) {
+		pk, cc, err := key.ToBytes(0)
+		require.NoError(err)
+		require.NotEmpty(pk)
+		require.NotEmpty(cc)
+	})
 
 	testIKey := func(t *testing.T, key *keyType) {
 		k := istructs.IKey(key)
@@ -162,21 +174,33 @@ func Test_KeyType(t *testing.T) {
 
 		require.True(key.Equals(dupe))
 	})
+
+	t.Run("should be ok IValueBuilder.ToBytes()", func(t *testing.T) {
+		vb := newValue(appCfg, viewName)
+		vb.PutString("val_string", "test string")
+
+		b, err := vb.ToBytes()
+		require.NoError(err)
+		require.NotEmpty(b)
+	})
 }
 
 // TestCore_ViewRecords: test https://dev.heeus.io/launchpad/#!14470
 func TestCore_ViewRecords(t *testing.T) {
 	require := require.New(t)
 
-	storage := teststore.NewStorage()
+	appName := istructs.AppQName_test1_app1
+
+	storage := teststore.NewStorage(appName)
 	storageProvider := teststore.NewStorageProvider(storage)
 
 	appConfigs := func() AppConfigsType {
 		cfgs := make(AppConfigsType, 1)
 
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 		t.Run("must be ok to build application", func(t *testing.T) {
-			view := appDef.AddView(appdef.NewQName("test", "viewDrinks"))
+			view := adb.AddView(appdef.NewQName("test", "viewDrinks"))
 			view.Key().PartKey().
 				AddField("partitionKey1", appdef.DataKind_int64)
 			view.Key().ClustCols().
@@ -188,7 +212,7 @@ func TestCore_ViewRecords(t *testing.T) {
 				AddField("name", appdef.DataKind_string, true).
 				AddField("active", appdef.DataKind_bool, true)
 
-			otherView := appDef.AddView(appdef.NewQName("test", "otherView"))
+			otherView := adb.AddView(appdef.NewQName("test", "otherView"))
 			otherView.Key().PartKey().
 				AddField("partitionKey1", appdef.DataKind_QName)
 			otherView.Key().ClustCols().
@@ -199,7 +223,8 @@ func TestCore_ViewRecords(t *testing.T) {
 				AddField("valueField1", appdef.DataKind_int64, false)
 		})
 
-		_ = cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+		cfg := cfgs.AddBuiltInAppConfig(istructs.AppQName_test1_app1, adb)
+		cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 		return cfgs
 	}
@@ -207,7 +232,7 @@ func TestCore_ViewRecords(t *testing.T) {
 	appCfgs := appConfigs()
 	appCfg := appCfgs.GetConfig(istructs.AppQName_test1_app1)
 	p := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
-	app, err := p.AppStructs(istructs.AppQName_test1_app1)
+	app, err := p.BuiltIn(istructs.AppQName_test1_app1)
 	require.NoError(err)
 	viewRecords := app.ViewRecords()
 
@@ -427,18 +452,16 @@ func TestCore_ViewRecords(t *testing.T) {
 
 	t.Run("Invalid key building test", func(t *testing.T) {
 
-		t.Run("Must have panic if key type missed", func(t *testing.T) {
-			require.Panics(func() { _ = viewRecords.KeyBuilder(appdef.NullQName) })
-		})
+		require.Panics(func() { _ = viewRecords.KeyBuilder(appdef.NullQName) },
+			require.Is(ErrNameMissed, "Should panics if key type missed"))
 
-		t.Run("Must have panic if invalid key type name", func(t *testing.T) {
-			require.Panics(func() { _ = viewRecords.KeyBuilder(istructs.QNameForError) })
-			require.Panics(func() { _ = viewRecords.KeyBuilder(appdef.NewQName("test", "unknownDrinks")) })
-		})
+		require.Panics(func() { _ = viewRecords.KeyBuilder(istructs.QNameForError) },
+			require.Is(ErrNameNotFound), require.Has(istructs.QNameForError))
+		require.Panics(func() { _ = viewRecords.KeyBuilder(appdef.NewQName("test", "unknownDrinks")) },
+			require.Is(ErrNameNotFound), require.Has("test.unknownDrinks"))
 
-		t.Run("Must have panic if invalid key type kind", func(t *testing.T) {
-			require.Panics(func() { _ = viewRecords.KeyBuilder(appdef.NewQName("test", "viewDrinks_Value")) })
-		})
+		require.Panics(func() { _ = viewRecords.KeyBuilder(appdef.NewQName("test", "viewDrinks_Value")) },
+			require.Is(ErrNameNotFound), require.Has("test.viewDrinks_Value"))
 
 		t.Run("Must have error if wrong partition key type", func(t *testing.T) {
 			kb := viewRecords.KeyBuilder(appdef.NewQName("test", "viewDrinks"))
@@ -462,6 +485,23 @@ func TestCore_ViewRecords(t *testing.T) {
 			require.ErrorIs(err, ErrTypeChanged)
 		})
 
+		t.Run("Must have error if holes in clustering column", func(t *testing.T) {
+			kb := viewRecords.KeyBuilder(appdef.NewQName("test", "viewDrinks"))
+			pk := kb.PartitionKey()
+			pk.PutInt64("partitionKey1", 1)
+			cc := kb.ClusteringColumns()
+			cc.PutInt64("clusteringColumn1", 100)
+			cc.PutString("clusteringColumn3", "s")
+			cnt := 0
+			err := viewRecords.Read(context.Background(), 1, kb, func(istructs.IKey, istructs.IValue) (err error) {
+				cnt++
+				return nil
+			})
+			require.ErrorIs(err, ErrFieldIsEmpty)
+			require.ErrorContains(err, "hole at field «clusteringColumn2»")
+			require.Zero(cnt)
+		})
+
 		t.Run("Must have error if wrong value type", func(t *testing.T) {
 			kb := viewRecords.KeyBuilder(appdef.NewQName("test", "viewDrinks"))
 			kb.PutInt64("partitionKey1", 1)
@@ -478,6 +518,7 @@ func TestCore_ViewRecords(t *testing.T) {
 
 		t.Run("Must have error if empty partition key", func(t *testing.T) {
 			kb := viewRecords.KeyBuilder(appdef.NewQName("test", "viewDrinks"))
+
 			err := viewRecords.Read(context.Background(), 1, kb, func(key istructs.IKey, value istructs.IValue) (err error) {
 				return nil
 			})
@@ -515,6 +556,13 @@ func TestCore_ViewRecords(t *testing.T) {
 				kb.PutBool("errorField", true)
 				err := viewRecords.Put(1, kb, nil)
 				require.ErrorIs(err, ErrNameNotFound)
+
+				t.Run("should be error IKeyBuilder.ToBytes()", func(t *testing.T) {
+					pk, cc, err := kb.ToBytes(0)
+					require.ErrorIs(err, ErrNameNotFound)
+					require.Empty(pk)
+					require.Empty(cc)
+				})
 			})
 
 			t.Run("Must read and error", func(t *testing.T) {
@@ -559,23 +607,20 @@ func TestCore_ViewRecords(t *testing.T) {
 
 	t.Run("Invalid value building test", func(t *testing.T) {
 
-		t.Run("Must have panic if value type missed", func(t *testing.T) {
-			require.Panics(func() { _ = viewRecords.NewValueBuilder(appdef.NullQName) })
-		})
+		require.Panics(func() { _ = viewRecords.NewValueBuilder(appdef.NullQName) },
+			require.Is(ErrNameMissed, "Should panics if value type missed"))
 
-		t.Run("Must have panic if unknown value type specified", func(t *testing.T) {
-			require.Panics(func() { _ = viewRecords.NewValueBuilder(appdef.NewQName("test", "unknownDrinks")) })
-		})
+		require.Panics(func() { _ = viewRecords.NewValueBuilder(appdef.NewQName("test", "unknownDrinks")) },
+			require.Is(ErrNameNotFound), require.Has("test.unknownDrinks"))
 
-		t.Run("Must have panic if wrong value type specified", func(t *testing.T) {
-			require.Panics(func() { _ = viewRecords.NewValueBuilder(appdef.NewQName("test", "viewDrinks_PartitionKey")) })
-		})
+		require.Panics(func() { _ = viewRecords.NewValueBuilder(appdef.NewQName("test", "viewDrinks_PartitionKey")) },
+			require.Is(ErrNameNotFound), require.Has("test.viewDrinks_PartitionKey"))
 
 		t.Run("Must have panic if wrong existing value type specified", func(t *testing.T) {
 			exists := newValue(appCfg, appdef.NewQName("test", "otherView"))
 			require.Panics(func() {
 				_ = viewRecords.UpdateValueBuilder(appdef.NewQName("test", "viewDrinks"), exists)
-			})
+			}, require.Is(ErrWrongType), require.Has("test.otherView"))
 		})
 
 		t.Run("Must have error for put if empty value", func(t *testing.T) {
@@ -607,6 +652,12 @@ func TestCore_ViewRecords(t *testing.T) {
 
 			err := viewRecords.Put(1, kb, vb)
 			require.ErrorIs(err, ErrNameNotFound)
+
+			t.Run("should be error IValueBuilder.ToBytes()", func(t *testing.T) {
+				v, err := vb.ToBytes()
+				require.ErrorIs(err, ErrNameNotFound)
+				require.Empty(v)
+			})
 		})
 
 		t.Run("Must have error if key and value are from different views", func(t *testing.T) {
@@ -751,7 +802,7 @@ func TestCore_ViewRecords(t *testing.T) {
 		vb := viewRecords.NewValueBuilder(appdef.NewQName("test", "viewDrinks"))
 		vb.PutInt32("id", 42)
 
-		require.Panics(func() { _ = vb.Build() })
+		require.Panics(func() { _ = vb.Build() }, require.Is(ErrWrongFieldType), require.Has("id"))
 	})
 }
 
@@ -778,14 +829,153 @@ func newEntry(viewRecords istructs.IViewRecords, wsid istructs.WSID, idDepartmen
 	}
 }
 
+func Test_ViewRecordsPutJSON(t *testing.T) {
+	require := require.New(t)
+
+	appName := istructs.AppQName_test1_app1
+
+	const viewName = `test.view`
+
+	storage := teststore.NewStorage(appName)
+	storageProvider := teststore.NewStorageProvider(storage)
+
+	appCfgs := func() AppConfigsType {
+		cfgs := make(AppConfigsType, 1)
+
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+		t.Run("must be ok to build application", func(t *testing.T) {
+			view := adb.AddView(appdef.MustParseQName(viewName))
+			view.Key().PartKey().
+				AddField("pk1", appdef.DataKind_int64)
+			view.Key().ClustCols().
+				AddField("cc1", appdef.DataKind_int64).
+				AddField("cc2", appdef.DataKind_string, appdef.MaxLen(64))
+			view.Value().
+				AddField("v1", appdef.DataKind_float32, true).
+				AddField("v2", appdef.DataKind_string, true)
+		})
+		cfg := cfgs.AddBuiltInAppConfig(appName, adb)
+		cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
+		return cfgs
+	}()
+
+	app, err := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider).BuiltIn(appName)
+	require.NoError(err)
+
+	t.Run("should be ok to put view record via PutJSON", func(t *testing.T) {
+		json := make(map[appdef.FieldName]any)
+		json[appdef.SystemField_QName] = viewName
+		json["pk1"] = float64(1)
+		json["cc1"] = float64(2)
+		json["cc2"] = "test sort"
+		json["v1"] = float64(3)
+		json["v2"] = "naked 🔫"
+
+		err := app.ViewRecords().PutJSON(33, json)
+		require.NoError(err)
+
+		t.Run("should be ok to read view record", func(t *testing.T) {
+			k := app.ViewRecords().KeyBuilder(appdef.MustParseQName(viewName))
+			k.PutInt64("pk1", 1)
+			k.PutInt64("cc1", 2)
+			k.PutString("cc2", "test sort")
+			v, err := app.ViewRecords().Get(33, k)
+			require.NoError(err)
+
+			require.EqualValues(viewName, v.AsQName(appdef.SystemField_QName).String())
+			require.EqualValues(3, v.AsFloat32("v1"))
+			require.EqualValues("naked 🔫", v.AsString("v2"))
+		})
+	})
+
+	t.Run("errors test", func(t *testing.T) {
+		var err error
+		t.Run("should be error if wrong view name", func(t *testing.T) {
+			json := make(map[appdef.FieldName]any)
+
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrFieldIsEmpty)
+			require.ErrorContains(err, appdef.SystemField_QName)
+
+			json[appdef.SystemField_QName] = appdef.NullQName.String()
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrFieldIsEmpty)
+			require.ErrorContains(err, appdef.SystemField_QName)
+
+			json[appdef.SystemField_QName] = 123
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrWrongFieldType)
+			require.ErrorContains(err, appdef.SystemField_QName)
+
+			json[appdef.SystemField_QName] = `naked 🔫`
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, appdef.ErrConvertError)
+			require.ErrorContains(err, appdef.SystemField_QName)
+
+			json[appdef.SystemField_QName] = `test.unknown`
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrNameNotFound)
+			require.ErrorContains(err, `test.unknown`)
+		})
+
+		t.Run("should be error if key errors", func(t *testing.T) {
+			json := make(map[appdef.FieldName]any)
+			json[appdef.SystemField_QName] = viewName
+
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrFieldIsEmpty)
+			require.ErrorContains(err, "pk1")
+
+			json["pk1"] = "error value"
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrWrongFieldType)
+			require.ErrorContains(err, "pk1")
+
+			json["pk1"] = float64(1)
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrFieldIsEmpty)
+			require.ErrorContains(err, "cc1")
+
+			json["pk1"] = float64(1)
+			json["cc1"] = float64(2)
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrFieldIsEmpty)
+			require.ErrorContains(err, "cc2")
+		})
+
+		t.Run("should be error if value errors", func(t *testing.T) {
+			json := make(map[appdef.FieldName]any)
+			json[appdef.SystemField_QName] = viewName
+			json["pk1"] = float64(1)
+			json["cc1"] = float64(2)
+			json["cc2"] = `test sort`
+
+			json["unknownField"] = `value`
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrNameNotFound)
+			require.ErrorContains(err, "unknownField")
+
+			delete(json, "unknownField")
+			json["v1"] = `value`
+			err = app.ViewRecords().PutJSON(1, json)
+			require.ErrorIs(err, ErrWrongFieldType)
+			require.ErrorContains(err, "v1")
+		})
+	})
+}
+
 func Test_LoadStoreViewRecord_Bytes(t *testing.T) {
 	require := require.New(t)
 
+	appName := istructs.AppQName_test1_app1
+
 	viewName := appdef.NewQName("test", "view")
 
-	appDef := appdef.New()
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
 	t.Run("must be ok to build application", func(t *testing.T) {
-		v := appDef.AddView(viewName)
+		v := adb.AddView(viewName)
 		v.Key().PartKey().
 			AddField("pf_int32", appdef.DataKind_int32).
 			AddField("pf_int64", appdef.DataKind_int64).
@@ -819,9 +1009,11 @@ func Test_LoadStoreViewRecord_Bytes(t *testing.T) {
 
 	cfg := func() *AppConfigType {
 		cfgs := make(AppConfigsType, 1)
-		cfg := cfgs.AddConfig(istructs.AppQName_test1_app2, appDef)
+		cfg := cfgs.AddBuiltInAppConfig(istructs.AppQName_test1_app2, adb)
+		cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-		storage, err := simpleStorageProvider().AppStorage(istructs.AppQName_test1_app1)
+		asp := simpleStorageProvider()
+		storage, err := asp.AppStorage(appName)
 		require.NoError(err)
 		err = cfg.prepare(nil, storage)
 		if err != nil {
@@ -911,15 +1103,19 @@ func Test_LoadStoreViewRecord_Bytes(t *testing.T) {
 // Test_ViewRecords_ClustColumnsQName: see https://dev.heeus.io/launchpad/#!16377 problem
 func Test_ViewRecords_ClustColumnsQName(t *testing.T) {
 	require := require.New(t)
+
+	appName := istructs.AppQName_test1_app1
+
 	ws := istructs.WSID(1234)
 
 	// Application, same as previous but with RecordID field in the clustering key
 	//
 	appConfigs := func() AppConfigsType {
 
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 		t.Run("must be ok to build application", func(t *testing.T) {
-			v := appDef.AddView(appdef.NewQName("test", "viewDrinks"))
+			v := adb.AddView(appdef.NewQName("test", "viewDrinks"))
 			v.Key().PartKey().
 				AddField("partitionKey1", appdef.DataKind_int64)
 			v.Key().ClustCols().
@@ -930,17 +1126,18 @@ func Test_ViewRecords_ClustColumnsQName(t *testing.T) {
 				AddField("name", appdef.DataKind_string, true).
 				AddField("active", appdef.DataKind_bool, true)
 
-			_ = appDef.AddObject(appdef.NewQName("test", "obj1"))
+			_ = adb.AddObject(appdef.NewQName("test", "obj1"))
 		})
 
 		cfgs := make(AppConfigsType, 1)
-		_ = cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+		cfg := cfgs.AddBuiltInAppConfig(appName, adb)
+		cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 		return cfgs
 	}
 
 	p := Provide(appConfigs(), iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
-	as, err := p.AppStructs(istructs.AppQName_test1_app1)
+	as, err := p.BuiltIn(appName)
 	require.NoError(err)
 	viewRecords := as.ViewRecords()
 
@@ -988,12 +1185,15 @@ func Test_ViewRecords_ClustColumnsQName(t *testing.T) {
 func Test_ViewRecord_GetBatch(t *testing.T) {
 	require := require.New(t)
 
+	appName := istructs.AppQName_test1_app1
+
 	championshipsView := appdef.NewQName("test", "championships")
 	championsView := appdef.NewQName("test", "champions")
 
-	appDef := appdef.New()
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
 	t.Run("must be ok to build application", func(t *testing.T) {
-		v := appDef.AddView(championshipsView)
+		v := adb.AddView(championshipsView)
 		v.Key().PartKey().
 			AddField("Year", appdef.DataKind_int32)
 		v.Key().ClustCols().
@@ -1002,7 +1202,7 @@ func Test_ViewRecord_GetBatch(t *testing.T) {
 			AddField("Country", appdef.DataKind_string, true).
 			AddField("City", appdef.DataKind_string, false)
 
-		v = appDef.AddView(championsView)
+		v = adb.AddView(championsView)
 		v.Key().PartKey().
 			AddField("Year", appdef.DataKind_int32)
 		v.Key().ClustCols().
@@ -1011,14 +1211,15 @@ func Test_ViewRecord_GetBatch(t *testing.T) {
 			AddField("Winner", appdef.DataKind_string, true)
 	})
 
-	storage := teststore.NewStorage()
+	storage := teststore.NewStorage(appName)
 	storageProvider := teststore.NewStorageProvider(storage)
 
 	cfgs := make(AppConfigsType, 1)
-	_ = cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+	cfg := cfgs.AddBuiltInAppConfig(appName, adb)
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 	provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
 
-	app, err := provider.AppStructs(istructs.AppQName_test1_app1)
+	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
 
 	type championship struct {
@@ -1262,11 +1463,14 @@ func Test_ViewRecord_GetBatch(t *testing.T) {
 func Test_ViewRecordStructure(t *testing.T) {
 	require := require.New(t)
 
+	appName := istructs.AppQName_test1_app1
+
 	viewName := appdef.NewQName("test", "view")
 
-	appDef := appdef.New()
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
 	t.Run("must be ok to build application", func(t *testing.T) {
-		v := appDef.AddView(viewName)
+		v := adb.AddView(viewName)
 		v.Key().PartKey().
 			AddField("ValueDateYear", appdef.DataKind_int32)
 		v.Key().ClustCols().
@@ -1281,9 +1485,11 @@ func Test_ViewRecordStructure(t *testing.T) {
 
 	cfg := func() *AppConfigType {
 		cfgs := make(AppConfigsType, 1)
-		cfg := cfgs.AddConfig(istructs.AppQName_test1_app2, appDef)
+		cfg := cfgs.AddBuiltInAppConfig(istructs.AppQName_test1_app2, adb)
+		cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-		storage, err := simpleStorageProvider().AppStorage(istructs.AppQName_test1_app1)
+		asp := simpleStorageProvider()
+		storage, err := asp.AppStorage(appName)
 		require.NoError(err)
 		err = cfg.prepare(nil, storage)
 		if err != nil {

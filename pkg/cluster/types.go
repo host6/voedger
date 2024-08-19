@@ -1,26 +1,26 @@
 /*
- * Copyright (c) 2021-present Sigma-Soft, Ltd.
- * @author: Nikolay Nikitin
+ * Copyright (c) 2024-present unTill Software Development Group B.V.
+ * @author Denis Gribanov
  */
 
 package cluster
 
-// ProcessorKind is a enumeration of processors.
-type ProcessorKind uint8
-
-//go:generate stringer -type=ProcessorKind
-
-const (
-	ProcessorKind_Command ProcessorKind = iota
-	ProcessorKind_Query
-	ProcessorKind_Actualizer
-
-	ProcessorKind_Count
+import (
+	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
+	"github.com/voedger/voedger/pkg/dml"
+	"github.com/voedger/voedger/pkg/istructs"
 )
 
-type AppDeploymentDescriptor struct {
-	PartsCount     int
-	EnginePoolSize [ProcessorKind_Count]int
+type update struct {
+	dml.Op
+	setFields     map[string]interface{}
+	key           map[string]interface{}
+	wsid          istructs.WSID
+	id            istructs.RecordID
+	partitionID   istructs.PartitionID
+	offset        istructs.Offset
+	appStructs    istructs.IAppStructs
+	appParts      appparts.IAppPartitions
+	qNameTypeKind appdef.TypeKind
 }
-
-func PoolSize(c, q, p int) [ProcessorKind_Count]int { return [ProcessorKind_Count]int{c, q, p} }

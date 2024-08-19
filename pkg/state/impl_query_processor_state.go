@@ -9,37 +9,98 @@ import (
 
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/itokens"
+	"github.com/voedger/voedger/pkg/sys"
+	"github.com/voedger/voedger/pkg/utils/federation"
 )
 
-func implProvideQueryProcessorState(ctx context.Context, appStructs istructs.IAppStructs, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc,
-	secretReader isecrets.ISecretReader, principalsFunc PrincipalsFunc, tokenFunc TokenFunc, argFunc ArgFunc) IHostState {
-	bs := newHostState("QueryProcessor", 0, func() istructs.IAppStructs { return appStructs })
+type queryProcessorState struct {
+	*hostState
+	queryArgs     PrepareArgsFunc
+	queryCallback ExecQueryCallbackFunc
+}
 
-	bs.addStorage(View, &viewRecordsStorage{
-		ctx:             ctx,
-		viewRecordsFunc: func() istructs.IViewRecords { return appStructs.ViewRecords() },
-		wsidFunc:        wsidFunc,
-	}, S_GET|S_GET_BATCH|S_READ)
+func (s queryProcessorState) QueryPrepareArgs() istructs.PrepareArgs {
+	return s.queryArgs()
+}
 
-	bs.addStorage(Record, &recordsStorage{
-		recordsFunc: func() istructs.IRecords { return appStructs.Records() },
-		wsidFunc:    wsidFunc,
-	}, S_GET|S_GET_BATCH)
+func (s queryProcessorState) QueryCallback() istructs.ExecQueryCallback {
+	return s.queryCallback()
+}
 
-	bs.addStorage(WLog, &wLogStorage{
+func implProvideQueryProcessorState(
+	ctx context.Context,
+	appStructsFunc AppStructsFunc,
+	partitionIDFunc PartitionIDFunc,
+	wsidFunc WSIDFunc,
+	secretReader isecrets.ISecretReader,
+	principalsFunc PrincipalsFunc,
+	tokenFunc TokenFunc,
+	itokens itokens.ITokens,
+	execQueryArgsFunc PrepareArgsFunc,
+	argFunc ArgFunc,
+	resultBuilderFunc ObjectBuilderFunc,
+	federation federation.IFederation,
+	queryCallbackFunc ExecQueryCallbackFunc,
+	options ...StateOptFunc) IHostState {
+
+	opts := &stateOpts{}
+	for _, optFunc := range options {
+		optFunc(opts)
+	}
+
+	state := &queryProcessorState{
+		hostState:     newHostState("QueryProcessor", queryProcessorStateMaxIntents, appStructsFunc),
+		queryArgs:     execQueryArgsFunc,
+		queryCallback: queryCallbackFunc,
+	}
+
+	state.addStorage(sys.Storage_View, newViewRecordsStorage(ctx, appStructsFunc, wsidFunc, nil), S_GET|S_GET_BATCH|S_READ)
+	state.addStorage(sys.Storage_Record, newRecordsStorage(appStructsFunc, wsidFunc, nil), S_GET|S_GET_BATCH)
+
+	state.addStorage(sys.Storage_WLog, &wLogStorage{
 		ctx:        ctx,
-		eventsFunc: func() istructs.IEvents { return appStructs.Events() },
+		eventsFunc: func() istructs.IEvents { return appStructsFunc().Events() },
 		wsidFunc:   wsidFunc,
 	}, S_GET|S_READ)
 
-	bs.addStorage(Http, &httpStorage{}, S_READ)
+	state.addStorage(sys.Storage_Http, &httpStorage{
+		customClient: opts.customHttpClient,
+	}, S_READ)
 
-	bs.addStorage(AppSecret, &appSecretsStorage{secretReader: secretReader}, S_GET)
+	state.addStorage(sys.Storage_FederationCommand, &federationCommandStorage{
+		appStructs: appStructsFunc,
+		wsid:       wsidFunc,
+		emulation:  opts.federationCommandHandler,
+		federation: federation,
+		tokens:     itokens,
+	}, S_GET)
 
-	bs.addStorage(RequestSubject, &subjectStorage{
+	state.addStorage(sys.Storage_FederationBlob, &federationBlobStorage{
+		appStructs: appStructsFunc,
+		wsid:       wsidFunc,
+		emulation:  opts.federationBlobHandler,
+		federation: federation,
+		tokens:     itokens,
+	}, S_READ)
+
+	state.addStorage(sys.Storage_AppSecret, &appSecretsStorage{secretReader: secretReader}, S_GET)
+
+	state.addStorage(sys.Storage_RequestSubject, &subjectStorage{
 		principalsFunc: principalsFunc,
 		tokenFunc:      tokenFunc,
 	}, S_GET)
 
-	return bs
+	state.addStorage(sys.Storage_QueryContext, &queryContextStorage{
+		argFunc:  argFunc,
+		wsidFunc: wsidFunc,
+	}, S_GET)
+
+	state.addStorage(sys.Storage_Response, &cmdResponseStorage{}, S_INSERT)
+
+	state.addStorage(sys.Storage_Result, newQueryResultStorage(appStructsFunc, resultBuilderFunc, queryCallbackFunc), S_INSERT)
+
+	state.addStorage(sys.Storage_Uniq, newUniquesStorage(appStructsFunc, wsidFunc, opts.uniquesHandler), S_GET)
+
+	return state
 }

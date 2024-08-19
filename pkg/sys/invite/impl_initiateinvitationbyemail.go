@@ -10,12 +10,12 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
-	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
-func provideCmdInitiateInvitationByEMail(cfg *istructsmem.AppConfigType, timeFunc coreutils.TimeFunc) {
-	cfg.Resources.Add(istructsmem.NewCommandFunction(
+func provideCmdInitiateInvitationByEMail(sr istructsmem.IStatelessResources, timeFunc coreutils.TimeFunc) {
+	sr.AddCommands(appdef.SysPackagePath, istructsmem.NewCommandFunction(
 		qNameCmdInitiateInvitationByEMail,
 		execCmdInitiateInvitationByEMail(timeFunc),
 	))
@@ -33,7 +33,7 @@ func execCmdInitiateInvitationByEMail(timeFunc coreutils.TimeFunc) func(args ist
 			return
 		}
 
-		skbViewInviteIndex, err := args.State.KeyBuilder(state.View, qNameViewInviteIndex)
+		skbViewInviteIndex, err := args.State.KeyBuilder(sys.Storage_View, qNameViewInviteIndex)
 		if err != nil {
 			return
 		}
@@ -45,11 +45,11 @@ func execCmdInitiateInvitationByEMail(timeFunc coreutils.TimeFunc) func(args ist
 		}
 
 		if ok {
-			skbCDocInvite, err := args.State.KeyBuilder(state.Record, qNameCDocInvite)
+			skbCDocInvite, err := args.State.KeyBuilder(sys.Storage_Record, qNameCDocInvite)
 			if err != nil {
 				return err
 			}
-			skbCDocInvite.PutRecordID(state.Field_ID, svViewInviteIndex.AsRecordID(field_InviteID))
+			skbCDocInvite.PutRecordID(sys.Storage_Record_Field_ID, svViewInviteIndex.AsRecordID(field_InviteID))
 			svCDocInvite, err := args.State.MustExist(skbCDocInvite)
 			if err != nil {
 				return err
@@ -77,7 +77,7 @@ func execCmdInitiateInvitationByEMail(timeFunc coreutils.TimeFunc) func(args ist
 			return nil
 		}
 
-		skbCDocInvite, err := args.State.KeyBuilder(state.Record, qNameCDocInvite)
+		skbCDocInvite, err := args.State.KeyBuilder(sys.Storage_Record, qNameCDocInvite)
 		if err != nil {
 			return err
 		}

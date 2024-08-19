@@ -7,19 +7,22 @@
 package collection
 
 import (
+	"context"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/cluster"
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
+	"github.com/voedger/voedger/pkg/pipeline"
 	queryprocessor "github.com/voedger/voedger/pkg/processors/query"
 )
 
 type testDataType struct {
-	appQName        istructs.AppQName
-	totalPartitions int
-	appEngines      [cluster.ProcessorKind_Count]int
+	appQName        appdef.AppQName
+	totalPartitions istructs.NumAppPartitions
+	appEngines      [appparts.ProcessorKind_Count]int
 
 	pkgName string
 
@@ -71,7 +74,7 @@ const OccursUnbounded = appdef.Occurs(0xffff)
 var test = testDataType{
 	appQName:        istructs.AppQName_test1_app1,
 	totalPartitions: 100,
-	appEngines:      cluster.PoolSize(100, 100, 100),
+	appEngines:      appparts.PoolSize(100, 100, 0, 0),
 
 	pkgName: "test",
 
@@ -113,6 +116,70 @@ var test = testDataType{
 	cocaColaNumber:  10,
 	cocaColaNumber2: 11,
 	fantaNumber:     12,
+}
+
+type testCmdWorkpeace struct {
+	appPart appparts.IAppPartition
+	event   istructs.IPLogEvent
+}
+
+func (w testCmdWorkpeace) AppPartition() appparts.IAppPartition { return w.appPart }
+func (w testCmdWorkpeace) Event() istructs.IPLogEvent           { return w.event }
+
+func (w *testCmdWorkpeace) Borrow(ctx context.Context, appParts appparts.IAppPartitions) (err error) {
+	w.appPart, err = appParts.WaitForBorrow(ctx, test.appQName, test.partition, appparts.ProcessorKind_Command)
+	return err
+}
+
+func (w *testCmdWorkpeace) Command(e any) error {
+	w.event = e.(istructs.IPLogEvent)
+	return nil
+}
+
+func (w *testCmdWorkpeace) Actualizers(ctx context.Context) error {
+	return w.appPart.DoSyncActualizer(ctx, w)
+}
+
+func (w *testCmdWorkpeace) Release() {
+	p := w.appPart
+	w.appPart = nil
+	if p != nil {
+		p.Release()
+	}
+}
+
+type testCmdProc struct {
+	pipeline.ISyncPipeline
+	appParts  appparts.IAppPartitions
+	ctx       context.Context
+	workpeace testCmdWorkpeace
+}
+
+func testProcessor(appParts appparts.IAppPartitions) *testCmdProc {
+	proc := &testCmdProc{
+		appParts:  appParts,
+		ctx:       context.Background(),
+		workpeace: testCmdWorkpeace{},
+	}
+	proc.ISyncPipeline = pipeline.NewSyncPipeline(proc.ctx, "partition processor",
+		pipeline.WireSyncOperator("Borrow", pipeline.NewSyncOp(
+			func(ctx context.Context, _ pipeline.IWorkpiece) error {
+				return proc.workpeace.Borrow(ctx, appParts)
+			})),
+		pipeline.WireSyncOperator("Command", pipeline.NewSyncOp(
+			func(_ context.Context, event pipeline.IWorkpiece) error {
+				return proc.workpeace.Command(event)
+			})),
+		pipeline.WireSyncOperator("SyncActualizers", pipeline.NewSyncOp(
+			func(ctx context.Context, _ pipeline.IWorkpiece) error {
+				return proc.workpeace.Actualizers(ctx)
+			})),
+		pipeline.WireSyncOperator("Release", pipeline.NewSyncOp(
+			func(context.Context, pipeline.IWorkpiece) error {
+				proc.workpeace.Release()
+				return nil
+			})))
+	return proc
 }
 
 type idsGeneratorType struct {

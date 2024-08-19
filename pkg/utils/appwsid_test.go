@@ -15,9 +15,9 @@ import (
 
 func TestBasicUsage_GetAppWSID(t *testing.T) {
 	cases := []struct {
-		wsid            istructs.WSID
-		appWSAmount     istructs.AppWSAmount
-		expectedAppWSID istructs.WSID
+		wsid             istructs.WSID
+		numAppWorkspaces istructs.NumAppWorkspaces
+		expectedAppWSID  istructs.WSID
 	}{
 		{1, 1, istructs.NewWSID(istructs.MainClusterID, istructs.MaxPseudoBaseWSID+1)},
 		{2, 1, istructs.NewWSID(istructs.MainClusterID, istructs.MaxPseudoBaseWSID+1)},
@@ -29,7 +29,7 @@ func TestBasicUsage_GetAppWSID(t *testing.T) {
 	}
 
 	for _, c := range cases {
-		require.Equal(t, c.expectedAppWSID, GetAppWSID(c.wsid, c.appWSAmount), c)
+		require.Equal(t, c.expectedAppWSID, GetAppWSID(c.wsid, c.numAppWorkspaces), c)
 	}
 }
 
@@ -46,4 +46,16 @@ func TestGetPseudoWSID(t *testing.T) {
 		require.Zero(t, uint64(GetPseudoWSID(istructs.NullWSID, srcInstance.entity, srcInstance.clusterID))&mask)
 		require.Zero(t, uint64(GetPseudoWSID(istructs.NullWSID+1, srcInstance.entity, srcInstance.clusterID))&mask)
 	}
+}
+
+func TestAppWSIDToPseudoWSID(t *testing.T) {
+	numAppWorkspaces := istructs.NumAppWorkspaces(10)
+	pseudoWSIDInitial := GetPseudoWSID(istructs.NullWSID, "test", istructs.MainClusterID)
+	appWSIDExpected := GetAppWSID(pseudoWSIDInitial, numAppWorkspaces)
+
+	// could be any but must lead to the initial appWSIDExpected
+	psuedoWSID_someNew := AppWSIDToPseudoWSID(appWSIDExpected)
+
+	appWSIDActual := GetAppWSID(psuedoWSID_someNew, numAppWorkspaces)
+	require.Equal(t, appWSIDExpected, appWSIDActual)
 }

@@ -7,14 +7,14 @@ package vit
 import (
 	"context"
 	"fmt"
-	"runtime/debug"
 
 	"github.com/voedger/voedger/pkg/apps"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/goutils/iterate"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/parser"
-	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/sys/smtp"
+	"github.com/voedger/voedger/pkg/sys/sysprovide"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -28,8 +28,12 @@ const (
 	TestEmail       = "123@123.com"
 	TestEmail2      = "124@124.com"
 	TestServicePort = 10000
-	app1PkgName     = "app1pkg"
-	app2PkgName     = "app2pkg"
+
+	app1PkgName = "app1pkg"
+	App1PkgPath = "github.com/voedger/voedger/pkg/vit/app1pkg"
+
+	app2PkgName = "app2pkg"
+	app2PkgPath = "github.com/voedger/voedger/pkg/vit/app2pkg"
 )
 
 var (
@@ -47,6 +51,8 @@ var (
 	QNameODoc1                               = appdef.NewQName(app1PkgName, "odoc1")
 	QNameODoc2                               = appdef.NewQName(app1PkgName, "odoc2")
 	TestSMTPCfg                              = smtp.Cfg{
+		Host:     "smtp.testserver.com",
+		Port:     1,
 		Username: "username@gmail.com",
 	}
 
@@ -72,25 +78,22 @@ var (
 
 			const app1_BLOBMaxSize = 5
 			cfg.BLOBMaxSize = app1_BLOBMaxSize
+
+			cfg.SmtpConfig = TestSMTPCfg
 		}),
 		WithCleanup(func(_ *VIT) {
 			MockCmdExec = func(input string, args istructs.ExecCommandArgs) error { panic("") }
-			MockQryExec = func(input string, callback istructs.ExecQueryCallback) error { panic("") }
+			MockQryExec = func(input string, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) error { panic("") }
 		}),
 	)
-	MockQryExec func(input string, callback istructs.ExecQueryCallback) error
+	MockQryExec func(input string, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) error
 	MockCmdExec func(input string, args istructs.ExecCommandArgs) error
 )
 
-func ProvideApp2(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) apps.BuiltInAppDef {
-	buildInfo, ok := debug.ReadBuildInfo()
-	if !ok {
-		panic("no build info")
-	}
-	sysPackageFS := sys.Provide(cfg, adf, TestSMTPCfg, ep, nil, apis.TimeFunc, apis.ITokens, apis.IFederation, apis.IAppStructsProvider, apis.IAppTokensFactory,
-		apis.NumCommandProcessors, buildInfo, apis.IAppStorageProvider)
+func ProvideApp2(apis apps.APIs, cfg *istructsmem.AppConfigType, ep extensionpoints.IExtensionPoint) apps.BuiltInAppDef {
+	sysPackageFS := sysprovide.Provide(cfg)
 	app2PackageFS := parser.PackageFS{
-		Path: "github.com/voedger/voedger/pkg/vit/app2pkg",
+		Path: app2PkgPath,
 		FS:   SchemaTestApp2FS,
 	}
 	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app2PkgName, "testCmd"), istructsmem.NullCommandExec))
@@ -105,14 +108,9 @@ func ProvideApp2(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 	}
 }
 
-func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) apps.BuiltInAppDef {
+func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, ep extensionpoints.IExtensionPoint) apps.BuiltInAppDef {
 	// sys package
-	buildInfo, ok := debug.ReadBuildInfo()
-	if !ok {
-		panic("no build info")
-	}
-	sysPackageFS := sys.Provide(cfg, adf, TestSMTPCfg, ep, nil, apis.TimeFunc, apis.ITokens, apis.IFederation, apis.IAppStructsProvider, apis.IAppTokensFactory,
-		apis.NumCommandProcessors, buildInfo, apis.IAppStorageProvider)
+	sysPackageFS := sysprovide.Provide(cfg)
 
 	// for rates test
 	cfg.Resources.Add(istructsmem.NewQueryFunction(
@@ -137,7 +135,7 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 		appdef.NewQName(app1PkgName, "MockQry"),
 		func(_ context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 			input := args.ArgumentObject.AsString(field_Input)
-			return MockQryExec(input, callback)
+			return MockQryExec(input, args, callback)
 		},
 	))
 
@@ -153,7 +151,7 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 	cfg.Resources.Add(istructsmem.NewCommandFunction(
 		appdef.NewQName(app1PkgName, "TestCmd"),
 		func(args istructs.ExecCommandArgs) (err error) {
-			key, err := args.State.KeyBuilder(state.Result, testCmdResult)
+			key, err := args.State.KeyBuilder(sys.Storage_Result, testCmdResult)
 			if err != nil {
 				return err
 			}
@@ -196,11 +194,73 @@ func ProvideApp1(apis apps.APIs, cfg *istructsmem.AppConfigType, adf appdef.IApp
 		},
 	)
 
+	qNameViewCategoryIdx := appdef.NewQName(app1PkgName, "CategoryIdx")
+	cfg.AddSyncProjectors(
+		istructs.Projector{
+			Name: appdef.NewQName(app1PkgName, "ApplyCategoryIdx"),
+			Func: func(event istructs.IPLogEvent, st istructs.IState, intents istructs.IIntents) (err error) {
+				return iterate.ForEachError(event.CUDs, func(cud istructs.ICUDRow) error {
+					if cud.QName() != QNameApp1_CDocCategory {
+						return nil
+					}
+					kb, err := st.KeyBuilder(sys.Storage_View, qNameViewCategoryIdx)
+					if err != nil {
+						return err
+					}
+					kb.PutInt32("IntFld", 43)
+					kb.PutInt32("Dummy", 1)
+					b, err := intents.NewValue(kb)
+					if err != nil {
+						return err
+					}
+					b.PutInt32("Val", 42)
+					b.PutString("Name", cud.AsString("name"))
+					return nil
+				})
+			},
+		},
+	)
+
 	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app1PkgName, "testCmd"), istructsmem.NullCommandExec))
 	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app1PkgName, "TestCmdRawArg"), istructsmem.NullCommandExec))
 
+	cfg.Resources.Add(istructsmem.NewQueryFunction(appdef.NewQName(app1PkgName, "QryIntents"), func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
+		kb, err := args.State.KeyBuilder(sys.Storage_Result, appdef.NewQName(app1PkgName, "QryIntentsResult"))
+		if err != nil {
+			return err
+		}
+		vb, err := args.Intents.NewValue(kb)
+		if err != nil {
+			return err
+		}
+		vb.PutString("Fld1", "hello")
+		return nil
+	}))
+
+	funcWithResponseIntents := func(args istructs.PrepareArgs, st istructs.IState, intents istructs.IIntents) (err error) {
+		kb, err := st.KeyBuilder(sys.Storage_Response, appdef.NullQName)
+		if err != nil {
+			return err
+		}
+		vb, err := intents.NewValue(kb)
+		if err != nil {
+			return err
+		}
+		vb.PutInt32(sys.Storage_Response_Field_StatusCode, args.ArgumentObject.AsInt32("StatusCodeToReturn"))
+		vb.PutString(sys.Storage_Response_Field_ErrorMessage, "error from response intent")
+		return nil
+	}
+
+	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app1PkgName, "CmdWithResponseIntent"), func(args istructs.ExecCommandArgs) (err error) {
+		return funcWithResponseIntents(args.PrepareArgs, args.State, args.Intents)
+	}))
+
+	cfg.Resources.Add(istructsmem.NewQueryFunction(appdef.NewQName(app1PkgName, "QryWithResponseIntent"), func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
+		return funcWithResponseIntents(args.PrepareArgs, args.State, args.Intents)
+	}))
+
 	app1PackageFS := parser.PackageFS{
-		Path: "github.com/voedger/voedger/pkg/vit/app1pkg",
+		Path: App1PkgPath,
 		FS:   SchemaTestApp1FS,
 	}
 	return apps.BuiltInAppDef{

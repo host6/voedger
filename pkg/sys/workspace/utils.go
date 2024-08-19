@@ -9,7 +9,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/projectors"
+
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
@@ -24,20 +24,11 @@ func validateWSKindInitializationData(as istructs.IAppStructs, data map[string]i
 	aob := reb.ArgumentObjectBuilder()
 	aob.PutQName(appdef.SystemField_QName, t.QName())
 	aob.PutRecordID(appdef.SystemField_ID, 1)
-	if err = coreutils.Marshal(aob, data); err != nil {
+	if err = coreutils.MapToObject(data, aob); err != nil {
 		return err
 	}
 	_, err = aob.Build()
 	return
-}
-
-// kept here because impossible to define in sql
-func provideViewNextWSID(appDefBuilder appdef.IAppDefBuilder) {
-	projectors.ProvideViewDef(appDefBuilder, QNameViewNextBaseWSID, func(b appdef.IViewBuilder) {
-		b.Key().PartKey().AddField(fldDummy1, appdef.DataKind_int32)
-		b.Key().ClustCols().AddField(fldDummy2, appdef.DataKind_int32)
-		b.Value().AddField(fldNextBaseWSID, appdef.DataKind_int64, true)
-	})
 }
 
 // TODO: works correct in Community Edition only. Have >1 VVM -> need to lock in a different way

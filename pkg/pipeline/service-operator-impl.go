@@ -22,16 +22,25 @@ func (so *serviceOperator) Close() {
 	<-so.serviceDone
 }
 
-func (so *serviceOperator) DoSync(ctx context.Context, work interface{}) (err error) {
+func (so *serviceOperator) DoSync(ctx context.Context, work IWorkpiece) (err error) {
 	if err = so.iService.Prepare(work); err != nil {
 		return err
 	}
 	so.isStarted = true
 	so.serviceDone = make(chan struct{})
+	exService, isExService := so.iService.(IServiceEx)
+	ctxStarted, started := context.WithCancel(ctx)
 	go func() {
-		so.iService.Run(ctx)
+		if isExService {
+			exService.RunEx(ctx, started)
+			started()
+		} else {
+			started()
+			so.iService.Run(ctx)
+		}
 		close(so.serviceDone)
 	}()
+	<-ctxStarted.Done()
 	return
 }
 

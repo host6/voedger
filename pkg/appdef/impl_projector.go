@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-present Sigma-Soft, Ltd.
+ * Copyright (c) 2024-present Sigma-Soft, Ltd.
  * @author: Nikolay Nikitin
  */
 
@@ -8,8 +8,10 @@ package appdef
 import (
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
+
+	"github.com/voedger/voedger/pkg/goutils/set"
+	"github.com/voedger/voedger/pkg/utils/utils"
 )
 
 // # Implements:
@@ -74,10 +76,11 @@ func (pb *projectorBuilder) SetWantErrors() IProjectorBuilder {
 //   - if events set is empty
 func (prj *projector) Validate() (err error) {
 	err = prj.extension.Validate()
+
 	if len(prj.events.events) == 0 {
-		err = errors.Join(err,
-			fmt.Errorf("%v: events set is empty: %w", prj, ErrEmptyProjectorEvents))
+		err = errors.Join(err, ErrMissed("%v events", prj))
 	}
+
 	return err
 }
 
@@ -118,34 +121,28 @@ func (ee events) Map() map[QName][]ProjectorEventKind {
 
 func (ee *events) add(on QName, event ...ProjectorEventKind) {
 	if on == NullQName {
-		panic(ErrNameMissed)
+		panic(ErrMissed("event name"))
 	}
 
 	t := ee.app.TypeByName(on)
 	if t == nil {
-		panic(fmt.Errorf("type «%v» not found: %w", on, ErrNameNotFound))
+		panic(ErrTypeNotFound(on))
 	}
-	switch t.Kind() {
-	case TypeKind_GDoc, TypeKind_GRecord, TypeKind_CDoc, TypeKind_CRecord, TypeKind_WDoc, TypeKind_WRecord, // CUD
-		TypeKind_Command,               // Execute
-		TypeKind_ODoc, TypeKind_Object: // Execute with
-		e, ok := ee.events[on]
-		if ok {
-			e.addKind(event...)
-		} else {
-			e = newEvent(t, event...)
-			ee.events[on] = e
-		}
-		ee.eventsMap[on] = e.Kind()
-	default:
-		panic(fmt.Errorf("%v is not applicable for projector event: %w", t, ErrInvalidProjectorEventKind))
+
+	e, ok := ee.events[on]
+	if ok {
+		e.addKind(event...)
+	} else {
+		e = newEvent(t, event...)
+		ee.events[on] = e
 	}
+	ee.eventsMap[on] = e.Kind()
 }
 
-func (ee *events) setComment(record QName, comment ...string) {
-	e, ok := ee.events[record]
+func (ee *events) setComment(on QName, comment ...string) {
+	e, ok := ee.events[on]
 	if !ok {
-		panic(ErrNameNotFound)
+		panic(ErrNotFound("event name «%v»", on))
 	}
 	e.comment.setComment(comment...)
 }
@@ -177,7 +174,7 @@ func (eb *eventsBuilder) SetComment(record QName, comment ...string) IProjectorE
 type event struct {
 	comment
 	on    IType
-	kinds uint64 // bitmap[ProjectorEventKind]
+	kinds set.Set[ProjectorEventKind]
 }
 
 func newEvent(on IType, kind ...ProjectorEventKind) *event {
@@ -186,27 +183,18 @@ func newEvent(on IType, kind ...ProjectorEventKind) *event {
 	if len(kind) > 0 {
 		p.addKind(kind...)
 	} else {
-		// missed kind, make defaults
-		switch on.Kind() {
-		case TypeKind_GDoc, TypeKind_GRecord, TypeKind_CDoc, TypeKind_CRecord, TypeKind_WDoc, TypeKind_WRecord:
-			p.addKind(ProjectorEventKind_AnyChanges...)
-		case TypeKind_Command:
-			p.addKind(ProjectorEventKind_Execute)
-		case TypeKind_Object, TypeKind_ODoc:
-			p.addKind(ProjectorEventKind_ExecuteWithParam)
+		kinds := allProjectorEventsOnType(on)
+		if kinds.Len() == 0 {
+			panic(ErrUnsupported("type %v can't be projector trigger", on))
 		}
+		p.addKind(kinds.AsArray()...)
 	}
 
 	return p
 }
 
 func (e *event) Kind() (kinds []ProjectorEventKind) {
-	for k := ProjectorEventKind(1); k < ProjectorEventKind_Count; k++ {
-		if e.kinds&(1<<k) != 0 {
-			kinds = append(kinds, k)
-		}
-	}
-	return kinds
+	return e.kinds.AsArray()
 }
 
 func (e *event) On() IType {
@@ -227,10 +215,10 @@ func (e event) String() string {
 //   - if event kind is not compatible with type.
 func (e *event) addKind(kind ...ProjectorEventKind) {
 	for _, k := range kind {
-		if !k.typeCompatible(e.on.Kind()) {
-			panic(fmt.Errorf("%s event is not applicable with %v: %w", k.TrimString(), e.on, ErrInvalidProjectorEventKind))
+		if ok, err := projectorEventCompatableWith(k, e.on); !ok {
+			panic(err)
 		}
-		e.kinds |= 1 << k
+		e.kinds.Set(k)
 	}
 }
 
@@ -239,37 +227,7 @@ func (i ProjectorEventKind) MarshalText() ([]byte, error) {
 	if (i > 0) && (i < ProjectorEventKind_Count) {
 		s = i.String()
 	} else {
-		const base = 10
-		s = strconv.FormatUint(uint64(i), base)
+		s = utils.UintToString(i)
 	}
 	return []byte(s), nil
-}
-
-// Renders an ProjectorEventKind in human-readable form, without `ProjectorEventKind_` prefix,
-// suitable for debugging or error messages
-func (i ProjectorEventKind) TrimString() string {
-	const pref = "ProjectorEventKind_"
-	return strings.TrimPrefix(i.String(), pref)
-}
-
-// Returns is event kind compatible with type kind.
-//
-// # Compatibles:
-//
-//   - Any document or record can be inserted.
-//   - Any document or record, except ODoc and ORecord, can be updated, activated or deactivated.
-//   - Only command can be executed.
-//   - Only object or ODoc can be parameter for command execute with.
-func (i ProjectorEventKind) typeCompatible(kind TypeKind) bool {
-	switch i {
-	case ProjectorEventKind_Insert, ProjectorEventKind_Update, ProjectorEventKind_Activate, ProjectorEventKind_Deactivate:
-		return kind == TypeKind_GDoc || kind == TypeKind_GRecord ||
-			kind == TypeKind_CDoc || kind == TypeKind_CRecord ||
-			kind == TypeKind_WDoc || kind == TypeKind_WRecord
-	case ProjectorEventKind_Execute:
-		return kind == TypeKind_Command
-	case ProjectorEventKind_ExecuteWithParam:
-		return kind == TypeKind_Object || kind == TypeKind_ODoc
-	}
-	return false
 }

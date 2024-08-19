@@ -12,6 +12,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
+	imetrics "github.com/voedger/voedger/pkg/metrics"
 )
 
 type IExtensionsModule interface {
@@ -37,6 +38,14 @@ type ExtEngineConfig struct {
 	// Compile bool
 }
 
+type WASMFactoryConfig struct {
+	Compile            bool
+	InvocationsTotal   *imetrics.MetricValue
+	InvocationsSeconds *imetrics.MetricValue
+	ErrorsTotal        *imetrics.MetricValue
+	RecoversTotal      *imetrics.MetricValue
+}
+
 type IExtensionIO interface {
 	istructs.IState
 	istructs.IIntents
@@ -48,33 +57,25 @@ type IExtensionIO interface {
 // Extension engine is not thread safe
 type IExtensionEngine interface {
 	SetLimits(limits ExtensionLimits)
-	Invoke(ctx context.Context, extName ExtQName, io IExtensionIO) (err error)
+	Invoke(ctx context.Context, extName appdef.FullQName, io IExtensionIO) (err error)
 	Close(ctx context.Context)
 }
 
-type IExtensionEngineFactories map[appdef.ExtensionEngineKind]IExtensionEngineFactory
-
-type ExtQName struct {
-	PackagePath string
-	ExtName     string
-}
-
-func (n ExtQName) String() string {
-	return n.PackagePath + "." + n.ExtName
-}
+type ExtensionEngineFactories map[appdef.ExtensionEngineKind]IExtensionEngineFactory
 
 type BuiltInExtFunc func(ctx context.Context, io IExtensionIO) error
-type BuiltInExtFuncs map[ExtQName]BuiltInExtFunc // Provided to construct factory of engines
+type BuiltInAppExtFuncs map[appdef.AppQName]BuiltInExtFuncs
+type BuiltInExtFuncs map[appdef.FullQName]BuiltInExtFunc // Provided to construct factory of engines
 
-type ExtensionPackage struct {
-	QualifiedName  string
-	ModuleUrl      *url.URL
-	ExtensionNames []string
+type ExtensionModule struct {
+	Path           string   // e.g. github.com/voedger/voedger
+	ModuleUrl      *url.URL // drive path to the wasm file
+	ExtensionNames []string // list of names defined in EXTENSION ENGINE WASM
 }
 
 type IExtensionEngineFactory interface {
 	// LocalPath is a path package data can be got from
-	// - packages is not used for ExtensionEngineKind_BuiltIn
+	// - modules is not used for ExtensionEngineKind_BuiltIn
 	// - config is not used for ExtensionEngineKind_BuiltIn
-	New(ctx context.Context, packages []ExtensionPackage, config *ExtEngineConfig, numEngines int) ([]IExtensionEngine, error)
+	New(ctx context.Context, app appdef.AppQName, modules []ExtensionModule, config *ExtEngineConfig, numEnginesPerKind int) ([]IExtensionEngine, error)
 }

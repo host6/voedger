@@ -6,7 +6,6 @@ package main
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/spf13/cobra"
 )
@@ -14,17 +13,14 @@ import (
 func newReplaceCmd() *cobra.Command {
 	replaceCmd := &cobra.Command{
 		Use:   "replace",
-		Short: "Replaces the cluster node",
+		Short: "Replace a cluster node",
 		RunE:  replace,
 	}
-	replaceCmd.PersistentFlags().StringVar(&sshKey, "ssh-key", "", "Path to SSH key")
-	value, exists := os.LookupEnv(envVoedgerSshKey)
-	if !exists || value == "" {
-		if err := replaceCmd.MarkPersistentFlagRequired("ssh-key"); err != nil {
-			loggerError(err.Error())
-			return nil
-		}
+
+	if !addSshKeyFlag(replaceCmd) {
+		return nil
 	}
+
 	return replaceCmd
 
 }
@@ -39,6 +35,14 @@ func replace(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	n := cluster.nodeByHost(args[0])
+	if n == nil {
+		return fmt.Errorf("host %s is not available", cluster.Cmd.Args[0])
+	}
+
+	args[0] = n.ActualNodeState.Address
+	replacedAddress := args[0]
+
 	// nolint
 	defer cluster.saveToJSON()
 
@@ -51,8 +55,6 @@ func replace(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
-
-	replacedAddress := cluster.Cmd.Args[0]
 
 	if err = cluster.validate(); err == nil {
 		if err = cluster.Cmd.apply(cluster); err != nil {

@@ -12,9 +12,9 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
-func GetAppWSID(wsid istructs.WSID, appWSAmount istructs.AppWSAmount) istructs.WSID {
+func GetAppWSID(wsid istructs.WSID, numAppWorkspaces istructs.NumAppWorkspaces) istructs.WSID {
 	baseWSID := wsid.BaseWSID()
-	appWSNumber := baseWSID % istructs.WSID(appWSAmount)
+	appWSNumber := baseWSID % istructs.WSID(numAppWorkspaces)
 	baseAppWSID := istructs.FirstBaseAppWSID + appWSNumber
 	// problem: app workspaces are automatically created in the main cluster on VVM launch
 	// request to an another cluster -> there are no App Workspaces yet
@@ -34,4 +34,16 @@ func GetPseudoWSID(ownerWSID istructs.WSID, entity string, clusterID istructs.Cl
 	}
 	crc16 := CRC16([]byte(entity))
 	return istructs.NewWSID(clusterID, istructs.WSID(crc16))
+}
+
+// resulting pseudoWSID leads to the initial appWSID
+// note: there could be many different pseudoWSIDs that leads to the same appWSID
+func AppWSIDToPseudoWSID(appWSID istructs.WSID) (pseudoWSID istructs.WSID) {
+	appWSNumber := appWSID.BaseWSID() - istructs.FirstBaseAppWSID
+	return istructs.NewWSID(istructs.MainClusterID, appWSNumber)
+}
+
+// used in BuildAppWorkspaces() only because there are no apps in IAppPartitions on that moment
+func AppPartitionID(wsid istructs.WSID, numAppPartitions istructs.NumAppPartitions) istructs.PartitionID {
+	return istructs.PartitionID(int(wsid) % int(numAppPartitions))
 }

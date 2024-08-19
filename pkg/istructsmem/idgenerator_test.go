@@ -16,11 +16,12 @@ import (
 
 func TestIDGenerator(t *testing.T) {
 	require := require.New(t)
-	bld := appdef.New()
-	bld.AddCDoc(istructs.QNameCDoc)
-	bld.AddCRecord(istructs.QNameCRecord)
-	bld.AddWDoc(istructs.QNameWDoc)
-	appDef, err := bld.Build()
+
+	adb := appdef.New()
+	adb.AddCDoc(istructs.QNameCDoc)
+	adb.AddCRecord(istructs.QNameCRecord)
+	adb.AddWDoc(istructs.QNameWDoc)
+	appDef, err := adb.Build()
 	require.NoError(err)
 
 	idGen := NewIDGenerator()
@@ -76,11 +77,13 @@ func TestIDGenerator(t *testing.T) {
 // 9999999999 ID causes next IDs collision
 func TestIDGenCollision(t *testing.T) {
 	t.Skip("fixed already. The test is kept as the problem description. The test is actual for commit e.g. https://github.com/voedger/voedger/commit/cbf1fec92fe1ec25fa17b9897261835c7aa6c017")
+
 	require := require.New(t)
+
 	idGen := NewIDGenerator()
-	bld := appdef.New()
-	bld.AddCDoc(istructs.QNameCDoc)
-	appDef, err := bld.Build()
+	adb := appdef.New()
+	adb.AddCDoc(istructs.QNameCDoc)
+	appDef, err := adb.Build()
 	require.NoError(err)
 	tp := appDef.Type(istructs.QNameCDoc)
 

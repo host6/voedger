@@ -36,7 +36,7 @@ func TestBasicUsage_Workspace(t *testing.T) {
 		body := fmt.Sprintf(`
 			{
 				"args": {
-					"WSName": "%s"
+					"WSName": %q
 				},
 				"elements":[
 					{
@@ -52,7 +52,7 @@ func TestBasicUsage_Workspace(t *testing.T) {
 		body := fmt.Sprintf(`
 		{
 			"args": {
-				"WSName": "%s",
+				"WSName": %q,
 				"WSKind": "app1pkg.test_ws",
 				"WSKindInitializationData": "{\"IntFld\": 10}",
 				"TemplateName": "test_template",
@@ -113,7 +113,7 @@ func TestBasicUsage_Workspace(t *testing.T) {
 	})
 
 	t.Run("create a new workspace with an existing name -> 409 conflict", func(t *testing.T) {
-		body := fmt.Sprintf(`{"args": {"WSName": "%s","WSKind": "app1pkg.test_ws","WSKindInitializationData": "{\"WorkStartTime\": \"10\"}","TemplateName": "test","WSClusterID": 1}}`, wsName)
+		body := fmt.Sprintf(`{"args": {"WSName": %q,"WSKind": "app1pkg.test_ws","WSKindInitializationData": "{\"WorkStartTime\": \"10\"}","TemplateName": "test","WSClusterID": 1}}`, wsName)
 		resp := vit.PostProfile(prn, "c.sys.InitChildWorkspace", body, coreutils.Expect409())
 		resp.Println()
 	})
@@ -126,7 +126,7 @@ func TestBasicUsage_Workspace(t *testing.T) {
 
 	t.Run("400 bad request on create a workspace with kind that is not a QName of a workspace descriptor", func(t *testing.T) {
 		wsName := vit.NextName()
-		body := fmt.Sprintf(`{"args": {"WSName": "%s","WSKind": "app1pkg.articles","WSKindInitializationData": "{\"WorkStartTime\": \"10\"}","TemplateName": "test","WSClusterID": 1}}`, wsName)
+		body := fmt.Sprintf(`{"args": {"WSName": %q,"WSKind": "app1pkg.articles","WSKindInitializationData": "{\"WorkStartTime\": \"10\"}","TemplateName": "test","WSClusterID": 1}}`, wsName)
 		resp := vit.PostProfile(prn, "c.sys.InitChildWorkspace", body, coreutils.Expect400())
 		resp.Println()
 	})
@@ -264,7 +264,7 @@ func checkDemoAndDemoMinBLOBs(vit *it.VIT, templateName string, ep extensionpoin
 	blobs, _, err := workspace.ValidateTemplate(templateName, ep, wsKind)
 	require.NoError(err)
 	require.Len(blobs, 4)
-	blobsMap := map[string]workspace.BLOB{}
+	blobsMap := map[string]coreutils.BLOBWorkspaceTemplateField{}
 	for _, templateBLOB := range blobs {
 		blobsMap[string(templateBLOB.Content)] = templateBLOB
 	}
@@ -285,7 +285,7 @@ func checkDemoAndDemoMinBLOBs(vit *it.VIT, templateName string, ep extensionpoin
 		} else {
 			fieldIdx = 2
 		}
-		blobID := int64(resp.SectionRow(rowIdx)[fieldIdx].(float64))
+		blobID := istructs.RecordID(resp.SectionRow(rowIdx)[fieldIdx].(float64))
 		uploadedBLOB := vit.GetBLOB(istructs.AppQName_test1_app1, wsid, blobID, token)
 		templateBLOB := blobsMap[string(uploadedBLOB.Content)]
 		require.Equal(templateBLOB.Name, uploadedBLOB.Name)
@@ -294,4 +294,17 @@ func checkDemoAndDemoMinBLOBs(vit *it.VIT, templateName string, ep extensionpoin
 		rowIdx++
 	}
 	require.Empty(blobsMap)
+}
+
+func TestWSNameEscaping(t *testing.T) {
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+
+	prn := vit.GetPrincipal(istructs.AppQName_test1_app1, "login")
+
+	// \f;jf;GJ specified in frontend -> "\\f;jf;GJ" in json
+	body := `{"args":{"WSName":"\\f;jf;GJ","WSKind":"app1pkg.test_ws","WSKindInitializationData":"{\"StrFld\":\"\\\\f;jf;GJ\",\"IntFld\": 10}","WSClusterID":1}}`
+	vit.PostProfile(prn, "c.sys.InitChildWorkspace", body)
+
+	vit.WaitForWorkspace(`\f;jf;GJ`, prn)
 }

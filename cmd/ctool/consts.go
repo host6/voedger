@@ -8,12 +8,12 @@ package main
 // nolint
 const (
 	// edition types
-	clusterEditionCE = "CE"
-	clusterEditionSE = "SE"
-
-	// permissions
-	rwxrwxrwx = 0777
-	rw_rw_rw_ = 0666
+	clusterEditionCE     = "CE"
+	clusterEditionSE     = "SE"
+	clusterSubEditionSE3 = "SE3"
+	clusterSubEditionSE5 = "SE5"
+	se3NodeCount         = 3
+	se5NodeCount         = 5
 
 	// name of the cluster configuration file
 	clusterConfFileName  = "cluster.json"
@@ -37,9 +37,10 @@ const (
 	dbNodeOffset = 2
 
 	// node Roles
-	nrCENode  = "CENode"
-	nrAppNode = "AppNode"
-	nrDBNode  = "DBNode"
+	nrCENode    = "CENode"
+	nrAppNode   = "AppNode"
+	nrAppDbNode = "AppDbNode"
+	nrDBNode    = "DBNode"
 
 	embedScriptsDir = "scripts"
 
@@ -76,11 +77,35 @@ const (
 	envVoedgerNodeSshPort = "VOEDGER_NODE_SSH_PORT"
 	envVoedgerAcmeDomains = "VOEDGER_ACME_DOMAINS"
 	envVoedgerSshKey      = "VOEDGER_SSH_KEY"
+	envVoedgerCeNode      = "VOEDGER_CE_NODE"
+	envVoedgerHttpPort    = "VOEDGER_HTTP_PORT"
+	envVoedgerEdition     = "VOEDGER_EDITION"
 
-	minGrafanaPasswordLength = 5
+	minMonPasswordLength = 5
+	monUserName          = "voedger"
+	admin                = "admin"
+	voedger              = "voedger"
+
+	logFolder = "log"
+
+	alertManagerConfigFile = "~/alertmanager/config.yml"
+	alertmanager           = "alertmanager"
+
+	httpPort  = "80"
+	httpsPort = "443"
 )
 
 const comma = ","
 
 // folder for DB backups
 const backupFolder = "/mnt/backup/voedger/"
+
+const (
+	alertLabelSource   = "source"
+	alertLabelInstance = "instance"
+	alertLabelSeverity = "severity"
+)
+
+const emptyDiscordWebhookUrl = "http://discord_webhook_url"
+
+const ceNodeName = "ce-node"

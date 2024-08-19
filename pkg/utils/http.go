@@ -9,11 +9,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log"
-	"math"
 	"net"
 	"net/http"
 	"net/url"
@@ -22,12 +20,10 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"golang.org/x/exp/slices"
 
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
-
-	"github.com/voedger/voedger/pkg/istructs"
 )
 
 func NewHTTPErrorf(httpStatus int, args ...interface{}) SysError {
@@ -98,6 +94,12 @@ func WithResponseHandler(responseHandler func(httpResp *http.Response)) ReqOptFu
 	}
 }
 
+func withBodyReader(bodyReader io.Reader) ReqOptFunc {
+	return func(opts *reqOpts) {
+		opts.bodyReader = bodyReader
+	}
+}
+
 // WithLongPolling, WithResponseHandler and WithDiscardResponse are mutual exclusive
 func WithLongPolling() ReqOptFunc {
 	return func(ro *reqOpts) {
@@ -149,6 +151,20 @@ func WithAuthorizeBy(principalToken string) ReqOptFunc {
 	return func(po *reqOpts) {
 		po.headers[Authorization] = BearerPrefix + principalToken
 	}
+}
+
+func WithRetryOnCertainError(errMatcher func(err error) bool, timeout time.Duration, retryDelay time.Duration) ReqOptFunc {
+	return func(opts *reqOpts) {
+		opts.retriersOnErrors = append(opts.retriersOnErrors, retrier{
+			macther: errMatcher,
+			timeout: timeout,
+			delay:   retryDelay,
+		})
+	}
+}
+
+func WithRetryOnAnyError(timeout time.Duration, retryDelay time.Duration) ReqOptFunc {
+	return WithRetryOnCertainError(func(error) bool { return true }, timeout, retryDelay)
 }
 
 func WithAuthorizeByIfNot(principalToken string) ReqOptFunc {
@@ -227,59 +243,58 @@ type reqOpts struct {
 	cookies               map[string]string
 	expectedHTTPCodes     []int
 	expectedErrorContains []string
-
-	// used if no errors and an expected status code is received
-	responseHandler func(httpResp *http.Response)
-
-	timeoutMs            int64
-	relativeURL          string
-	discardResp          bool
-	expectedSysErrorCode int
+	responseHandler       func(httpResp *http.Response) // used if no errors and an expected status code is received
+	relativeURL           string
+	discardResp           bool
+	expectedSysErrorCode  int
+	retriersOnErrors      []retrier
+	bodyReader            io.Reader
 }
 
-func req(url string, body string, client *http.Client, opts *reqOpts) (*http.Response, error) {
-	req, err := http.NewRequest(opts.method, url, bytes.NewReader([]byte(body)))
+// body and bodyReader are mutual exclusive
+func req(method, url, body string, bodyReader io.Reader, headers, cookies map[string]string) (req *http.Request, err error) {
+	if bodyReader != nil {
+		req, err = http.NewRequest(method, url, bodyReader)
+	} else {
+		req, err = http.NewRequest(method, url, bytes.NewReader([]byte(body)))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("NewRequest() failed: %w", err)
 	}
 	req.Close = true
-	for k, v := range opts.headers {
+	for k, v := range headers {
 		req.Header.Add(k, v)
 	}
-	for k, v := range opts.cookies {
+	for k, v := range cookies {
 		req.AddCookie(&http.Cookie{
 			Name:  k,
 			Value: v,
 		})
 	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request do() failed: %w", err)
-	}
-	return resp, nil
+	return req, nil
 }
 
-// wrapped ErrUnexpectedStatusCode is returned -> *HTTPResponse contains a valid response body
-// otherwise if err != nil (e.g. socket error)-> *HTTPResponse is nil
-func FederationPOST(federationUrl *url.URL, relativeURL string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
-	optFuncs = append(optFuncs, WithMethod(http.MethodPost))
-	return FederationReq(federationUrl, relativeURL, body, optFuncs...)
-}
-
-func FederationReq(federationUrl *url.URL, relativeURL string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
-	url := federationUrl.String() + "/" + relativeURL
-	return Req(url, body, optFuncs...)
+func (c *implIHTTPClient) ReqReader(urlStr string, bodyReader io.Reader, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
+	optFuncs = append(optFuncs, withBodyReader(bodyReader))
+	return c.req(urlStr, "", optFuncs...)
 }
 
 // status code expected -> DiscardBody, ResponseHandler are used
 // status code is unexpected -> DiscardBody, ResponseHandler are ignored, body is read out, wrapped ErrUnexpectedStatusCode is returned
-func Req(urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
+func (c *implIHTTPClient) Req(urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
+	return c.req(urlStr, body, optFuncs...)
+}
+
+func (c *implIHTTPClient) req(urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
 	opts := &reqOpts{
-		headers:   map[string]string{},
-		cookies:   map[string]string{},
-		timeoutMs: math.MaxInt,
-		method:    http.MethodGet,
+		headers: map[string]string{},
+		cookies: map[string]string{},
+		method:  http.MethodGet,
 	}
+	optFuncs = append(optFuncs, WithRetryOnCertainError(func(err error) bool {
+		// https://github.com/voedger/voedger/issues/1694
+		return IsWSAEError(err, WSAECONNREFUSED)
+	}, retryOn_WSAECONNREFUSED_Timeout, retryOn_WSAECONNREFUSED_Delay))
 	for _, optFunc := range optFuncs {
 		optFunc(opts)
 	}
@@ -309,33 +324,40 @@ func Req(urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, err
 		netURL.Path = opts.relativeURL
 		urlStr = netURL.String()
 	}
-	tr := http.DefaultTransport.(*http.Transport).Clone()
-	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		dialer := net.Dialer{}
-		conn, err := dialer.DialContext(ctx, network, addr)
+	var resp *http.Response
+	var err error
+	tryNum := 0
+	startTime := time.Now()
+
+reqLoop:
+	for time.Since(startTime) < maxHTTPRequestTimeout {
+		req, err := req(opts.method, urlStr, body, opts.bodyReader, opts.headers, opts.cookies)
 		if err != nil {
 			return nil, err
 		}
-		err = conn.(*net.TCPConn).SetLinger(0)
-		return conn, err
-	}
-	client := &http.Client{Transport: tr}
-	var resp *http.Response
-	var err error
-	deadline := time.UnixMilli(opts.timeoutMs)
-	tryNum := 0
-	for time.Now().Before(deadline) {
-		if resp, err = req(urlStr, body, client, opts); err != nil {
-			return nil, err
+		resp, err = c.client.Do(req)
+		if err != nil {
+			for _, retrier := range opts.retriersOnErrors {
+				if retrier.macther(err) {
+					if time.Since(startTime) < retrier.timeout {
+						time.Sleep(retrier.delay)
+						continue reqLoop
+					}
+				}
+			}
+			return nil, fmt.Errorf("request do() failed: %w", err)
+		}
+		if opts.responseHandler == nil {
+			defer resp.Body.Close()
 		}
 		if resp.StatusCode == http.StatusServiceUnavailable && !slices.Contains(opts.expectedHTTPCodes, http.StatusServiceUnavailable) {
 			if err := discardRespBody(resp); err != nil {
 				return nil, err
 			}
-			if tryNum > shortRetriesAmount {
-				time.Sleep(longRetryDelay)
+			if tryNum > shortRetriesOn503Amount {
+				time.Sleep(longRetryOn503Delay)
 			} else {
-				time.Sleep(shortRetryDelay)
+				time.Sleep(shortRetryOn503Delay)
 			}
 			logger.Verbose("503. retrying...")
 			tryNum++
@@ -343,21 +365,19 @@ func Req(urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, err
 		}
 		break
 	}
+	isCodeExpected := slices.Contains(opts.expectedHTTPCodes, resp.StatusCode)
+	if isCodeExpected && opts.discardResp {
+		err := discardRespBody(resp)
+		return nil, err
+	}
 	httpResponse := &HTTPResponse{
 		HTTPResp:             resp,
 		expectedSysErrorCode: opts.expectedSysErrorCode,
 		expectedHTTPCodes:    opts.expectedHTTPCodes,
 	}
-	isCodeExpected := slices.Contains(opts.expectedHTTPCodes, resp.StatusCode)
-	if isCodeExpected {
-		if opts.responseHandler != nil {
-			opts.responseHandler(resp)
-			return httpResponse, nil
-		}
-		if opts.discardResp {
-			err := discardRespBody(resp)
-			return nil, err
-		}
+	if isCodeExpected && opts.responseHandler != nil {
+		opts.responseHandler(resp)
+		return httpResponse, nil
 	}
 	respBody, err := readBody(resp)
 	if err != nil {
@@ -381,6 +401,10 @@ func Req(urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, err
 	return httpResponse, statusErr
 }
 
+func (c *implIHTTPClient) CloseIdleConnections() {
+	c.client.CloseIdleConnections()
+}
+
 func containsAllMessages(strs []string, toFind string) bool {
 	for _, str := range strs {
 		if !strings.Contains(toFind, str) {
@@ -390,52 +414,12 @@ func containsAllMessages(strs []string, toFind string) bool {
 	return true
 }
 
-func FederationFunc(federationUrl *url.URL, relativeURL string, body string, optFuncs ...ReqOptFunc) (*FuncResponse, error) {
-	httpResp, err := FederationPOST(federationUrl, relativeURL, body, optFuncs...)
-	isUnexpectedCode := errors.Is(err, ErrUnexpectedStatusCode)
-	if err != nil && !isUnexpectedCode {
-		return nil, err
-	}
-	if httpResp == nil {
-		return nil, nil
-	}
-	if isUnexpectedCode {
-		m := map[string]interface{}{}
-		if err = json.Unmarshal([]byte(httpResp.Body), &m); err != nil {
-			return nil, err
-		}
-		if httpResp.HTTPResp.StatusCode == http.StatusOK {
-			return nil, FuncError{
-				SysError: SysError{
-					HTTPStatus: http.StatusOK,
-				},
-				ExpectedHTTPCodes: httpResp.expectedHTTPCodes,
-			}
-		}
-		sysErrorMap := m["sys.Error"].(map[string]interface{})
-		return nil, FuncError{
-			SysError: SysError{
-				HTTPStatus: int(sysErrorMap["HTTPStatus"].(float64)),
-				Message:    sysErrorMap["Message"].(string),
-			},
-			ExpectedHTTPCodes: httpResp.expectedHTTPCodes,
-		}
-	}
-	res := &FuncResponse{
-		HTTPResponse: httpResp,
-		NewIDs:       map[string]int64{},
-		CmdResult:    map[string]interface{}{},
-	}
-	if len(httpResp.Body) == 0 {
-		return res, nil
-	}
-	if err = json.Unmarshal([]byte(httpResp.Body), &res); err != nil {
-		return nil, err
-	}
-	if res.SysError.HTTPStatus > 0 && res.expectedSysErrorCode > 0 && res.expectedSysErrorCode != res.SysError.HTTPStatus {
-		return nil, fmt.Errorf("sys.Error actual status %d, expected %v: %s", res.SysError.HTTPStatus, res.expectedSysErrorCode, res.SysError.Message)
-	}
-	return res, nil
+func (resp *HTTPResponse) ExpectedSysErrorCode() int {
+	return resp.expectedSysErrorCode
+}
+
+func (resp *HTTPResponse) ExpectedHTTPCodes() []int {
+	return resp.expectedHTTPCodes
 }
 
 func (resp *HTTPResponse) Println() {
@@ -464,17 +448,22 @@ func (resp *HTTPResponse) RequireContainsError(t *testing.T, messagePart string)
 
 func readBody(resp *http.Response) (string, error) {
 	respBody, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
 	return string(respBody), err
 }
 
 func discardRespBody(resp *http.Response) error {
 	_, err := io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
 	if err != nil {
-		return fmt.Errorf("failed to discard response body: %w", err)
+		// https://github.com/voedger/voedger/issues/1694
+		if !IsWSAEError(err, WSAECONNRESET) {
+			return fmt.Errorf("failed to discard response body: %w", err)
+		}
 	}
 	return nil
+}
+
+func (resp *FuncResponse) NumRows() int {
+	return len(resp.Sections[0].Elements)
 }
 
 func (resp *FuncResponse) SectionRow(rowIdx ...int) []interface{} {
@@ -511,18 +500,23 @@ func (fe FuncError) Unwrap() error {
 	return fe.SysError
 }
 
-type implIFederation struct {
-	federationURL func() *url.URL
+type implIHTTPClient struct {
+	client *http.Client
 }
 
-func (f *implIFederation) POST(appQName istructs.AppQName, wsid istructs.WSID, fn string, body string, opts ...ReqOptFunc) (*HTTPResponse, error) {
-	return FederationPOST(f.federationURL(), fmt.Sprintf(`api/%s/%d/%s`, appQName, wsid, fn), body, opts...)
-}
+func NewIHTTPClient() (client IHTTPClient, clenup func()) {
+	// set linger - see https://github.com/voedger/voedger/issues/415
+	tr := http.DefaultTransport.(*http.Transport).Clone()
+	tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		dialer := net.Dialer{}
+		conn, err := dialer.DialContext(ctx, network, addr)
+		if err != nil {
+			return nil, err
+		}
 
-func (f *implIFederation) URL() *url.URL {
-	return f.federationURL()
-}
-
-func NewIFederation(federationURL func() *url.URL) IFederation {
-	return &implIFederation{federationURL: federationURL}
+		err = conn.(*net.TCPConn).SetLinger(0)
+		return conn, err
+	}
+	client = &implIHTTPClient{client: &http.Client{Transport: tr}}
+	return client, client.CloseIdleConnections
 }

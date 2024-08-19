@@ -15,11 +15,22 @@ import (
 
 // Structs can be changed on-the-fly, so AppStructs() are taken for each message (request) to be handled
 type IAppStructsProvider interface {
-	// ErrAppNotFound can be returned
+	// Returns AppStructs for builtin application with given name.
+	//
+	// ErrAppNotFound can be returned.
+	//
 	// @ConcurrentAccess
-	AppStructs(aqn AppQName) (structs IAppStructs, err error)
+	BuiltIn(appdef.AppQName) (IAppStructs, error)
 
-	AppStructsByDef(aqn AppQName, appDef appdef.IAppDef) (structs IAppStructs, err error)
+	// // TODO
+	// Sidecar(appdef.AppQName) (IAppStructs, error)
+
+	// AppStructs(appdef.AppQName) (IAppStructs, error)
+
+	// Creates a new AppStructs for user application with given name, id and definition.
+	//
+	// @ConcurrentAccess
+	New(appdef.AppQName, appdef.IAppDef, ClusterAppID, NumAppWorkspaces) (IAppStructs, error)
 }
 
 type IAppStructs interface {
@@ -52,7 +63,7 @@ type IAppStructs interface {
 	AppDef() appdef.IAppDef
 
 	ClusterAppID() ClusterAppID
-	AppQName() AppQName
+	AppQName() appdef.AppQName
 
 	IsFunctionRateLimitsExceeded(funcQName appdef.QName, wsid WSID) bool
 
@@ -68,7 +79,7 @@ type IAppStructs interface {
 	CUDValidators() []CUDValidator
 	EventValidators() []EventValidator
 
-	WSAmount() AppWSAmount
+	NumAppWorkspaces() NumAppWorkspaces
 
 	AppTokens() IAppTokens
 }
@@ -76,6 +87,15 @@ type IAppStructs interface {
 type IEvents interface {
 	GetSyncRawEventBuilder(params SyncRawEventBuilderParams) IRawEventBuilder
 	GetNewRawEventBuilder(params NewRawEventBuilderParams) IRawEventBuilder
+
+	// BuildPLogEvent builds PLogEvent from IRawEvent, but do not puts result PLogEvent into PLog.
+	//
+	// Should be used to obtain `sys.Corrupted` events only.
+	//
+	// # Panics
+	//	- if raw event is not `sys.Corrupted`
+	//	- if raw event PLogOffset is not null
+	BuildPLogEvent(IRawEvent) IPLogEvent
 
 	// @ConcurrentAccess RW
 	// buildOrValidationErr taken either BuildRawEvent() or from extra validation
@@ -102,6 +122,17 @@ type IRecords interface {
 	// Panics if event is not valid
 	Apply2(event IPLogEvent, cb func(r IRecord)) (err error)
 
+	// @ConcurrentAccess RW
+	//
+	// Record system fields sys.QName and sys.ID should be filled.
+	// Data type name in sys.QName should be storable record type.
+	// Record ID in sys.ID should not be a raw ID.
+	//
+	// Attention! This method does not perform a full validation of the recorded data :
+	// - The values of referenced record IDs are not checked
+	// - The fullness of the required fields is not checked
+	PutJSON(WSID, map[appdef.FieldName]any) error
+
 	// @ConcurrentAccess R
 	// Can read GDoc, CDoc, ODoc, WDoc records
 	// If record not found NullRecord with QName() == NullQName is returned
@@ -114,6 +145,8 @@ type IRecords interface {
 	// qName must be a singleton
 	// If record not found NullRecord with QName() == NullQName is returned
 	GetSingleton(workspace WSID, qName appdef.QName) (record IRecord, err error)
+
+	GetSingletonID(qName appdef.QName) (RecordID, error)
 }
 
 type RecordGetBatchItem struct {
@@ -134,6 +167,16 @@ type IViewRecords interface {
 	Put(workspace WSID, key IKeyBuilder, value IValueBuilder) (err error)
 
 	PutBatch(workspace WSID, batch []ViewKV) (err error)
+
+	// @ConcurrentAccess RW
+	//
+	// View name should be passed in sys.QName field.
+	// All key fields should be filled.
+	//
+	// Attention! This method does not perform a full validation of the recorded data :
+	// - The values of referenced record IDs are not checked
+	// - The fullness of the required view value fields is not checked
+	PutJSON(WSID, map[appdef.FieldName]any) error
 
 	// All fields must be filled in in the key (panic otherwise)
 	Get(workspace WSID, key IKeyBuilder) (value IValue, err error)
@@ -181,7 +224,7 @@ type IAppTokens interface {
 
 // All payloads must inherit this payload
 type GenericPayload struct {
-	AppQName AppQName
+	AppQName appdef.AppQName
 	Duration time.Duration
 	IssuedAt time.Time
 }

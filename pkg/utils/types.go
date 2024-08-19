@@ -6,9 +6,9 @@
 package coreutils
 
 import (
+	"io"
 	"io/fs"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"time"
@@ -37,7 +37,7 @@ type FuncResponse struct {
 		Elements [][][][]interface{} `json:"elements"`
 	} `json:"sections"`
 	NewIDs            map[string]int64
-	CurrentWLogOffset int64
+	CurrentWLogOffset istructs.Offset
 	SysError          SysError               `json:"sys.Error"`
 	CmdResult         map[string]interface{} `json:"Result"`
 }
@@ -47,15 +47,19 @@ type FuncError struct {
 	ExpectedHTTPCodes []int
 }
 
-type IFederation interface {
-	POST(appQName istructs.AppQName, wsid istructs.WSID, fn string, body string, opts ...ReqOptFunc) (*HTTPResponse, error)
-	URL() *url.URL
+type IHTTPClient interface {
+	Req(urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error)
+	ReqReader(urlStr string, bodyReader io.Reader, optFuncs ...ReqOptFunc) (*HTTPResponse, error)
+	CloseIdleConnections()
+}
+
+type retrier struct {
+	macther func(err error) bool
+	timeout time.Duration
+	delay   time.Duration
 }
 
 type TimeFunc func() time.Time
-
-type CommandProcessorsCount int
-type QueryProcessorsCount int
 
 type PathReader struct {
 	rootPath string
@@ -81,4 +85,37 @@ func (r *PathReader) ReadFile(name string) ([]byte, error) {
 
 type IErrUnwrapper interface {
 	Unwrap() []error
+}
+
+type CUD struct {
+	Fields map[string]interface{} `json:"fields"`
+}
+
+type CUDs struct {
+	Cuds []CUD `json:"cuds"`
+}
+
+type IReadFS interface {
+	fs.ReadDirFS
+	fs.ReadFileFS
+}
+
+type BLOBDesc struct {
+	Name     string
+	MimeType string
+}
+
+// moved here to avoid import cycle: state -> federation (for cmd storage) -> blobber (IFederation.UploadBLOBs([]blobber.BLOBWorkspaceTemplateField)) -> state
+type BLOBWorkspaceTemplateField struct {
+	BLOBDesc
+	FieldName string
+	Content   []byte
+	RecordID  istructs.RecordID
+}
+
+// for read and write
+// caller must read out and close the reader
+type BLOBReader struct {
+	io.ReadCloser
+	BLOBDesc
 }

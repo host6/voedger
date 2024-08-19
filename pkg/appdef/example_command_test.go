@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021-present Sigma-Soft, Ltd.
+ * @author: Nikolay Nikitin
  */
 
 package appdef_test
@@ -21,24 +22,31 @@ func ExampleIAppDefBuilder_AddCommand() {
 
 	// how to build AppDef with command
 	{
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 
-		cmd := appDef.AddCommand(cmdName)
+		cmd := adb.AddCommand(cmdName)
 		cmd.SetEngine(appdef.ExtensionEngineKind_WASM)
 		cmd.
 			SetParam(parName).
 			SetResult(resName)
 		cmd.SetUnloggedParam(unlName)
 
-		_ = appDef.AddObject(parName)
-		_ = appDef.AddObject(unlName)
-		_ = appDef.AddObject(resName)
+		_ = adb.AddObject(parName)
+		_ = adb.AddObject(unlName)
+		_ = adb.AddObject(resName)
 
-		if a, err := appDef.Build(); err == nil {
-			app = a
-		} else {
-			panic(err)
-		}
+		app = adb.MustBuild()
+	}
+
+	// how to enum commands
+	{
+		cnt := 0
+		app.Commands(func(c appdef.ICommand) {
+			cnt++
+			fmt.Println(cnt, c)
+		})
+		fmt.Println("overall command(s):", cnt)
 	}
 
 	// how to inspect builded AppDef with command
@@ -51,6 +59,8 @@ func ExampleIAppDefBuilder_AddCommand() {
 	}
 
 	// Output:
+	// 1 WASM-Command «test.cmd»
+	// overall command(s): 1
 	// WASM-Command «test.cmd» :
 	//  - parameter: Object «test.param»
 	//  - unl.param: Object «test.secure»

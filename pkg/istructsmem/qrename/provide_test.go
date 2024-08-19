@@ -20,23 +20,27 @@ func TestRenameQName(t *testing.T) {
 
 	require := require.New(t)
 
+	appName := appdef.NewAppQName("test", "app")
+
 	oldQName := appdef.NewQName("test", "old")
 	newQName := appdef.NewQName("test", "new")
 
-	storage := teststore.NewStorage()
+	storage := teststore.NewStorage(appName)
 
 	t.Run("prepare storage with old QName", func(t *testing.T) {
 		versions := vers.New()
 		err := versions.Prepare(storage)
 		require.NoError(err)
 
-		appDefBuilder := appdef.New()
-		_ = appDefBuilder.AddObject(oldQName)
-		appDef, err := appDefBuilder.Build()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+
+		_ = adb.AddObject(oldQName)
+		appDef, err := adb.Build()
 		require.NoError(err)
 
 		names := qnames.New()
-		err = names.Prepare(storage, versions, appDef, nil)
+		err = names.Prepare(storage, versions, appDef)
 		require.NoError(err)
 	})
 
@@ -51,7 +55,7 @@ func TestRenameQName(t *testing.T) {
 		require.NoError(err)
 
 		names := qnames.New()
-		err = names.Prepare(storage, versions, nil, nil)
+		err = names.Prepare(storage, versions, nil)
 		require.NoError(err)
 
 		t.Run("check old is deleted", func(t *testing.T) {

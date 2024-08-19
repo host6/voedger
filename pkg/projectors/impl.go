@@ -11,17 +11,11 @@ import (
 	"fmt"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/state"
 )
-
-func asyncActualizerFactory(conf AsyncActualizerConf, projector istructs.Projector) (pipeline.ISyncOperator, error) {
-	return pipeline.ServiceOperator(&asyncActualizer{
-		projector: projector,
-		conf:      conf,
-	}), nil
-}
 
 func syncActualizerFactory(conf SyncActualizerConf, projectors istructs.Projectors) pipeline.ISyncOperator {
 	if conf.IntentsLimit == 0 {
@@ -40,12 +34,12 @@ func syncActualizerFactory(conf SyncActualizerConf, projectors istructs.Projecto
 	}
 	h := &syncErrorHandler{ss: ss}
 	return pipeline.NewSyncPipeline(conf.Ctx, "PartitionSyncActualizer",
-		pipeline.WireFunc("Update event", func(_ context.Context, work interface{}) (err error) {
+		pipeline.WireFunc("Update event", func(_ context.Context, work pipeline.IWorkpiece) (err error) {
 			service.event = conf.WorkToEvent(work)
 			return err
 		}),
 		pipeline.WireSyncOperator("SyncActualizer", pipeline.ForkOperator(pipeline.ForkSame, bb[0], bb[1:]...)),
-		pipeline.WireFunc("IntentsApplier", func(_ context.Context, _ interface{}) (err error) {
+		pipeline.WireFunc("IntentsApplier", func(_ context.Context, _ pipeline.IWorkpiece) (err error) {
 			for _, st := range ss {
 				err = st.ApplyIntents()
 				if err != nil {
@@ -61,23 +55,26 @@ func newSyncBranch(conf SyncActualizerConf, projector istructs.Projector, servic
 	pipelineName := fmt.Sprintf("[%d] %s", conf.Partition, projector.Name)
 	s = state.ProvideSyncActualizerStateFactory()(
 		conf.Ctx,
-		conf.AppStructs(),
+		conf.AppStructs,
 		state.SimplePartitionIDFunc(conf.Partition),
 		service.getWSID,
 		conf.N10nFunc,
 		conf.SecretReader,
 		service.getEvent,
 		conf.IntentsLimit)
-	iProjector := conf.AppStructs().AppDef().Projector(projector.Name)
-	triggeringQNames := iProjector.Events().Map()
 	fn = pipeline.ForkBranch(pipeline.NewSyncPipeline(conf.Ctx, pipelineName,
-		pipeline.WireFunc("Projector", func(_ context.Context, _ interface{}) (err error) {
-			if !isAcceptable(service.event, iProjector.WantErrors(), triggeringQNames, conf.AppStructs().AppDef()) {
-				return nil
-			}
-			return projector.Func(service.event, s, s)
-		}),
-		pipeline.WireFunc("IntentsValidator", func(_ context.Context, _ interface{}) (err error) {
+		pipeline.WireFunc("Projector",
+			func(ctx context.Context, work pipeline.IWorkpiece) error {
+				appPart := work.(interface{ AppPartition() appparts.IAppPartition }).AppPartition()
+				appDef := appPart.AppStructs().AppDef()
+				prj := appDef.Projector(projector.Name)
+				event := s.PLogEvent()
+				if !isAcceptable(event, prj.WantErrors(), prj.Events().Map(), appDef) {
+					return nil
+				}
+				return appPart.Invoke(ctx, projector.Name, s, s)
+			}),
+		pipeline.WireFunc("IntentsValidator", func(_ context.Context, _ pipeline.IWorkpiece) (err error) {
 			return s.ValidateIntents()
 		})))
 	return
@@ -89,7 +86,7 @@ type syncErrorHandler struct {
 	err error
 }
 
-func (h *syncErrorHandler) DoSync(_ context.Context, _ interface{}) (err error) {
+func (h *syncErrorHandler) DoSync(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	if h.err != nil {
 		for _, s := range h.ss {
 			s.ClearIntents()
@@ -118,11 +115,4 @@ func provideViewDefImpl(appDef appdef.IAppDefBuilder, qname appdef.QName, buildF
 	if buildFunc != nil {
 		buildFunc(builder)
 	}
-}
-
-func provideOffsetsDefImpl(adb appdef.IAppDefBuilder) {
-	view := adb.AddView(qnameProjectionOffsets)
-	view.Key().PartKey().AddField(partitionFld, appdef.DataKind_int32)
-	view.Key().ClustCols().AddField(projectorNameFld, appdef.DataKind_QName)
-	view.Value().AddField(offsetFld, appdef.DataKind_int64, true)
 }

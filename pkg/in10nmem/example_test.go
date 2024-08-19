@@ -3,7 +3,7 @@
  * @author Maxim Geraskin
  *
  * This source code is licensed under the MIT license found in the
- * LICENSE file in the root directory of this source tree. 
+ * LICENSE file in the root directory of this source tree.
  */
 
 package in10nmem_test
@@ -14,8 +14,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/untillpro/goutils/logger"
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/in10nmem"
 	istructs "github.com/voedger/voedger/pkg/istructs"
@@ -36,10 +36,10 @@ func Example() {
 	}
 
 	quotasExample := in10n.Quotas{
-		Channels:               1,
-		ChannelsPerSubject:     1,
-		Subsciptions:           1,
-		SubsciptionsPerSubject: 1,
+		Channels:                1,
+		ChannelsPerSubject:      1,
+		Subscriptions:           1,
+		SubscriptionsPerSubject: 1,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 

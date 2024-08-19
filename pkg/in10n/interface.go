@@ -63,14 +63,14 @@ type ChannelID string
 type SubscriptionID string
 
 type ProjectionKey struct {
-	App        istructs.AppQName
+	App        appdef.AppQName
 	Projection appdef.QName
 	WS         istructs.WSID
 }
 
 type Quotas struct {
-	Channels               int
-	ChannelsPerSubject     int
-	Subsciptions           int
-	SubsciptionsPerSubject int
+	Channels                int
+	ChannelsPerSubject      int
+	Subscriptions           int
+	SubscriptionsPerSubject int
 }

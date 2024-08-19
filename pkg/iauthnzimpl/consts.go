@@ -92,14 +92,25 @@ var (
 	qNameQryPaidSubscriptionInvoicesReport          = appdef.NewQName(airPackage, "PaidSubscriptionInvoicesReport")
 	qNameCmdVoidUntillPayment                       = appdef.NewQName(airPackage, "VoidUntillPayment")
 	qNameQryCreateTap2PaySession                    = appdef.NewQName(airPackage, "CreateTap2PaySession")
+	qNameQryGetUPLocationRates                      = appdef.NewQName(airPackage, "GetUPLocationRates")
+	qNameQryGetDigitalReceipt                       = appdef.NewQName(airPackage, "GetDigitalReceipt")
+	qNameQrySendReceiptByEmail                      = appdef.NewQName(airPackage, "SendReceiptByEmail")
+	qNameQryUpdateShopperStatement                  = appdef.NewQName(airPackage, "UpdateShopperStatement")
+	qNameWDocLastNumbers                            = appdef.NewQName(airPackage, "LastNumbers")
+	qNameCmdVSqlUpdate                              = appdef.NewQName(clusterPackage, "VSqlUpdate")
+	qNameCmdSaveTap2PayPayment                      = appdef.NewQName(airPackage, "SaveTap2PayPayment")
+	qNameQryGetResellers                            = appdef.NewQName(airPackage, "GetResellers")
+	qNameQryState                                   = appdef.NewQName(appdef.SysPackage, "State")
 
 	// Air roles
 	qNameRoleResellersAdmin         = appdef.NewQName(airPackage, "ResellersAdmin")
 	qNameRoleUntillPaymentsReseller = appdef.NewQName(airPackage, "UntillPaymentsReseller")
 	qNameRoleUntillPaymentsUser     = appdef.NewQName(airPackage, "UntillPaymentsUser")
-	qNameRoleAirReseller            = appdef.NewQName(airPackage, "AirReseller")
+	qNameRoleAirReseller            = appdef.NewQName(airPackage, "AirReseller") // Deprecated: use role air.SubscriptionReseller instead
+	qNameRoleSubscriptionReseller   = appdef.NewQName(airPackage, "SubscriptionReseller")
 	qNameRoleUntillPaymentsTerminal = appdef.NewQName(airPackage, "UntillPaymentsTerminal")
 	qNameRoleUntillPaymentsManager  = appdef.NewQName(airPackage, "UntillPaymentsManager")
+	qNameRoleBOReader               = appdef.NewQName(airPackage, "BOReader")
 )
 
 const (
@@ -111,6 +122,7 @@ const (
 	airPackage                  = "air"
 	untillPackage               = "untill"
 	untillChargebeeAgentLogin   = "untillchargebeeagent"
+	clusterPackage              = "cluster"
 
 	// avoiding import cycle: collection->iauthnzimpl->registry->workspace->collection
 	registryPackage = "registry"

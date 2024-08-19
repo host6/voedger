@@ -10,9 +10,13 @@ const NullName = ""
 
 // Null (empty) QName
 var (
-	QNameForNull = NewQName(NullName, NullName)
-	NullQName    = QNameForNull
+	QNameForNull  = NewQName(NullName, NullName)
+	NullQName     = QNameForNull
+	NullFullQName = NewFullQName(NullName, NullName)
 )
+
+// NullAppQName is undefined (or empty) application name
+var NullAppQName = NewAppQName(NullName, NullName)
 
 // NullType is used for return then type is not founded
 var NullType = new(nullType)
@@ -21,8 +25,4 @@ var NullType = new(nullType)
 var NullFields = new(nullFields)
 
 // NullAppDef is IAppDef without any user definitions
-var NullAppDef = func() IAppDef {
-	adb := New()
-	app, _ := adb.Build()
-	return app
-}()
+var NullAppDef = New().MustBuild()

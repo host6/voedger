@@ -13,12 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/untillpro/goutils/iterate"
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/iterate"
+	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/sys"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
@@ -51,12 +51,10 @@ type (
 	readPLogBatch func(*plogBatch) error
 )
 
-// implements ServiceOperator
 type asyncActualizer struct {
 	conf         AsyncActualizerConf
-	projector    istructs.Projector
+	projector    appdef.QName
 	pipeline     pipeline.IAsyncPipeline
-	structs      istructs.IAppStructs
 	offset       istructs.Offset
 	name         string
 	readCtx      *asyncActualizerContextState
@@ -64,7 +62,7 @@ type asyncActualizer struct {
 	plogBatch          // [50]plogEvent
 }
 
-func (a *asyncActualizer) Prepare(interface{}) error {
+func (a *asyncActualizer) Prepare() {
 	if a.conf.IntentsLimit == 0 {
 		a.conf.IntentsLimit = defaultIntentsLimit
 	}
@@ -86,8 +84,8 @@ func (a *asyncActualizer) Prepare(interface{}) error {
 	if a.conf.LogError == nil {
 		a.conf.LogError = logger.Error
 	}
-	return nil
 }
+
 func (a *asyncActualizer) Run(ctx context.Context) {
 	var err error
 	if err = a.waitForAppDeploy(ctx); err != nil {
@@ -110,7 +108,7 @@ func (a *asyncActualizer) Run(ctx context.Context) {
 		}
 	}
 }
-func (a *asyncActualizer) Stop() {}
+
 func (a *asyncActualizer) cancelChannel(e error) {
 	a.readCtx.cancelWithError(e)
 	a.conf.Broker.WatchChannel(a.readCtx.ctx, a.conf.channel, func(projection in10n.ProjectionKey, offset istructs.Offset) {})
@@ -119,7 +117,7 @@ func (a *asyncActualizer) cancelChannel(e error) {
 func (a *asyncActualizer) waitForAppDeploy(ctx context.Context) error {
 	start := time.Now()
 	for ctx.Err() == nil {
-		ap, err := a.conf.AppPartitions.Borrow(a.conf.AppQName, a.conf.Partition, cluster.ProcessorKind_Actualizer)
+		ap, err := a.conf.AppPartitions.Borrow(a.conf.AppQName, a.conf.Partition, appparts.ProcessorKind_Actualizer)
 		if err == nil || errors.Is(err, appparts.ErrNotAvailableEngines) {
 			if ap != nil {
 				ap.Release()
@@ -141,25 +139,28 @@ func (a *asyncActualizer) waitForAppDeploy(ctx context.Context) error {
 func (a *asyncActualizer) init(ctx context.Context) (err error) {
 	a.plogBatch = make(plogBatch, 0, plogReadBatchSize)
 
-	a.structs = a.conf.AppStructs() // TODO: must be borrowed and finally released
 	a.readCtx = &asyncActualizerContextState{}
 
 	a.readCtx.ctx, a.readCtx.cancel = context.WithCancel(ctx)
 
-	prjType := a.structs.AppDef().Projector(a.projector.Name)
+	appDef, err := a.conf.AppPartitions.AppDef(a.conf.AppQName)
+	if err != nil {
+		return err
+	}
+	prjType := appDef.Projector(a.projector)
 	if prjType == nil {
-		return fmt.Errorf("async projector %s is not defined in AppDef", a.projector.Name)
+		return fmt.Errorf("async projector %s is not defined in AppDef", a.projector)
 	}
 
 	// https://github.com/voedger/voedger/issues/1048
 	hasIntentsExceptViewAndRecord, _ := iterate.FindFirst(prjType.Intents().Enum, func(storage appdef.IStorage) bool {
 		n := storage.Name()
-		return n != state.View && n != state.Record
+		return n != sys.Storage_View && n != sys.Storage_Record
 	})
 	// https://github.com/voedger/voedger/issues/1092
 	hasStatesExceptViewAndRecord, _ := iterate.FindFirst(prjType.States().Enum, func(storage appdef.IStorage) bool {
 		n := storage.Name()
-		return n != state.View && n != state.Record
+		return n != sys.Storage_View && n != sys.Storage_Record
 	})
 	nonBuffered := hasIntentsExceptViewAndRecord || hasStatesExceptViewAndRecord
 	p := &asyncProjector{
@@ -171,16 +172,17 @@ func (a *asyncActualizer) init(ctx context.Context) (err error) {
 		metrics:               a.conf.Metrics,
 		vvmName:               a.conf.VvmName,
 		appQName:              a.conf.AppQName,
-		projector:             a.projector,
+		name:                  a.projector,
 		iProjector:            prjType,
 		nonBuffered:           nonBuffered,
+		appParts:              a.conf.AppPartitions,
 	}
 
 	if p.metrics != nil {
 		p.projInErrAddr = p.metrics.AppMetricAddr(ProjectorsInError, a.conf.VvmName, a.conf.AppQName)
 	}
 
-	err = a.readOffset(p.projector.Name)
+	err = a.readOffset(p.name)
 	if err != nil {
 		a.conf.LogError(a.name, err)
 		return err
@@ -188,7 +190,7 @@ func (a *asyncActualizer) init(ctx context.Context) (err error) {
 
 	p.state = state.ProvideAsyncActualizerStateFactory()(
 		ctx,
-		a.structs,
+		p.borrowedAppStructs,
 		state.SimplePartitionIDFunc(a.conf.Partition),
 		p.WSIDProvider,
 		func(view appdef.QName, wsid istructs.WSID, offset istructs.Offset) {
@@ -200,11 +202,13 @@ func (a *asyncActualizer) init(ctx context.Context) (err error) {
 		},
 		a.conf.SecretReader,
 		p.EventProvider,
+		a.conf.Tokens,
+		a.conf.Federation,
 		a.conf.IntentsLimit,
 		a.conf.BundlesLimit,
 		a.conf.Opts...)
 
-	a.name = fmt.Sprintf("%s [%d]", p.projector.Name, a.conf.Partition)
+	a.name = fmt.Sprintf("%v [%d]", p.name, a.conf.Partition)
 
 	projectorOp := pipeline.WireAsyncOperator("Projector", p, a.conf.FlushInterval)
 
@@ -234,7 +238,7 @@ func (a *asyncActualizer) finit() {
 		a.pipeline.Close()
 	}
 	if logger.IsTrace() {
-		logger.Trace(fmt.Sprintf("%s finalized", a.name))
+		logger.Trace(a.name + "s finalized")
 	}
 }
 
@@ -301,17 +305,7 @@ func (a *asyncActualizer) readPlogByBatches(readBatch readPLogBatch) error {
 }
 
 func (a *asyncActualizer) borrowAppPart(ctx context.Context) (ap appparts.IAppPartition, err error) {
-	for ctx.Err() == nil {
-		if ap, err = a.conf.AppPartitions.Borrow(a.conf.AppQName, a.conf.Partition, cluster.ProcessorKind_Actualizer); err == nil {
-			return ap, nil
-		}
-		if errors.Is(err, appparts.ErrNotAvailableEngines) {
-			time.Sleep(borrowRetryDelay)
-			continue
-		}
-		return nil, err
-	}
-	return nil, ctx.Err()
+	return a.conf.AppPartitions.WaitForBorrow(ctx, a.conf.AppQName, a.conf.Partition, appparts.ProcessorKind_Actualizer)
 }
 
 func (a *asyncActualizer) readPlogToTheEnd(ctx context.Context) error {
@@ -371,9 +365,16 @@ func (a *asyncActualizer) readPlogToOffset(ctx context.Context, tillOffset istru
 	})
 }
 
-func (a *asyncActualizer) readOffset(projectorName appdef.QName) (err error) {
-	a.offset, err = ActualizerOffset(a.structs, a.conf.Partition, projectorName)
-	return
+func (a *asyncActualizer) readOffset(projectorName appdef.QName) error {
+	ap, err := a.borrowAppPart(a.readCtx.ctx)
+	if err != nil {
+		return err
+	}
+
+	defer ap.Release()
+
+	a.offset, err = ActualizerOffset(ap.AppStructs(), a.conf.Partition, projectorName)
+	return err
 }
 
 type asyncProjector struct {
@@ -381,7 +382,7 @@ type asyncProjector struct {
 	state                 state.IBundledHostState
 	partition             istructs.PartitionID
 	event                 istructs.IPLogEvent
-	projector             istructs.Projector
+	name                  appdef.QName
 	pLogOffset            istructs.Offset
 	aametrics             AsyncActualizerMetrics
 	metrics               imetrics.IMetrics
@@ -391,60 +392,108 @@ type asyncProjector struct {
 	lastSave              time.Time
 	projErrState          *int32
 	vvmName               string
-	appQName              istructs.AppQName
+	appQName              appdef.AppQName
 	iProjector            appdef.IProjector
 	nonBuffered           bool
+	appParts              appparts.IAppPartitions
+	borrowedPartition     appparts.IAppPartition
 }
 
-func (p *asyncProjector) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+func (p *asyncProjector) DoAsync(ctx context.Context, work pipeline.IWorkpiece) (pipeline.IWorkpiece, error) {
 	defer work.Release()
 	w := work.(*workpiece)
 
 	p.event = w.event
 	p.pLogOffset = w.pLogOffset
 	if p.aametrics != nil {
-		p.aametrics.Set(aaCurrentOffset, p.partition, p.projector.Name, float64(w.pLogOffset))
+		p.aametrics.Set(aaCurrentOffset, p.partition, p.name, float64(w.pLogOffset))
 	}
 
-	triggeringQNames := p.iProjector.Events().Map()
-	if isAcceptable(w.event, p.iProjector.WantErrors(), triggeringQNames, p.iProjector.App()) {
-		err = p.projector.Func(w.event, p.state, p.state)
-		if err != nil {
-			return nil, fmt.Errorf("wsid[%d] offset[%d]: %w", w.event.Workspace(), w.event.WLogOffset(), err)
-		}
-		if logger.IsVerbose() {
-			logger.Verbose(fmt.Sprintf("%s: handled %d", p.projector.Name, p.pLogOffset))
-		}
+	if !isAcceptable(w.event, p.iProjector.WantErrors(), p.iProjector.Events().Map(), p.iProjector.App()) {
+		return nil, nil
+	}
 
-		p.acceptedSinceSave = true
+	wrapErr := func(err error) error {
+		return fmt.Errorf("wsid[%d] offset[%d]: %w", w.event.Workspace(), w.event.WLogOffset(), err)
+	}
 
-		readyToFlushBundle, err := p.state.ApplyIntents()
-		if err != nil {
-			return nil, err
-		}
+	if err := p.borrowAppPart(ctx); err != nil {
+		return nil, wrapErr(err)
+	}
 
-		if readyToFlushBundle || p.nonBuffered {
-			return nil, p.flush()
+	defer p.releaseAppPart()
+
+	//err = p.projector.Func(w.event, p.state, p.state)
+
+	if err := p.borrowedPartition.Invoke(ctx, p.name, p.state, p.state); err != nil {
+		return nil, wrapErr(err)
+	}
+	if logger.IsVerbose() {
+		logger.Verbose(fmt.Sprintf("%s: handled %d", p.name, p.pLogOffset))
+	}
+
+	p.acceptedSinceSave = true
+
+	readyToFlushBundle, err := p.state.ApplyIntents()
+	if err != nil {
+		return nil, wrapErr(err)
+	}
+
+	if readyToFlushBundle || p.nonBuffered {
+		if err := p.flush(); err != nil {
+			return nil, wrapErr(err)
 		}
 	}
 
-	return nil, err
+	return nil, nil
 }
-func (p *asyncProjector) Flush(_ pipeline.OpFuncFlush) (err error) { return p.flush() }
-func (p *asyncProjector) WSIDProvider() istructs.WSID              { return p.event.Workspace() }
-func (p *asyncProjector) EventProvider() istructs.IPLogEvent       { return p.event }
+
+func (p *asyncProjector) Flush(pipeline.OpFuncFlush) error {
+	if err := p.borrowAppPart(context.Background()); err != nil {
+		return err
+	}
+
+	defer p.releaseAppPart()
+
+	return p.flush()
+}
+
+func (p *asyncProjector) WSIDProvider() istructs.WSID        { return p.event.Workspace() }
+func (p *asyncProjector) EventProvider() istructs.IPLogEvent { return p.event }
+
+func (p *asyncProjector) borrowAppPart(ctx context.Context) (err error) {
+	if p.borrowedPartition, err = p.appParts.WaitForBorrow(ctx, p.appQName, p.partition, appparts.ProcessorKind_Actualizer); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (p *asyncProjector) borrowedAppStructs() istructs.IAppStructs {
+	if ap := p.borrowedPartition; ap != nil {
+		return ap.AppStructs()
+	}
+	panic(errNoBorrowedPartition)
+}
+
+func (p *asyncProjector) releaseAppPart() {
+	if ap := p.borrowedPartition; ap != nil {
+		p.borrowedPartition = nil
+		ap.Release()
+	}
+}
+
 func (p *asyncProjector) savePosition() error {
 	defer func() {
 		p.acceptedSinceSave = false
 		p.lastSave = time.Now()
 	}()
-	key, e := p.state.KeyBuilder(state.View, qnameProjectionOffsets)
+	key, e := p.state.KeyBuilder(sys.Storage_View, qnameProjectionOffsets)
 	if e != nil {
 		return e
 	}
-	key.PutInt64(state.Field_WSID, int64(istructs.NullWSID))
+	key.PutInt64(sys.Storage_View_Field_WSID, int64(istructs.NullWSID))
 	key.PutInt32(partitionFld, int32(p.partition))
-	key.PutQName(projectorNameFld, p.projector.Name)
+	key.PutQName(projectorNameFld, p.name)
 	value, e := p.state.NewValue(key)
 	if e != nil {
 		return e
@@ -471,8 +520,8 @@ func (p *asyncProjector) flush() (err error) {
 		return err
 	}
 	if p.aametrics != nil {
-		p.aametrics.Increase(aaFlushesTotal, p.partition, p.projector.Name, 1)
-		p.aametrics.Set(aaStoredOffset, p.partition, p.projector.Name, float64(p.pLogOffset))
+		p.aametrics.Increase(aaFlushesTotal, p.partition, p.name, 1)
+		p.aametrics.Set(aaStoredOffset, p.partition, p.name, float64(p.pLogOffset))
 	}
 	err = p.state.FlushBundles()
 	if err == nil && p.projInErrAddr != nil {
@@ -490,7 +539,7 @@ type asyncErrorHandler struct {
 	readCtx      *asyncActualizerContextState
 	metrics      imetrics.IMetrics
 	vvmName      string
-	appQName     istructs.AppQName
+	appQName     appdef.AppQName
 	projErrState *int32
 }
 

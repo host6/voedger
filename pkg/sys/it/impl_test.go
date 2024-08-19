@@ -14,39 +14,10 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/state"
-	"github.com/voedger/voedger/pkg/sys/authnz"
+	"github.com/voedger/voedger/pkg/sys"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	it "github.com/voedger/voedger/pkg/vit"
-	"github.com/voedger/voedger/pkg/vvm"
 )
-
-func TestAppWSAutoInitialization(t *testing.T) {
-	require := require.New(t)
-	vit := it.NewVIT(t, &it.SharedConfig_App1)
-	defer vit.TearDown()
-
-	checkCDocsWSDesc(vit.VVM, require)
-
-	// further calls -> nothing happens, expect not errors
-	require.NoError(vvm.BuildAppWorkspaces(vit.VVM, vit.VVMConfig))
-	checkCDocsWSDesc(vit.VVM, require)
-}
-
-func checkCDocsWSDesc(vvm *vvm.VVM, require *require.Assertions) {
-	for appQName := range vvm.AppConfigsType {
-		as, err := vvm.AppStructs(istructs.AppQName_test1_app1)
-		require.NoError(err)
-		for wsNum := 0; istructs.AppWSAmount(wsNum) < as.WSAmount(); wsNum++ {
-			as, err := vvm.IAppStructsProvider.AppStructs(appQName)
-			require.NoError(err)
-			appWSID := istructs.NewWSID(istructs.MainClusterID, istructs.WSID(wsNum+int(istructs.FirstBaseAppWSID)))
-			existingCDocWSDesc, err := as.Records().GetSingleton(appWSID, authnz.QNameCDocWorkspaceDescriptor)
-			require.NoError(err)
-			require.Equal(authnz.QNameCDocWorkspaceDescriptor, existingCDocWSDesc.QName())
-		}
-	}
-}
 
 func TestAuthorization(t *testing.T) {
 	vit := it.NewVIT(t, &it.SharedConfig_App1)
@@ -157,7 +128,7 @@ func Test400BadRequests(t *testing.T) {
 		t.Run(c.desc, func(t *testing.T) {
 			appQName := istructs.AppQName_test1_app1
 			if len(c.appName) > 0 {
-				appQName, err = istructs.ParseAppQName(c.appName)
+				appQName, err = appdef.ParseAppQName(c.appName)
 				require.NoError(t, err)
 			}
 			vit.PostApp(appQName, 1, c.funcName, "", coreutils.Expect400()).Println()
@@ -168,7 +139,7 @@ func Test400BadRequests(t *testing.T) {
 func Test503OnNoQueryProcessorsAvailable(t *testing.T) {
 	funcStarted := make(chan interface{})
 	okToFinish := make(chan interface{})
-	it.MockQryExec = func(input string, callback istructs.ExecQueryCallback) error {
+	it.MockQryExec = func(input string, _ istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) error {
 		funcStarted <- nil
 		<-okToFinish
 		return nil
@@ -179,7 +150,7 @@ func Test503OnNoQueryProcessorsAvailable(t *testing.T) {
 	body := `{"args": {"Input": "world"},"elements": [{"fields": ["Res"]}]}`
 	postDone := sync.WaitGroup{}
 	sys := vit.GetSystemPrincipal(istructs.AppQName_test1_app1)
-	for i := 0; i < int(vit.VVMConfig.NumQueryProcessors); i++ {
+	for i := 0; i < int(vit.VVMConfig.NumCommandProcessors); i++ {
 		postDone.Add(1)
 		go func() {
 			defer postDone.Done()
@@ -301,7 +272,7 @@ func TestTakeQNamesFromWorkspace(t *testing.T) {
 		})
 		t.Run("CUD produced by a command", func(t *testing.T) {
 			it.MockCmdExec = func(input string, args istructs.ExecCommandArgs) error {
-				kb, err := args.State.KeyBuilder(state.Record, appdef.NewQName("app1pkg", "docInAnotherWS"))
+				kb, err := args.State.KeyBuilder(sys.Storage_Record, appdef.NewQName("app1pkg", "docInAnotherWS"))
 				if err != nil {
 					return err
 				}
@@ -314,7 +285,64 @@ func TestTakeQNamesFromWorkspace(t *testing.T) {
 			}
 			body := `{"args":{"Input":"Str"}}`
 			ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
-			vit.PostWS(ws, "c.app1pkg.MockCmd", body, coreutils.Expect400("app1pkg.docInAnotherWS", "does not exist in the workspace app1pkg.test_ws"))
+			vit.PostWS(ws, "c.app1pkg.MockCmd", body, coreutils.WithExpectedCode(500, "app1pkg.docInAnotherWS qname is not defined in workspace app1pkg.test_ws"))
 		})
+	})
+}
+
+func TestVITResetPreservingStorage(t *testing.T) {
+	cfg := it.NewOwnVITConfig(
+		it.WithApp(istructs.AppQName_test1_app1, it.ProvideApp1,
+			it.WithUserLogin("login", "1"),
+			it.WithChildWorkspace(it.QNameApp1_TestWSKind, "test_ws", "", "", "login", map[string]interface{}{"IntFld": 42}),
+		),
+	)
+	categoryID := int64(0)
+	it.TestRestartPreservingStorage(t, &cfg, func(t *testing.T, vit *it.VIT) {
+		ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+		body := `{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.category","name":"Awesome food"}}]}`
+		categoryID = vit.PostWS(ws, "c.sys.CUD", body).NewID()
+	}, func(t *testing.T, vit *it.VIT) {
+		ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+		body := fmt.Sprintf(`{"args":{"Query":"select * from app1pkg.category where id = %d"},"elements":[{"fields":["Result"]}]}`, categoryID)
+		resp := vit.PostWS(ws, "q.sys.SqlQuery", body)
+		require.Contains(t, resp.SectionRow()[0].(string), `"name":"Awesome food"`)
+		resp.Println()
+	})
+}
+
+func TestAdminEndpoint(t *testing.T) {
+	require := require.New(t)
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+	body := `{"args": {"Text": "world"},"elements":[{"fields":["Res"]}]}`
+	resp, err := vit.IFederation.AdminFunc(fmt.Sprintf("api/%s/1/q.sys.Echo", istructs.AppQName_test1_app1), body)
+	require.NoError(err)
+	require.Equal("world", resp.SectionRow()[0].(string))
+	resp.Println()
+}
+
+func TestQueryIntents(t *testing.T) {
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+
+	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+	body := `{"args":{},"elements":[{"fields":["Fld1"]}]}`
+	resp := vit.PostWS(ws, "q.app1pkg.QryIntents", body)
+	require.Equal(t, "hello", resp.SectionRow()[0].(string))
+}
+
+func TestErrorFromResponseIntent(t *testing.T) {
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+	body := `{"args":{"StatusCodeToReturn": 555}}`
+
+	t.Run("command", func(t *testing.T) {
+		vit.PostWS(ws, "c.app1pkg.CmdWithResponseIntent", body, coreutils.WithExpectedCode(555, "error from response intent"))
+	})
+
+	t.Run("query", func(t *testing.T) {
+		vit.PostWS(ws, "q.app1pkg.QryWithResponseIntent", body, coreutils.WithExpectedCode(555, "error from response intent"))
 	})
 }

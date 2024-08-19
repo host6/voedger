@@ -12,6 +12,7 @@ import (
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/apppartsctl"
 	"github.com/voedger/voedger/pkg/apps"
 	"github.com/voedger/voedger/pkg/extensionpoints"
@@ -22,12 +23,17 @@ import (
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/istructsmem"
+	"github.com/voedger/voedger/pkg/itokens"
 	"github.com/voedger/voedger/pkg/parser"
 	"github.com/voedger/voedger/pkg/pipeline"
 	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
 	"github.com/voedger/voedger/pkg/router"
 	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys/smtp"
+	"github.com/voedger/voedger/pkg/sys/workspace"
 	coreutils "github.com/voedger/voedger/pkg/utils"
+	"github.com/voedger/voedger/pkg/utils/federation"
 	"github.com/voedger/voedger/pkg/vvm/metrics"
 )
 
@@ -36,27 +42,35 @@ type OperatorCommandProcessors pipeline.ISyncOperator
 type OperatorCommandProcessor pipeline.ISyncOperator
 type OperatorQueryProcessors pipeline.ISyncOperator
 type OperatorQueryProcessor pipeline.ISyncOperator
-type AppServiceFactory func(ctx context.Context, appQName istructs.AppQName, asyncProjectors istructs.Projectors, appPartsCount int) pipeline.ISyncOperator
-type AppPartitionFactory func(ctx context.Context, appQName istructs.AppQName, asyncProjectors istructs.Projectors, partitionID istructs.PartitionID) pipeline.ISyncOperator
-type AsyncActualizersFactory func(ctx context.Context, appQName istructs.AppQName, asyncProjectors istructs.Projectors, partitionID istructs.PartitionID, opts []state.ActualizerStateOptFunc) pipeline.ISyncOperator
+type AppPartitionFactory func(ctx context.Context, appQName appdef.AppQName, asyncProjectors istructs.Projectors, partitionID istructs.PartitionID) pipeline.ISyncOperator
+type AsyncActualizersFactory func(ctx context.Context, appQName appdef.AppQName, asyncProjectors istructs.Projectors, partitionID istructs.PartitionID,
+	tokens itokens.ITokens, federation federation.IFederation, opts []state.StateOptFunc) pipeline.ISyncOperator
 type OperatorAppServicesFactory func(ctx context.Context) pipeline.ISyncOperator
 type CommandChannelFactory func(channelIdx int) commandprocessor.CommandChannel
 type QueryChannel iprocbus.ServiceChannel
-type RouterServiceOperator pipeline.ISyncOperator
+type AdminEndpointServiceOperator pipeline.ISyncOperator
+type PublicEndpointServiceOperator pipeline.ISyncOperator
 type BlobberAppClusterID istructs.ClusterAppID
 type BlobStorage iblobstorage.IBLOBStorage
-type BlobAppStorage istorage.IAppStorage
 type BlobberAppStruct istructs.IAppStructs
 type CommandProcessorsChannelGroupIdxType int
 type QueryProcessorsChannelGroupIdxType int
 type MaxPrepareQueriesType int
 type ServiceChannelFactory func(pcgt ProcessorChannelType, channelIdx int) iprocbus.ServiceChannel
-type AppStorageFactory func(appQName istructs.AppQName, appStorage istorage.IAppStorage) istorage.IAppStorage
+type AppStorageFactory func(appQName appdef.AppQName, appStorage istorage.IAppStorage) istorage.IAppStorage
 type StorageCacheSizeType int
-type VVMApps []istructs.AppQName
-type BuiltInAppsPackages struct {
-	apppartsctl.BuiltInApp
-	Packages []parser.PackageFS
+type VVMApps []appdef.AppQName
+type BuiltInAppPackages struct {
+	appparts.BuiltInApp
+	Packages []parser.PackageFS // need for build baseline schemas
+}
+type AppConfigsTypeEmpty istructsmem.AppConfigsType
+type BootstrapOperator pipeline.ISyncOperator
+type SidecarAppsDefs map[appdef.AppQName]BuiltInAppPackages
+
+type BuiltInAppsArtefacts struct {
+	istructsmem.AppConfigsType
+	builtInAppPackages []BuiltInAppPackages
 }
 
 type BusTimeout time.Duration
@@ -72,11 +86,13 @@ type ProcesorChannel struct {
 type RouterServices struct {
 	router.IHTTPService
 	router.IACMEService
+	router.IAdminService
 }
 type MetricsServiceOperator pipeline.ISyncOperator
 type MetricsServicePortInitial int
 type VVMPortSource struct {
-	getter func() VVMPortType
+	getter      func() VVMPortType
+	adminGetter func() int
 }
 type IAppStorageUncachingProviderFactory func() (provider istorage.IAppStorageProvider)
 type AppPartsCtlPipelineService struct {
@@ -95,17 +111,18 @@ type PostDocDesc struct {
 	IsSingleton bool
 }
 
-type VVMAppsBuilder map[istructs.AppQName]apps.AppBuilder
+type VVMAppsBuilder map[appdef.AppQName]apps.AppBuilder
 
 type VVM struct {
 	ServicePipeline
 	apps.APIs
-	AppsExtensionPoints map[istructs.AppQName]extensionpoints.IExtensionPoint
+	appparts.IAppPartitions
+	AppsExtensionPoints map[appdef.AppQName]extensionpoints.IExtensionPoint
 	MetricsServicePort  func() metrics.MetricsServicePort
-	BuiltInAppsPackages []BuiltInAppsPackages
+	BuiltInAppsPackages []BuiltInAppPackages
 }
 
-type AppsExtensionPoints map[istructs.AppQName]extensionpoints.IExtensionPoint
+type AppsExtensionPoints map[appdef.AppQName]extensionpoints.IExtensionPoint
 
 type VVMConfig struct {
 	VVMAppsBuilder             VVMAppsBuilder // is a map
@@ -124,8 +141,8 @@ type VVMConfig struct {
 	BlobberServiceChannels     router.BlobberServiceChannels
 	BLOBMaxSize                router.BLOBMaxSizeType
 	Name                       commandprocessor.VVMName
-	NumCommandProcessors       coreutils.CommandProcessorsCount
-	NumQueryProcessors         coreutils.QueryProcessorsCount
+	NumCommandProcessors       istructs.NumCommandProcessors
+	NumQueryProcessors         istructs.NumQueryProcessors
 	MaxPrepareQueries          MaxPrepareQueriesType
 	StorageCacheSize           StorageCacheSizeType
 	processorsChannels         []ProcesorChannel
@@ -135,8 +152,13 @@ type VVMConfig struct {
 	MetricsServicePort MetricsServicePortInitial
 	// test and FederationURL contains port -> the port will be relaced with the actual VVMPort
 	FederationURL       *url.URL
-	ActualizerStateOpts []state.ActualizerStateOptFunc
+	ActualizerStateOpts []state.StateOptFunc
 	SecretsReader       isecrets.ISecretReader
+	// used in tests only
+	KeyspaceNameSuffix string
+	SmtpConfig         smtp.Cfg
+	WSPostInitFunc     workspace.WSPostInitFunc
+	DataPath           string
 }
 
 type resultSenderErrorFirst struct {
@@ -150,3 +172,7 @@ type VoedgerVM struct {
 	vvmCtxCancel func()
 	vvmCleanup   func()
 }
+
+type ignition struct{}
+
+func (i ignition) Release() {}

@@ -15,6 +15,7 @@ import (
 	"github.com/alecthomas/participle/v2/lexer"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
 func parseImpl(fileName string, content string) (*SchemaAST, error) {
@@ -35,6 +36,8 @@ func parseImpl(fileName string, content string) (*SchemaAST, error) {
 		{Name: "INSERTONALLCOMMANDSWITHTAG", Pattern: `INSERT[ \r\n\t]+ON[ \r\n\t]+ALL[ \r\n\t]+COMMANDS[ \r\n\t]+WITH[ \r\n\t]+TAG`},
 		{Name: "SELECTONQUERY", Pattern: `SELECT[ \r\n\t]+ON[ \r\n\t]+QUERY`},
 		{Name: "SELECTONALLQUERIESWITHTAG", Pattern: `SELECT[ \r\n\t]+ON[ \r\n\t]+ALL[ \r\n\t]+QUERIES[ \r\n\t]+WITH[ \r\n\t]+TAG`},
+		{Name: "SELECTONVIEW", Pattern: `SELECT[ \r\n\t]+ON[ \r\n\t]+VIEW`},
+		{Name: "SELECTONALLVIEWSWITHTAG", Pattern: `SELECT[ \r\n\t]+ON[ \r\n\t]+ALL[ \r\n\t]+VIEWS[ \r\n\t]+WITH[ \r\n\t]+TAG`},
 		{Name: "INSERTONWORKSPACE", Pattern: `INSERT[ \r\n\t]+ON[ \r\n\t]+WORKSPACE`},
 		{Name: "INSERTONALLWORKSPACESWITHTAG", Pattern: `INSERT[ \r\n\t]+ON[ \r\n\t]+ALL[ \r\n\t]+WORKSPACES[ \r\n\t]+WITH[ \r\n\t]+TAG`},
 		{Name: "ONALLTABLESWITHTAG", Pattern: `ON[ \r\n\t]+ALL[ \r\n\t]+TABLES[ \r\n\t]+WITH[ \r\n\t]+TAG`},
@@ -63,13 +66,14 @@ func mergeSchemas(mergeFrom, mergeTo *SchemaAST) {
 	mergeTo.Statements = append(mergeTo.Statements, mergeFrom.Statements...)
 }
 
-func parseFSImpl(fs IReadFS, dir string) (schemas []*FileSchemaAST, errs []error) {
+func parseFSImpl(fs coreutils.IReadFS, dir string) (schemas []*FileSchemaAST, errs []error) {
 	entries, err := fs.ReadDir(dir)
 	if err != nil {
 		return nil, []error{err}
 	}
 	for _, entry := range entries {
-		if strings.ToLower(filepath.Ext(entry.Name())) == ".sql" {
+		fileExt := filepath.Ext(entry.Name())
+		if strings.ToLower(fileExt) == VSqlExt || strings.ToLower(fileExt) == SqlExt {
 			var fpath string
 			if _, ok := fs.(embed.FS); ok {
 				if dir == "." || dir == "" {
@@ -238,7 +242,7 @@ func defineApp(c *basicContext) {
 	}
 
 	c.app.Name = string(app.Name)
-	appAst.Name = getPackageName(appAst.Path)
+	appAst.Name = GetPackageName(appAst.Path)
 	pkgNames := make(map[string]bool)
 	pkgNames[appAst.Name] = true
 

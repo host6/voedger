@@ -11,8 +11,8 @@ import (
 	"slices"
 	"sync"
 
-	"github.com/untillpro/goutils/iterate"
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/iterate"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -38,8 +38,11 @@ func (s *asyncActualizerContextState) error() error {
 }
 
 func isAcceptable(event istructs.IPLogEvent, wantErrors bool, triggeringQNames map[appdef.QName][]appdef.ProjectorEventKind, appDef appdef.IAppDef) bool {
-	if event.QName() == istructs.QNameForError {
+	switch event.QName() {
+	case istructs.QNameForError:
 		return wantErrors
+	case istructs.QNameForCorruptedData:
+		return false
 	}
 
 	if len(triggeringQNames) == 0 {
@@ -92,7 +95,7 @@ func isAcceptable(event istructs.IPLogEvent, wantErrors bool, triggeringQNames m
 				}
 			case appdef.ProjectorEventKind_Activate:
 				if !rec.IsNew() {
-					activated, _, _ := iterate.FindFirstMap(rec.ModifiedFields, func(fieldName string, newValue interface{}) bool {
+					activated, _, _ := iterate.FindFirstMap(rec.ModifiedFields, func(fieldName appdef.FieldName, newValue interface{}) bool {
 						return fieldName == appdef.SystemField_IsActive && newValue.(bool)
 					})
 					if activated {
@@ -101,7 +104,7 @@ func isAcceptable(event istructs.IPLogEvent, wantErrors bool, triggeringQNames m
 				}
 			case appdef.ProjectorEventKind_Deactivate:
 				if !rec.IsNew() {
-					deactivated, _, _ := iterate.FindFirstMap(rec.ModifiedFields, func(fieldName string, newValue interface{}) bool {
+					deactivated, _, _ := iterate.FindFirstMap(rec.ModifiedFields, func(fieldName appdef.FieldName, newValue interface{}) bool {
 						return fieldName == appdef.SystemField_IsActive && !newValue.(bool)
 					})
 					if deactivated {

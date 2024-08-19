@@ -8,12 +8,12 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
-	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/authnz"
 )
 
-func provideCmdCreateJoinedWorkspace(cfg *istructsmem.AppConfigType) {
-	cfg.Resources.Add(istructsmem.NewCommandFunction(
+func provideCmdCreateJoinedWorkspace(sr istructsmem.IStatelessResources) {
+	sr.AddCommands(appdef.SysPackagePath, istructsmem.NewCommandFunction(
 		qNameCmdCreateJoinedWorkspace,
 		execCmdCreateJoinedWorkspace,
 	))
@@ -31,7 +31,7 @@ func execCmdCreateJoinedWorkspace(args istructs.ExecCommandArgs) (err error) {
 
 		return nil
 	}
-	skbCDocJoinedWorkspace, err := args.State.KeyBuilder(state.Record, QNameCDocJoinedWorkspace)
+	skbCDocJoinedWorkspace, err := args.State.KeyBuilder(sys.Storage_Record, QNameCDocJoinedWorkspace)
 	if err != nil {
 		return
 	}

@@ -5,19 +5,21 @@
 package vit
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math"
-	"mime"
-	"net/url"
-	"strconv"
-	"strings"
+	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/in10n"
+	"github.com/voedger/voedger/pkg/istorage"
+	"github.com/voedger/voedger/pkg/utils/federation"
+	"github.com/voedger/voedger/pkg/vvm"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -26,17 +28,16 @@ import (
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
-func (vit *VIT) GetBLOB(appQName istructs.AppQName, wsid istructs.WSID, blobID int64, token string) *BLOB {
+func (vit *VIT) GetBLOB(appQName appdef.AppQName, wsid istructs.WSID, blobID istructs.RecordID, token string) *BLOB {
 	vit.T.Helper()
-	resp, err := coreutils.FederationReq(vit.IFederation.URL(), fmt.Sprintf(`blob/%s/%d/%d`, appQName.String(), wsid, blobID), "", coreutils.WithAuthorizeBy(token))
+	blobReader, err := vit.IFederation.ReadBLOB(appQName, wsid, blobID, coreutils.WithAuthorizeBy(token))
 	require.NoError(vit.T, err)
-	contentDisposition := resp.HTTPResp.Header.Get("Content-Disposition")
-	_, params, err := mime.ParseMediaType(contentDisposition)
+	blobContent, err := io.ReadAll(blobReader)
 	require.NoError(vit.T, err)
 	return &BLOB{
-		Content:  []byte(resp.Body),
-		Name:     params["filename"],
-		MimeType: resp.HTTPResp.Header.Get(coreutils.ContentType),
+		Content:  blobContent,
+		Name:     blobReader.Name,
+		MimeType: blobReader.MimeType,
 	}
 }
 
@@ -59,7 +60,7 @@ func WithReqOpt(reqOpt coreutils.ReqOptFunc) signUpOptFunc {
 	}
 }
 
-func (vit *VIT) SignUp(loginName, pwd string, appQName istructs.AppQName, opts ...signUpOptFunc) Login {
+func (vit *VIT) SignUp(loginName, pwd string, appQName appdef.AppQName, opts ...signUpOptFunc) Login {
 	vit.T.Helper()
 	signUpOpts := getSignUpOpts(opts)
 	login := NewLogin(loginName, pwd, appQName, istructs.SubjectKind_User, signUpOpts.profileClusterID)
@@ -77,7 +78,7 @@ func getSignUpOpts(opts []signUpOptFunc) *signUpOpts {
 	return res
 }
 
-func (vit *VIT) SignUpDevice(loginName, pwd string, appQName istructs.AppQName, opts ...signUpOptFunc) Login {
+func (vit *VIT) SignUpDevice(loginName, pwd string, appQName appdef.AppQName, opts ...signUpOptFunc) Login {
 	vit.T.Helper()
 	signUpOpts := getSignUpOpts(opts)
 	login := NewLogin(loginName, pwd, appQName, istructs.SubjectKind_Device, signUpOpts.profileClusterID)
@@ -87,10 +88,10 @@ func (vit *VIT) SignUpDevice(loginName, pwd string, appQName istructs.AppQName, 
 
 func (vit *VIT) GetCDocLoginID(login Login) int64 {
 	vit.T.Helper()
-	as, err := vit.IAppStructsProvider.AppStructs(istructs.AppQName_sys_registry)
+	as, err := vit.IAppStructsProvider.BuiltIn(istructs.AppQName_sys_registry)
 	require.NoError(vit.T, err) // notest
-	appWSID := coreutils.GetAppWSID(login.PseudoProfileWSID, as.WSAmount())
-	body := fmt.Sprintf(`{"args":{"query":"select CDocLoginID from registry.LoginIdx where AppWSID = %d and AppIDLoginHash = '%s/%s'"}, "elements":[{"fields":["Result"]}]}`,
+	appWSID := coreutils.GetAppWSID(login.PseudoProfileWSID, as.NumAppWorkspaces())
+	body := fmt.Sprintf(`{"args":{"Query":"select CDocLoginID from registry.LoginIdx where AppWSID = %d and AppIDLoginHash = '%s/%s'"}, "elements":[{"fields":["Result"]}]}`,
 		appWSID, login.AppQName, registry.GetLoginHash(login.Name))
 	sys := vit.GetSystemPrincipal(istructs.AppQName_sys_registry)
 	resp := vit.PostApp(istructs.AppQName_sys_registry, login.PseudoProfileWSID, "q.sys.SqlQuery", body, coreutils.WithAuthorizeBy(sys.Token))
@@ -104,11 +105,11 @@ func (vit *VIT) GetCDocWSKind(ws *AppWorkspace) (cdoc map[string]interface{}, id
 	return vit.getCDoc(ws.Owner.AppQName, ws.Kind, ws.WSID)
 }
 
-func (vit *VIT) getCDoc(appQName istructs.AppQName, qName appdef.QName, wsid istructs.WSID) (cdoc map[string]interface{}, id int64) {
+func (vit *VIT) getCDoc(appQName appdef.AppQName, qName appdef.QName, wsid istructs.WSID) (cdoc map[string]interface{}, id int64) {
 	vit.T.Helper()
 	body := bytes.NewBufferString(fmt.Sprintf(`{"args":{"Schema":"%s"},"elements":[{"fields":["sys.ID"`, qName))
 	fields := []string{}
-	as, err := vit.IAppStructsProvider.AppStructs(appQName)
+	as, err := vit.IAppStructsProvider.BuiltIn(appQName)
 	require.NoError(vit.T, err)
 	if doc := as.AppDef().CDoc(qName); doc != nil {
 		for _, field := range doc.Fields() {
@@ -152,7 +153,7 @@ func (vit *VIT) waitForWorkspace(wsName string, owner *Principal, respGetter fun
 		body := fmt.Sprintf(`
 			{
 				"args": {
-					"WSName": "%s"
+					"WSName": %q
 				},
 				"elements":[
 					{
@@ -258,11 +259,11 @@ func (vit *VIT) SignIn(login Login, optFuncs ...signInOptFunc) (prn *Principal) 
 }
 
 // owner could be *vit.Principal or *vit.AppWorkspace
-func (vit *VIT) InitChildWorkspace(wsd WSParams, ownerIntf interface{}) {
+func (vit *VIT) InitChildWorkspace(wsd WSParams, ownerIntf interface{}, opts ...coreutils.ReqOptFunc) {
 	vit.T.Helper()
 	body := fmt.Sprintf(`{
 		"args": {
-			"WSName": "%s",
+			"WSName": %q,
 			"WSKind": "%s",
 			"WSKindInitializationData": %q,
 			"TemplateName": "%s",
@@ -273,9 +274,9 @@ func (vit *VIT) InitChildWorkspace(wsd WSParams, ownerIntf interface{}) {
 
 	switch owner := ownerIntf.(type) {
 	case *Principal:
-		vit.PostProfile(owner, "c.sys.InitChildWorkspace", body)
+		vit.PostProfile(owner, "c.sys.InitChildWorkspace", body, opts...)
 	case *AppWorkspace:
-		vit.PostWS(owner, "c.sys.InitChildWorkspace", body)
+		vit.PostWS(owner, "c.sys.InitChildWorkspace", body, opts...)
 	default:
 		panic("ownerIntf could be vit.*Principal or vit.*AppWorkspace only")
 	}
@@ -290,92 +291,45 @@ func SimpleWSParams(wsName string) WSParams {
 	}
 }
 
-func (vit *VIT) CreateWorkspace(wsp WSParams, owner *Principal) *AppWorkspace {
-	vit.InitChildWorkspace(wsp, owner)
+func (vit *VIT) CreateWorkspace(wsp WSParams, owner *Principal, opts ...coreutils.ReqOptFunc) *AppWorkspace {
+	vit.InitChildWorkspace(wsp, owner, opts...)
 	ws := vit.WaitForWorkspace(wsp.Name, owner)
 	require.Empty(vit.T, ws.WSError)
 	return ws
 }
 
-func (vit *VIT) SubscribeForN10nCleanup(p SubscriptionParameters, viewQName appdef.QName) (n10n chan int64, unsubscribe func()) {
-	n10n = make(chan int64)
-	params := url.Values{}
-	query := fmt.Sprintf(`{"SubjectLogin":"test_%d","ProjectionKey":[{"App":"%s","Projection":"%s","WS":%d}]}`,
-		p.GetWSID(), p.GetAppQName(), viewQName, p.GetWSID())
-	params.Add("payload", query)
-	httpResp, err := coreutils.FederationReq(vit.IFederation.URL(), fmt.Sprintf("n10n/channel?%s", params.Encode()), "",
-		coreutils.WithLongPolling())
-	require.NoError(vit.T, err)
-
-	scanner := bufio.NewScanner(httpResp.HTTPResp.Body)
-	scanner.Split(ScanSSE)
-
-	// lets's wait for channelID
-	if !scanner.Scan() {
-		if !vit.T.Failed() {
-			vit.T.Fatal("failed to get channelID on n10n subscription")
-		}
-	}
-	messages := strings.Split(scanner.Text(), "\n")
-	require.Equal(vit.T, "event: channelId", messages[0])
-	require.True(vit.T, strings.HasPrefix(messages[1], "data: "))
-	channelIDStr := strings.TrimPrefix(messages[1], "data: ")
-
-	go func() {
-		defer close(n10n)
-		for scanner.Scan() {
-			if httpResp.HTTPResp.Request.Context().Err() != nil {
-				return
-			}
-			messages := strings.Split(scanner.Text(), "\n")
-			if strings.TrimPrefix(messages[0], "event: ") == "channelId" {
-				continue
-			}
-			offset, err := strconv.Atoi(strings.TrimPrefix(messages[1], "data: "))
-			if err != nil {
-				panic(err)
-			}
-			n10n <- int64(offset)
-		}
-	}()
-	unsubscribe = func() {
-		body := fmt.Sprintf(`
-			{
-				"Channel": "%s",
-				"ProjectionKey":[
-					{
-						"App": "%s",
-						"Projection":"%s",
-						"WS":%d
-					}
-				]
-			}
-		`, channelIDStr, p.GetAppQName(), viewQName, p.GetWSID())
-		params := url.Values{}
-		params.Add("payload", body)
-		vit.Get(fmt.Sprintf("n10n/unsubscribe?%s", params.Encode()))
-		httpResp.HTTPResp.Body.Close()
-		for range n10n {
-		}
-	}
-	return n10n, unsubscribe
+func (vit *VIT) SubscribeForN10n(ws *AppWorkspace, projectionQName appdef.QName) federation.OffsetsChan {
+	vit.T.Helper()
+	return vit.SubscribeForN10nProjectionKey(in10n.ProjectionKey{
+		App:        ws.AppQName(),
+		Projection: projectionQName,
+		WS:         ws.WSID,
+	})
 }
 
-// will be finalized automatically on vit.TearDown()
-func (vit *VIT) SubscribeForN10n(p SubscriptionParameters, viewQName appdef.QName) chan int64 {
-	n10nChan, unsubscribe := vit.SubscribeForN10nCleanup(p, viewQName)
+// will be unsubscribed automatically on vit.TearDown()
+func (vit *VIT) SubscribeForN10nProjectionKey(pk in10n.ProjectionKey) federation.OffsetsChan {
+	vit.T.Helper()
+	offsetsChan, unsubscribe := vit.SubscribeForN10nUnsubscribe(pk)
 	vit.lock.Lock() // need to lock because the vit instance is used in different goroutines in e.g. Test_Race_RestaurantIntenseUsage()
 	vit.cleanups = append(vit.cleanups, func(vit *VIT) {
 		unsubscribe()
 	})
 	vit.lock.Unlock()
-	return n10nChan
+	return offsetsChan
 }
 
-func (vit *VIT) MetricsRequest(opts ...coreutils.ReqOptFunc) (resp string) {
+func (vit *VIT) SubscribeForN10nUnsubscribe(pk in10n.ProjectionKey) (offsetsChan federation.OffsetsChan, unsubscribe func()) {
+	vit.T.Helper()
+	offsetsChan, unsubscribe, err := vit.IFederation.N10NSubscribe(pk)
+	require.NoError(vit.T, err)
+	return offsetsChan, unsubscribe
+}
+
+func (vit *VIT) MetricsRequest(client coreutils.IHTTPClient, opts ...coreutils.ReqOptFunc) (resp string) {
 	vit.T.Helper()
 	url := fmt.Sprintf("http://127.0.0.1:%d/metrics", vit.VoedgerVM.MetricsServicePort())
-	res, err := coreutils.Req(url, "", opts...)
+	res, err := client.Req(url, "", opts...)
 	require.NoError(vit.T, err)
 	return res.Body
 }
@@ -392,7 +346,7 @@ func (vit *VIT) GetAny(entity string, ws *AppWorkspace) istructs.RecordID {
 	return istructs.RecordID(data["DocID"].(float64))
 }
 
-func NewLogin(name, pwd string, appQName istructs.AppQName, subjectKind istructs.SubjectKindType, clusterID istructs.ClusterID) Login {
+func NewLogin(name, pwd string, appQName appdef.AppQName, subjectKind istructs.SubjectKindType, clusterID istructs.ClusterID) Login {
 	pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, name, istructs.MainClusterID)
 	return Login{name, pwd, pseudoWSID, appQName, subjectKind, clusterID, map[appdef.QName]func(verifiedValues map[string]string) map[string]interface{}{}}
 }
@@ -405,10 +359,58 @@ func TestDeadline() time.Time {
 	return deadline
 }
 
+func getTestEmailsAwaitingTimeout() time.Duration {
+	if coreutils.IsDebug() {
+		return math.MaxInt
+	}
+	return testEmailsAwaitingTimeout
+}
+
 func getWorkspaceInitAwaitTimeout() time.Duration {
 	if coreutils.IsDebug() {
 		// so long for Test_Race_RestaurantIntenseUsage with -race
 		return math.MaxInt
 	}
 	return defaultWorkspaceAwaitTimeout
+}
+
+func DummyWS(wsKind appdef.QName, wsid istructs.WSID, ownerPrn *Principal) *AppWorkspace {
+	return &AppWorkspace{
+		WorkspaceDescriptor: WorkspaceDescriptor{
+			WSParams: WSParams{
+				Kind:      wsKind,
+				ClusterID: istructs.MainClusterID,
+			},
+			WSID: wsid,
+		},
+		Owner: ownerPrn,
+	}
+}
+
+// calls testBeforeRestart() then stops then VIT, then launches new VIT on the same config but with storage from previous VIT
+// then calls testAfterRestart() with the new VIT
+// cfg must be owned
+func TestRestartPreservingStorage(t *testing.T, cfg *VITConfig, testBeforeRestart, testAfterRestart func(t *testing.T, vit *VIT)) {
+	require.False(t, cfg.isShared, "storage restart could be done on Own VIT Config only")
+	var sharedStorageFactory istorage.IAppStorageFactory
+	suffix := t.Name() + uuid.NewString()
+	cfg.opts = append(cfg.opts, WithVVMConfig(func(cfg *vvm.VVMConfig) {
+		if sharedStorageFactory == nil {
+			var err error
+			sharedStorageFactory, err = cfg.StorageFactory()
+			require.NoError(t, err)
+		}
+		cfg.KeyspaceNameSuffix = suffix
+		cfg.StorageFactory = func() (istorage.IAppStorageFactory, error) {
+			return sharedStorageFactory, nil
+		}
+	}))
+	func() {
+		vit := NewVIT(t, cfg)
+		defer vit.TearDown()
+		testBeforeRestart(t, vit)
+	}()
+	vit := NewVIT(t, cfg)
+	defer vit.TearDown()
+	testAfterRestart(t, vit)
 }

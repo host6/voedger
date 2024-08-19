@@ -13,18 +13,23 @@ import (
 	"github.com/voedger/voedger/pkg/istructsmem"
 )
 
-func Provide(cfg *istructsmem.AppConfigType, adf appdef.IAppDefBuilder, buildInfo *debug.BuildInfo, asp istorage.IAppStorageProvider) {
-	cfg.Resources.Add(istructsmem.NewCommandFunction(istructs.QNameCommandCUD, istructsmem.NullCommandExec))
+func Provide(sr istructsmem.IStatelessResources, buildInfo *debug.BuildInfo, asp istorage.IAppStorageProvider) {
+	sr.AddCommands(appdef.SysPackagePath,
+		istructsmem.NewCommandFunction(istructs.QNameCommandCUD, istructsmem.NullCommandExec),
 
-	// Deprecated: use c.sys.CUD instead. Kept for backward compatibility only
-	// to import via ImportBO
-	cfg.Resources.Add(istructsmem.NewCommandFunction(QNameCommandInit, istructsmem.NullCommandExec))
+		// Deprecated: use c.sys.CUD instead. Kept for backward compatibility only
+		// to import via ImportBO
+		istructsmem.NewCommandFunction(QNameCommandInit, istructsmem.NullCommandExec),
+	)
 
-	provideRefIntegrityValidation(cfg, adf)
-	provideQryModules(cfg, adf, buildInfo)
+	provideRefIntegrityValidation(sr)
+	provideQryModules(sr, buildInfo)
 
-	provideQryEcho(cfg, adf)
-	provideQryGRCount(cfg, adf)
-	proivideRenameQName(cfg, adf, asp)
-	provideSysIsActiveValidation(cfg)
+	provideQryEcho(sr)
+	provideQryGRCount(sr)
+	proivideRenameQName(sr, asp)
+}
+
+func ProvideCUDValidators(cfg *istructsmem.AppConfigType) {
+	cfg.AddCUDValidators(provideRefIntegrityValidator())
 }

@@ -15,7 +15,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	it "github.com/voedger/voedger/pkg/vit"
 )
@@ -35,7 +35,7 @@ func TestBug_QueryProcessorMustStopOnClientDisconnect(t *testing.T) {
 	}
 	require := require.New(t)
 	goOn := make(chan interface{})
-	it.MockQryExec = func(input string, callback istructs.ExecQueryCallback) (err error) {
+	it.MockQryExec = func(input string, _ istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 		rr := &rr{res: input}
 		require.NoError(callback(rr))
 		<-goOn // ждем, пока http клиент примет первый элемент и отключится
@@ -82,7 +82,7 @@ func Test409OnRepeatedlyUsedRawIDsInResultCUDs_(t *testing.T) {
 	defer vit.TearDown()
 	it.MockCmdExec = func(_ string, args istructs.ExecCommandArgs) error {
 		// 2 раза используем один и тот же rawID -> 500 internal server error
-		kb, err := args.State.KeyBuilder(state.Record, it.QNameApp1_CDocCategory)
+		kb, err := args.State.KeyBuilder(sys.Storage_Record, it.QNameApp1_CDocCategory)
 		if err != nil {
 			return err
 		}
@@ -92,7 +92,7 @@ func Test409OnRepeatedlyUsedRawIDsInResultCUDs_(t *testing.T) {
 		}
 		sv.PutRecordID(appdef.SystemField_ID, 1)
 
-		kb, err = args.State.KeyBuilder(state.Record, it.QNameApp1_CDocCategory)
+		kb, err = args.State.KeyBuilder(sys.Storage_Record, it.QNameApp1_CDocCategory)
 		if err != nil {
 			return err
 		}

@@ -18,12 +18,13 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/valyala/bytebufferpool"
 
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 )
 
-func createRequest(reqMethod string, req *http.Request, rw http.ResponseWriter, appsWSAmount map[istructs.AppQName]istructs.AppWSAmount) (res ibus.Request, ok bool) {
+func createRequest(reqMethod string, req *http.Request, rw http.ResponseWriter, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) (res ibus.Request, ok bool) {
 	vars := mux.Vars(req)
 	wsidStr := vars[WSID]
 	wsidInt, err := strconv.ParseInt(wsidStr, parseInt64Base, parseInt64Bits)
@@ -32,13 +33,13 @@ func createRequest(reqMethod string, req *http.Request, rw http.ResponseWriter, 
 		// notest
 		panic(err)
 	}
-	appQNameStr := vars[AppOwner] + istructs.AppQNameQualifierChar + vars[AppName]
+	appQNameStr := vars[AppOwner] + appdef.AppQNameQualifierChar + vars[AppName]
 	wsid := istructs.WSID(wsidInt)
-	if appQName, err := istructs.ParseAppQName(appQNameStr); err == nil {
-		if appWSAmount, ok := appsWSAmount[appQName]; ok {
+	if appQName, err := appdef.ParseAppQName(appQNameStr); err == nil {
+		if numAppWorkspaces, ok := numsAppsWorkspaces[appQName]; ok {
 			baseWSID := wsid.BaseWSID()
 			if baseWSID < istructs.MaxPseudoBaseWSID {
-				wsid = coreutils.GetAppWSID(wsid, appWSAmount)
+				wsid = coreutils.GetAppWSID(wsid, numAppWorkspaces)
 			}
 		}
 	}

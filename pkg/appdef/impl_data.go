@@ -7,8 +7,9 @@ package appdef
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
+
+	"github.com/voedger/voedger/pkg/utils/utils"
 )
 
 // # Implements:
@@ -26,15 +27,15 @@ func newData(app *appDef, name QName, kind DataKind, anc QName) *data {
 	if anc == NullQName {
 		ancestor = app.SysData(kind)
 		if ancestor == nil {
-			panic(fmt.Errorf("system data type for data kind «%s» is not exists: %w", kind.TrimString(), ErrInvalidTypeKind))
+			panic(ErrNotFound("system data type for data kind «%v»", kind.TrimString()))
 		}
 	} else {
 		ancestor = app.Data(anc)
 		if ancestor == nil {
-			panic(fmt.Errorf("ancestor data type «%v» not found: %w", anc, ErrNameNotFound))
+			panic(ErrTypeNotFound(anc))
 		}
 		if (kind != DataKind_null) && (ancestor.DataKind() != kind) {
-			panic(fmt.Errorf("ancestor «%v» has wrong data type, %v expected: %w", anc, kind, ErrInvalidTypeKind))
+			panic(ErrInvalid("ancestor «%v» has wrong data kind, expected %v", anc, kind.TrimString()))
 		}
 	}
 	d := &data{
@@ -89,8 +90,8 @@ func (d *data) addConstraints(cc ...IConstraint) {
 	dk := d.DataKind()
 	for _, c := range cc {
 		ck := c.Kind()
-		if ok := dk.IsSupportedConstraint(ck); !ok {
-			panic(fmt.Errorf("%v is not compatible with constraint %v: %w", d, c, ErrIncompatibleConstraints))
+		if ok := dk.IsCompatibleWithConstraint(ck); !ok {
+			panic(ErrIncompatible("constraint %v with data type «%v»", c, d))
 		}
 		switch c.Kind() {
 		case ConstraintKind_MinLen:
@@ -112,7 +113,7 @@ func (d *data) addConstraints(cc ...IConstraint) {
 				_, ok = c.Value().([]string)
 			}
 			if !ok {
-				panic(fmt.Errorf("constraint %v values type %T is not applicable to %v: %w", c, c.Value(), d, ErrIncompatibleConstraints))
+				panic(ErrIncompatible("values type «%T» with data type «%v»", c.Value(), d))
 			}
 		}
 		d.constraints[ck] = c
@@ -137,8 +138,6 @@ func (db *dataBuilder) AddConstraints(cc ...IConstraint) IDataBuilder {
 	db.data.addConstraints(cc...)
 	return db
 }
-
-func (db *dataBuilder) String() string { return db.data.String() }
 
 // Returns name of system data type by data kind.
 //
@@ -239,8 +238,7 @@ func (k ConstraintKind) MarshalText() ([]byte, error) {
 	if k < ConstraintKind_Count {
 		s = k.String()
 	} else {
-		const base = 10
-		s = strconv.FormatUint(uint64(k), base)
+		s = utils.UintToString(k)
 	}
 	return []byte(s), nil
 }
@@ -271,7 +269,7 @@ func (k ConstraintKind) TrimString() string {
 //   - ConstraintKind_MaxIncl
 //   - ConstraintKind_MaxExcl
 //   - ConstraintKind_Enum
-func (k DataKind) IsSupportedConstraint(c ConstraintKind) bool {
+func (k DataKind) IsCompatibleWithConstraint(c ConstraintKind) bool {
 	switch k {
 	case DataKind_bytes:
 		switch c {
@@ -309,8 +307,7 @@ func (k DataKind) MarshalText() ([]byte, error) {
 	if k < DataKind_FakeLast {
 		s = k.String()
 	} else {
-		const base = 10
-		s = strconv.FormatUint(uint64(k), base)
+		s = utils.UintToString(k)
 	}
 	return []byte(s), nil
 }

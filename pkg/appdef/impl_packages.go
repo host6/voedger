@@ -1,12 +1,11 @@
 /*
- * Copyright (c) 2021-present Sigma-Soft, Ltd.
+ * Copyright (c) 2024-present Sigma-Soft, Ltd.
  * @author: Nikolay Nikitin
  */
 
 package appdef
 
 import (
-	"fmt"
 	"slices"
 )
 
@@ -29,14 +28,14 @@ func (p *packages) add(local, path string) {
 		panic(err)
 	}
 	if p, ok := p.pathByLocal[local]; ok {
-		panic(fmt.Errorf("package local name «%s» already used for «%s»: %w", local, p, ErrNameUniqueViolation))
+		panic(ErrAlreadyExists("package local name «%s» already used for «%s»", local, p))
 	}
 
 	if path == "" {
-		panic(fmt.Errorf("package «%s» has empty path: %w", local, ErrNameMissed))
+		panic(ErrMissed("package «%s» path", local))
 	}
 	if l, ok := p.localByPath[path]; ok {
-		panic(fmt.Errorf("package path «%s» already used for «%s»: %w", path, l, ErrNameUniqueViolation))
+		panic(ErrAlreadyExists("package path «%s» already used for «%s»", path, l))
 	}
 
 	p.local = append(p.local, local)
@@ -46,20 +45,34 @@ func (p *packages) add(local, path string) {
 	p.pathByLocal[local] = path
 }
 
-func (p *packages) forEach(cb func(local, path string)) {
+func (p packages) forEach(cb func(local, path string)) {
 	for _, local := range p.local {
 		cb(local, p.pathByLocal[local])
 	}
 }
 
-func (p *packages) localNameByPath(path string) string {
+func (p packages) fullQName(n QName) FullQName {
+	if path, ok := p.pathByLocal[n.Pkg()]; ok {
+		return NewFullQName(path, n.Entity())
+	}
+	return NullFullQName
+}
+
+func (p packages) localNameByPath(path string) string {
 	return p.localByPath[path]
 }
 
-func (p *packages) pathByLocalName(local string) string {
+func (p packages) pathByLocalName(local string) string {
 	return p.pathByLocal[local]
 }
 
 func (p *packages) localNames() []string {
 	return p.local
+}
+
+func (p packages) localQName(n FullQName) QName {
+	if pkg, ok := p.localByPath[n.PkgPath()]; ok {
+		return NewQName(pkg, n.Entity())
+	}
+	return NullQName
 }

@@ -8,7 +8,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,7 +16,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/logger"
+	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
 var logFile *os.File
@@ -102,21 +103,18 @@ func mkCommandDirAndLogFile(cmd *cobra.Command, cluster *clusterType) error {
 	}
 
 	time.Sleep(time.Second * 1)
-	commandDirName = fmt.Sprintf("%s-%s", time.Now().Format("20060102-150405"), s)
+	commandDirName = filepath.Join(logFolder, fmt.Sprintf("%s-%s", time.Now().Format("20060102-150405"), s))
 
 	if cluster.dryRun {
 		commandDirName = filepath.Join(dryRunDir, commandDirName)
 	}
 
-	err := os.Mkdir(commandDirName, rwxrwxrwx)
+	err := os.MkdirAll(commandDirName, coreutils.FileMode_rwxrwxrwx)
 	if err == nil {
 		fName := filepath.Join(commandDirName, s+".log")
 		logFile, err = os.Create(fName)
 		if err == nil {
-			logFile, err = os.OpenFile(fName, os.O_RDWR, rw_rw_rw_)
-			if err != nil {
-				panic(err)
-			}
+			logFile, err = os.OpenFile(fName, os.O_RDWR, coreutils.FileMode_rw_rw_rw_)
 		}
 	}
 	return err
@@ -124,31 +122,38 @@ func mkCommandDirAndLogFile(cmd *cobra.Command, cluster *clusterType) error {
 
 // creates a temporary folder for running scripts, if it doesn't exist
 func createScriptsTempDir() error {
-	if scriptTempDirExists() {
+	exists, err := scriptTempDirExists()
+	if err != nil {
+		// notest
+		return err
+	}
+	if exists {
 		return nil
 	}
-	dir, err := ioutil.TempDir("", "scripts")
-	if err == nil {
-		scriptsTempDir = dir
+	var dir string
+	if dir, err = os.MkdirTemp("", "scripts"); err != nil {
+		return err
 	}
-	return err
+	scriptsTempDir = dir
+	if err = os.Chmod(scriptsTempDir, coreutils.FileMode_rwxrwxrwx); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func scriptTempDirExists() bool {
-	if scriptsTempDir == "" {
-		return false
-	}
-
-	if _, err := os.Stat(scriptsTempDir); err == nil {
-		return true
-	}
-
-	return false
+func scriptTempDirExists() (bool, error) {
+	return coreutils.Exists(scriptsTempDir)
 }
 
 // deletes the temporary scripts folder, if it exists
 func deleteScriptsTempDir() error {
-	if !scriptTempDirExists() {
+	exists, err := scriptTempDirExists()
+	if err != nil {
+		// notest
+		return err
+	}
+	if !exists {
 		return nil
 	}
 	return os.RemoveAll(scriptsTempDir)
@@ -200,4 +205,16 @@ func captureStdoutStderr(f func() error) (stdout string, stderr string, err erro
 	wg.Wait()
 	return
 
+}
+
+// nolint
+func randomPassword(length int) string {
+	letterBytes := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+	passwordBytes := make([]byte, length)
+	for i := range passwordBytes {
+		// nolint
+		passwordBytes[i] = letterBytes[rand.Intn(len(letterBytes))]
+	}
+	return string(passwordBytes)
 }

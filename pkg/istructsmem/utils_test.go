@@ -207,8 +207,11 @@ func TestIBucketsFromIAppStructs(t *testing.T) {
 	require := require.New(t)
 
 	cfgs := AppConfigsType{}
-	cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, appdef.New())
-	funcQName := appdef.NewQName("my", "func")
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
+	cfg := cfgs.AddBuiltInAppConfig(istructs.AppQName_test1_app1, adb)
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
+	funcQName := appdef.NewQName("test", "myFunc")
 
 	rlExpected := istructs.RateLimit{
 		Period:                1,
@@ -216,7 +219,7 @@ func TestIBucketsFromIAppStructs(t *testing.T) {
 	}
 	cfg.FunctionRateLimits.AddAppLimit(funcQName, rlExpected)
 	asp := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
-	as, err := asp.AppStructs(istructs.AppQName_test1_app1)
+	as, err := asp.BuiltIn(istructs.AppQName_test1_app1)
 	require.NoError(err)
 	buckets := IBucketsFromIAppStructs(as)
 	bsActual, err := buckets.GetDefaultBucketsState(GetFunctionRateLimitName(funcQName, istructs.RateLimitKind_byApp))

@@ -7,11 +7,13 @@
 package projectors
 
 import (
+	"context"
 	"errors"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 )
@@ -28,6 +30,7 @@ type plogEventMock struct {
 var testQName = appdef.NewQName(appdef.SysPackage, "abc")
 
 func (e *plogEventMock) ArgumentObject() istructs.IObject     { return istructs.NewNullObject() }
+func (e *plogEventMock) Bytes() []byte                        { return nil }
 func (e *plogEventMock) Command() istructs.IObject            { return nil }
 func (e *plogEventMock) Workspace() istructs.WSID             { return e.wsid }
 func (e *plogEventMock) WLogOffset() istructs.Offset          { return e.wlogOffset }
@@ -41,6 +44,29 @@ func (e *plogEventMock) RegisteredAt() istructs.UnixMilli     { return 0 }
 func (e *plogEventMock) Synced() bool                         { return false }
 func (e *plogEventMock) DeviceID() istructs.ConnectedDeviceID { return 0 }
 func (e *plogEventMock) SyncedAt() istructs.UnixMilli         { return 0 }
+
+type cmdWorkpieceMock struct {
+	appPart appparts.IAppPartition
+	event   istructs.IPLogEvent
+}
+
+func (w *cmdWorkpieceMock) AppPartition() appparts.IAppPartition { return w.appPart }
+func (w *cmdWorkpieceMock) Event() istructs.IPLogEvent           { return w.event }
+func (w *cmdWorkpieceMock) Release()                             {}
+
+type cmdProcMock struct {
+	appParts appparts.IAppPartitions
+}
+
+func (p cmdProcMock) TestEvent(wsid istructs.WSID) error {
+	appPart, err := p.appParts.Borrow(istructs.AppQName_test1_app1, istructs.PartitionID(1), appparts.ProcessorKind_Command)
+	if err != nil {
+		return err
+	}
+	defer appPart.Release()
+
+	return appPart.DoSyncActualizer(context.Background(), &cmdWorkpieceMock{appPart: appPart, event: &plogEventMock{wsid: wsid}})
+}
 
 func storeProjectorOffset(appStructs istructs.IAppStructs, partition istructs.PartitionID, projectorName appdef.QName, offset istructs.Offset) error {
 	kb := appStructs.ViewRecords().KeyBuilder(qnameProjectionOffsets)

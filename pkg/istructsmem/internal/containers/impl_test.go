@@ -25,8 +25,11 @@ import (
 func TestContainers(t *testing.T) {
 	require := require.New(t)
 
+	appName := istructs.AppQName_test1_app1
+
 	sp := istorageimpl.Provide(mem.Provide())
-	storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+	storage, err := sp.AppStorage(appName)
+	require.NoError(err)
 
 	versions := vers.New()
 	if err := versions.Prepare(storage); err != nil {
@@ -39,10 +42,11 @@ func TestContainers(t *testing.T) {
 	if err := containers.Prepare(storage, versions,
 		func() appdef.IAppDef {
 			objName := appdef.NewQName("test", "object")
-			appDef := appdef.New()
-			appDef.AddObject(objName).
+			adb := appdef.New()
+			adb.AddPackage("test", "test.com/test")
+			adb.AddObject(objName).
 				AddContainer(containerName, objName, 0, 1)
-			result, err := appDef.Build()
+			result, err := adb.Build()
 			require.NoError(err)
 			return result
 		}()); err != nil {
@@ -89,10 +93,11 @@ func TestContainers(t *testing.T) {
 			if err := containers2.Prepare(storage, versions,
 				func() appdef.IAppDef {
 					objName := appdef.NewQName("test", "object")
-					appDef := appdef.New()
-					appDef.AddObject(objName).
+					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
+					adb.AddObject(objName).
 						AddContainer(containerName, objName, 0, 1)
-					result, err := appDef.Build()
+					result, err := adb.Build()
 					require.NoError(err)
 					return result
 				}()); err != nil {
@@ -119,9 +124,11 @@ func TestContainers(t *testing.T) {
 func TestContainersPrepareErrors(t *testing.T) {
 	require := require.New(t)
 
+	appName := istructs.AppQName_test1_app1
+
 	t.Run("must be error if unknown system view version", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -137,7 +144,7 @@ func TestContainersPrepareErrors(t *testing.T) {
 
 	t.Run("must be error if invalid Container loaded from system view ", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -150,12 +157,12 @@ func TestContainersPrepareErrors(t *testing.T) {
 
 		names := New()
 		err := names.Prepare(storage, versions, nil)
-		require.ErrorIs(err, appdef.ErrInvalidName)
+		require.ErrorIs(err, appdef.ErrInvalidError)
 	})
 
 	t.Run("must be ok if deleted Container loaded from system view ", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -172,7 +179,7 @@ func TestContainersPrepareErrors(t *testing.T) {
 
 	t.Run("must be error if invalid (small) ContainerID loaded from system view ", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -189,7 +196,7 @@ func TestContainersPrepareErrors(t *testing.T) {
 
 	t.Run("must be error if too many Containers", func(t *testing.T) {
 		sp := istorageimpl.Provide(mem.Provide())
-		storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
 		if err := versions.Prepare(storage); err != nil {
@@ -199,13 +206,14 @@ func TestContainersPrepareErrors(t *testing.T) {
 		names := New()
 		err := names.Prepare(storage, versions,
 			func() appdef.IAppDef {
-				appDef := appdef.New()
+				adb := appdef.New()
+				adb.AddPackage("test", "test.com/test")
 				qName := appdef.NewQName("test", "test")
-				obj := appDef.AddObject(qName)
+				obj := adb.AddObject(qName)
 				for i := 0; i <= MaxAvailableContainerID; i++ {
 					obj.AddContainer(fmt.Sprintf("cont_%d", i), qName, 0, 1)
 				}
-				result, err := appDef.Build()
+				result, err := adb.Build()
 				require.NoError(err)
 				return result
 			}())
@@ -217,7 +225,7 @@ func TestContainersPrepareErrors(t *testing.T) {
 		writeError := errors.New("storage write error")
 
 		t.Run("must be error if write some name failed", func(t *testing.T) {
-			storage := teststore.NewStorage()
+			storage := teststore.NewStorage(appName)
 
 			versions := vers.New()
 			if err := versions.Prepare(storage); err != nil {
@@ -230,10 +238,11 @@ func TestContainersPrepareErrors(t *testing.T) {
 			err := names.Prepare(storage, versions,
 				func() appdef.IAppDef {
 					objName := appdef.NewQName("test", "object")
-					appDef := appdef.New()
-					appDef.AddObject(objName).
+					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
+					adb.AddObject(objName).
 						AddContainer(containerName, objName, 0, 1)
-					result, err := appDef.Build()
+					result, err := adb.Build()
 					require.NoError(err)
 					return result
 				}())
@@ -241,7 +250,7 @@ func TestContainersPrepareErrors(t *testing.T) {
 		})
 
 		t.Run("must be error if write system view version failed", func(t *testing.T) {
-			storage := teststore.NewStorage()
+			storage := teststore.NewStorage(appName)
 
 			versions := vers.New()
 			if err := versions.Prepare(storage); err != nil {
@@ -254,10 +263,11 @@ func TestContainersPrepareErrors(t *testing.T) {
 			err := names.Prepare(storage, versions,
 				func() appdef.IAppDef {
 					objName := appdef.NewQName("test", "object")
-					appDef := appdef.New()
-					appDef.AddObject(objName).
+					adb := appdef.New()
+					adb.AddPackage("test", "test.com/test")
+					adb.AddObject(objName).
 						AddContainer(containerName, objName, 0, 1)
-					result, err := appDef.Build()
+					result, err := adb.Build()
 					require.NoError(err)
 					return result
 				}())

@@ -17,8 +17,10 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
@@ -73,7 +75,7 @@ func TestBasicUsage_WorkWithFunctions(t *testing.T) {
 		resp := vit.PostWS(ws, "c.sys.CUD", body)
 		require.Len(resp.NewIDs, 1)
 		require.Greater(resp.NewID(), int64(1))
-		require.Greater(resp.CurrentWLogOffset, int64(0))
+		require.Greater(resp.CurrentWLogOffset, istructs.Offset(0))
 		require.Equal(http.StatusOK, resp.HTTPResp.StatusCode)
 		require.Empty(resp.Sections)                 // not used for commands
 		require.Panics(func() { resp.SectionRow() }) // panics if not a query
@@ -134,13 +136,11 @@ func TestBasicUsage_N10N(t *testing.T) {
 	n10nChan := vit.SubscribeForN10n(ws, QNameTestView)
 
 	// call test update to the view
-	body := fmt.Sprintf(`
- 		{
- 			"App": "%s",
- 			"Projection": "app1pkg.View",
- 			"WS": %d
- 		}`, istructs.AppQName_test1_app1.String(), ws.WSID)
-	vit.Post("n10n/update/13", body)
+	vit.N10NUpdate(in10n.ProjectionKey{
+		App:        istructs.AppQName_test1_app1,
+		Projection: appdef.NewQName(app1PkgName, "View"),
+		WS:         ws.WSID,
+	}, 13)
 
 	offset := <-n10nChan
 	log.Println(offset)
@@ -161,19 +161,19 @@ func TestBasicUsage_POST(t *testing.T) {
 	// response body is read out and closed
 	bodyEcho := `{"args": {"Text": "world"},"elements": [{"fields": ["Res"]}]}`
 	bodyCUD := `{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.air_table_plan","name":"test"}}]}`
-	httpResp := vit.Post("api/test1/app1/1/q.sys.Echo", bodyEcho) // HTTPResponse is returned
+	httpResp := vit.Func("api/test1/app1/1/q.sys.Echo", bodyEcho) // HTTPResponse is returned
 	require.Equal(`{"sections":[{"type":"","elements":[[[["world"]]]]}]}`, httpResp.Body)
 
 	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
 
 	t.Run("low-level POST with authorization by token", func(t *testing.T) {
-		vit.Post(fmt.Sprintf("api/test1/app1/%d/c.sys.CUD", ws.WSID), bodyCUD, coreutils.Expect403())
-		httpResp = vit.Post(fmt.Sprintf("api/test1/app1/%d/c.sys.CUD", ws.WSID), bodyCUD, coreutils.WithAuthorizeBy(ws.Owner.Token))
+		vit.Func(fmt.Sprintf("api/test1/app1/%d/c.sys.CUD", ws.WSID), bodyCUD, coreutils.Expect403())
+		httpResp = vit.Func(fmt.Sprintf("api/test1/app1/%d/c.sys.CUD", ws.WSID), bodyCUD, coreutils.WithAuthorizeBy(ws.Owner.Token))
 		httpResp.Println()
 	})
 
 	t.Run("low-level POST with authorization by header", func(t *testing.T) {
-		httpResp = vit.Post(fmt.Sprintf("api/test1/app1/%d/c.sys.CUD", ws.WSID), bodyCUD, coreutils.WithHeaders(coreutils.Authorization, "Bearer "+ws.Owner.Token))
+		httpResp = vit.Func(fmt.Sprintf("api/test1/app1/%d/c.sys.CUD", ws.WSID), bodyCUD, coreutils.WithHeaders(coreutils.Authorization, "Bearer "+ws.Owner.Token))
 		httpResp.Println()
 	})
 
@@ -188,7 +188,7 @@ func TestBasicUsage_POST(t *testing.T) {
 		vit.PostApp(istructs.AppQName_test1_app1, ws.WSID, "c.sys.CUD", bodyCUD, coreutils.Expect403())
 		resp := vit.PostApp(istructs.AppQName_test1_app1, ws.WSID, "c.sys.CUD", bodyCUD, coreutils.WithAuthorizeBy(ws.Owner.Token)) // FuncResponse is returned
 		require.Greater(resp.NewID(), int64(0))
-		require.Greater(resp.CurrentWLogOffset, int64(0))
+		require.Greater(resp.CurrentWLogOffset, istructs.Offset(0))
 		require.Empty(resp.Sections)                 // not used for commands
 		require.Panics(func() { resp.SectionRow() }) // not used for commands
 	})
@@ -235,28 +235,28 @@ func TestEmailExpectation(t *testing.T) {
 	defer vit.TearDown()
 
 	// provide VIT email sending chan to the IBundledHostState, then use it to send an email
-	s := state.ProvideAsyncActualizerStateFactory()(context.Background(), &nilAppStructs{}, nil, nil, nil, nil, nil, 1, 0,
+	s := state.ProvideAsyncActualizerStateFactory()(context.Background(), func() istructs.IAppStructs { return &nilAppStructs{} }, nil, nil, nil, nil, nil, nil, nil, 1, 0,
 		state.WithEmailMessagesChan(vit.emailCaptor))
-	k, err := s.KeyBuilder(state.SendMail, appdef.NullQName)
+	k, err := s.KeyBuilder(sys.Storage_SendMail, appdef.NullQName)
 	require.NoError(err)
 
 	// construct the email
-	k.PutInt32(state.Field_Port, 1)
-	k.PutString(state.Field_Host, "localhost")
-	k.PutString(state.Field_Username, "user")
-	k.PutString(state.Field_Password, "pwd")
-	k.PutString(state.Field_Subject, "Greeting")
-	k.PutString(state.Field_From, "from@email.com")
-	k.PutString(state.Field_To, "to0@email.com")
-	k.PutString(state.Field_To, "to1@email.com")
-	k.PutString(state.Field_CC, "cc0@email.com")
-	k.PutString(state.Field_CC, "cc1@email.com")
-	k.PutString(state.Field_BCC, "bcc0@email.com")
-	k.PutString(state.Field_BCC, "bcc1@email.com")
-	k.PutString(state.Field_Body, "Hello world")
+	k.PutInt32(sys.Storage_SendMail_Field_Port, 1)
+	k.PutString(sys.Storage_SendMail_Field_Host, "localhost")
+	k.PutString(sys.Storage_SendMail_Field_Username, "user")
+	k.PutString(sys.Storage_SendMail_Field_Password, "pwd")
+	k.PutString(sys.Storage_SendMail_Field_Subject, "Greeting")
+	k.PutString(sys.Storage_SendMail_Field_From, "from@email.com")
+	k.PutString(sys.Storage_SendMail_Field_To, "to0@email.com")
+	k.PutString(sys.Storage_SendMail_Field_To, "to1@email.com")
+	k.PutString(sys.Storage_SendMail_Field_CC, "cc0@email.com")
+	k.PutString(sys.Storage_SendMail_Field_CC, "cc1@email.com")
+	k.PutString(sys.Storage_SendMail_Field_BCC, "bcc0@email.com")
+	k.PutString(sys.Storage_SendMail_Field_BCC, "bcc1@email.com")
+	k.PutString(sys.Storage_SendMail_Field_Body, "Hello world")
 
 	t.Run("basic usage", func(t *testing.T) {
-		require.Nil(s.NewValue(k))
+		require.NotNil(s.NewValue(k))
 		readyToFlush, err := s.ApplyIntents()
 		require.True(readyToFlush)
 		require.NoError(err)
@@ -269,7 +269,7 @@ func TestEmailExpectation(t *testing.T) {
 		vit.TearDown()
 		newT := &testing.T{}
 		vit = NewVIT(newT, &SharedConfig_App1)
-		require.Nil(s.NewValue(k))
+		require.NotNil(s.NewValue(k))
 		readyToFlush, err := s.ApplyIntents()
 		require.True(readyToFlush)
 		require.NoError(err)

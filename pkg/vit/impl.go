@@ -8,7 +8,9 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -17,7 +19,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/irates"
@@ -87,6 +89,14 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool) *VIT {
 		vvmCfg:  &cfg,
 		vitApps: vitApps{},
 	}
+
+	if useCas {
+		cfg.StorageFactory = func() (provider istorage.IAppStorageFactory, err error) {
+			logger.Info("using istoragecas ", fmt.Sprint(vvm.DefaultCasParams))
+			return cas.Provide(vvm.DefaultCasParams)
+		}
+	}
+
 	for _, opt := range vitCfg.opts {
 		opt(vitPreConfig)
 	}
@@ -99,13 +109,6 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool) *VIT {
 	cfg.RouterReadTimeout = int(debugTimeout)
 	cfg.RouterWriteTimeout = int(debugTimeout)
 	cfg.BusTimeout = vvm.BusTimeout(debugTimeout)
-
-	if useCas {
-		cfg.StorageFactory = func() (provider istorage.IAppStorageFactory, err error) {
-			logger.Info("using istoragecas ", fmt.Sprint(vvm.DefaultCasParams))
-			return cas.Provide(vvm.DefaultCasParams)
-		}
-	}
 
 	vvm, err := vvm.ProvideVVM(&cfg, 0)
 	require.NoError(t, err)
@@ -122,15 +125,18 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool) *VIT {
 		VoedgerVM:            vvm,
 		VVMConfig:            &cfg,
 		T:                    t,
-		appWorkspaces:        map[istructs.AppQName]map[string]*AppWorkspace{},
-		principals:           map[istructs.AppQName]map[string]*Principal{},
+		appWorkspaces:        map[appdef.AppQName]map[string]*AppWorkspace{},
+		principals:           map[appdef.AppQName]map[string]*Principal{},
 		lock:                 sync.Mutex{},
 		isOnSharedConfig:     vitCfg.isShared,
 		configCleanupsAmount: len(vitPreConfig.cleanups),
 		emailCaptor:          emailMessagesChan,
 	}
+	httpClient, httpClientCleanup := coreutils.NewIHTTPClient()
+	vit.httpClient = httpClient
 
 	vit.cleanups = append(vit.cleanups, vitPreConfig.cleanups...)
+	vit.cleanups = append(vit.cleanups, func(vit *VIT) { httpClientCleanup() })
 
 	// запустим сервер
 	require.NoError(t, vit.Launch())
@@ -154,7 +160,10 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool) *VIT {
 
 		// создадим логины и рабочие области
 		for _, login := range app.logins {
-			vit.SignUp(login.Name, login.Pwd, login.AppQName)
+			vit.SignUp(login.Name, login.Pwd, login.AppQName,
+				WithReqOpt(coreutils.WithExpectedCode(http.StatusOK)),
+				WithReqOpt(coreutils.WithExpectedCode(http.StatusConflict)),
+			)
 			prn := vit.SignIn(login)
 			appPrincipals, ok := vit.principals[app.name]
 			if !ok {
@@ -178,6 +187,7 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool) *VIT {
 			}
 		}
 
+		// time.Sleep(10 * time.Second)
 		sysToken, err := payloads.GetSystemPrincipalToken(vit, app.name)
 		require.NoError(vit.T, err)
 		for _, wsd := range app.ws {
@@ -187,7 +197,7 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool) *VIT {
 				appWorkspaces = map[string]*AppWorkspace{}
 				vit.appWorkspaces[app.name] = appWorkspaces
 			}
-			newAppWS := vit.CreateWorkspace(wsd, owner)
+			newAppWS := vit.CreateWorkspace(wsd, owner, coreutils.WithExpectedCode(http.StatusOK), coreutils.WithExpectedCode(http.StatusConflict))
 			newAppWS.childs = wsd.childs
 			newAppWS.docs = wsd.docs
 			newAppWS.subjects = wsd.subjects
@@ -195,6 +205,9 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool) *VIT {
 
 			handleWSParam(vit, appWorkspaces[wsd.Name], appWorkspaces, verifiedValues, sysToken)
 		}
+	}
+	if vitPreConfig.postInitFunc != nil {
+		vitPreConfig.postInitFunc(vit)
 	}
 	return vit
 }
@@ -222,7 +235,7 @@ func handleWSParam(vit *VIT, appWS *AppWorkspace, appWorkspaces map[string]*AppW
 			roles += role.String()
 		}
 		body := fmt.Sprintf(`{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"sys.Subject","Login":"%s","Roles":"%s","SubjectKind":%d,"ProfileWSID":%d}}]}`,
-			subject.login, roles, subject.subjectKind, vit.principals[appWS.GetAppQName()][subject.login].ProfileWSID)
+			subject.login, roles, subject.subjectKind, vit.principals[appWS.AppQName()][subject.login].ProfileWSID)
 		vit.PostWS(appWS, "c.sys.CUD", body, coreutils.WithAuthorizeBy(token))
 	}
 
@@ -234,7 +247,7 @@ func handleWSParam(vit *VIT, appWS *AppWorkspace, appWorkspaces map[string]*AppW
 		childAppWS.subjects = childWSParams.subjects
 		childAppWS.docs = childWSParams.docs
 		childAppWS.ownerLoginName = childWSParams.ownerLoginName
-		childAppWS.Owner = vit.GetPrincipal(appWS.GetAppQName(), childWSParams.ownerLoginName)
+		childAppWS.Owner = vit.GetPrincipal(appWS.AppQName(), childWSParams.ownerLoginName)
 		appWorkspaces[childWSParams.Name] = childAppWS
 		handleWSParam(vit, childAppWS, appWorkspaces, verifiedValues, token)
 	}
@@ -249,28 +262,7 @@ func NewVITLocalCassandra(tb testing.TB, vitCfg *VITConfig, opts ...vitOptFunc) 
 	return vit
 }
 
-// WSID as wsid[0] or 1, system owner
-// command processor will skip initialization check for that workspace
-func (vit *VIT) DummyWS(appQName istructs.AppQName, awsid ...istructs.WSID) *AppWorkspace {
-	wsid := istructs.WSID(1)
-	if len(awsid) > 0 {
-		wsid = awsid[0]
-	}
-	coreutils.AddDummyWS(wsid)
-	sysPrn := vit.GetSystemPrincipal(appQName)
-	return &AppWorkspace{
-		WorkspaceDescriptor: WorkspaceDescriptor{
-			WSParams: WSParams{
-				Kind:      appdef.NullQName,
-				ClusterID: istructs.MainClusterID,
-			},
-			WSID: wsid,
-		},
-		Owner: sysPrn,
-	}
-}
-
-func (vit *VIT) WS(appQName istructs.AppQName, wsName string) *AppWorkspace {
+func (vit *VIT) WS(appQName appdef.AppQName, wsName string) *AppWorkspace {
 	appWorkspaces, ok := vit.appWorkspaces[appQName]
 	if !ok {
 		panic("unknown app " + appQName.String())
@@ -304,7 +296,7 @@ func (vit *VIT) MetricsServicePort() int {
 	return int(vit.VoedgerVM.MetricsServicePort())
 }
 
-func (vit *VIT) GetSystemPrincipal(appQName istructs.AppQName) *Principal {
+func (vit *VIT) GetSystemPrincipal(appQName appdef.AppQName) *Principal {
 	vit.T.Helper()
 	vit.lock.Lock()
 	defer vit.lock.Unlock()
@@ -315,7 +307,7 @@ func (vit *VIT) GetSystemPrincipal(appQName istructs.AppQName) *Principal {
 	}
 	prn, ok := appPrincipals["___sys"]
 	if !ok {
-		as, err := vit.IAppStructsProvider.AppStructs(appQName)
+		as, err := vit.IAppStructsProvider.BuiltIn(appQName)
 		require.NoError(vit.T, err)
 		sysToken, err := payloads.GetSystemPrincipalTokenApp(as.AppTokens())
 		require.NoError(vit.T, err)
@@ -333,7 +325,7 @@ func (vit *VIT) GetSystemPrincipal(appQName istructs.AppQName) *Principal {
 	return prn
 }
 
-func (vit *VIT) GetPrincipal(appQName istructs.AppQName, login string) *Principal {
+func (vit *VIT) GetPrincipal(appQName appdef.AppQName, login string) *Principal {
 	vit.T.Helper()
 	appPrincipals, ok := vit.principals[appQName]
 	if !ok {
@@ -366,32 +358,64 @@ func (vit *VIT) PostWSSys(ws *AppWorkspace, funcName string, body string, opts .
 	return vit.PostApp(ws.Owner.AppQName, ws.WSID, funcName, body, opts...)
 }
 
-func (vit *VIT) PostFree(url string, body string, opts ...coreutils.ReqOptFunc) *coreutils.HTTPResponse {
+func (vit *VIT) UploadBLOB(appQName appdef.AppQName, wsid istructs.WSID, blobName string, blobMimeType string, blobContent []byte,
+	opts ...coreutils.ReqOptFunc) (blobID istructs.RecordID) {
+	vit.T.Helper()
+	blobReader := coreutils.BLOBReader{
+		BLOBDesc: coreutils.BLOBDesc{
+			Name:     blobName,
+			MimeType: blobMimeType,
+		},
+		ReadCloser: io.NopCloser(bytes.NewReader(blobContent)),
+	}
+	blobID, err := vit.IFederation.UploadBLOB(appQName, wsid, blobReader, opts...)
+	require.NoError(vit.T, err)
+	return blobID
+}
+
+func (vit *VIT) Func(url string, body string, opts ...coreutils.ReqOptFunc) *coreutils.FuncResponse {
+	vit.T.Helper()
+	res, err := vit.IFederation.Func(url, body, opts...)
+	require.NoError(vit.T, err)
+	return res
+}
+
+// blob ReadCloser must be read out by the test
+// will be closed by the VIT
+func (vit *VIT) ReadBLOB(appQName appdef.AppQName, wsid istructs.WSID, blobID istructs.RecordID, optFuncs ...coreutils.ReqOptFunc) coreutils.BLOBReader {
+	vit.T.Helper()
+	reader, err := vit.IFederation.ReadBLOB(appQName, wsid, blobID, optFuncs...)
+	require.NoError(vit.T, err)
+	vit.cleanups = append(vit.cleanups, func(vit *VIT) {
+		if reader.ReadCloser != nil {
+			buf := make([]byte, 1)
+			_, err := reader.Read(buf)
+			if errors.Is(err, io.EOF) {
+				return
+			}
+			require.NoError(vit.T, err)
+			_, err = io.Copy(io.Discard, reader)
+			require.NoError(vit.T, err)
+			defer reader.Close()
+			vit.T.Fatal("BLOB reader is not read out")
+		}
+	})
+	return reader
+}
+
+func (vit *VIT) POST(relativeURL string, body string, opts ...coreutils.ReqOptFunc) *coreutils.HTTPResponse {
 	vit.T.Helper()
 	opts = append(opts, coreutils.WithMethod(http.MethodPost))
-	res, err := coreutils.Req(url, body, opts...)
+	url := vit.IFederation.URLStr() + "/" + relativeURL
+	res, err := vit.httpClient.Req(url, body, opts...)
 	require.NoError(vit.T, err)
 	return res
 }
 
-func (vit *VIT) Post(url string, body string, opts ...coreutils.ReqOptFunc) *coreutils.HTTPResponse {
-	vit.T.Helper()
-	res, err := coreutils.FederationPOST(vit.IFederation.URL(), url, body, opts...)
-	require.NoError(vit.T, err)
-	return res
-}
-
-func (vit *VIT) PostApp(appQName istructs.AppQName, wsid istructs.WSID, funcName string, body string, opts ...coreutils.ReqOptFunc) *coreutils.FuncResponse {
+func (vit *VIT) PostApp(appQName appdef.AppQName, wsid istructs.WSID, funcName string, body string, opts ...coreutils.ReqOptFunc) *coreutils.FuncResponse {
 	vit.T.Helper()
 	url := fmt.Sprintf("api/%s/%d/%s", appQName, wsid, funcName)
-	res, err := coreutils.FederationFunc(vit.IFederation.URL(), url, body, opts...)
-	require.NoError(vit.T, err)
-	return res
-}
-
-func (vit *VIT) Get(url string, opts ...coreutils.ReqOptFunc) *coreutils.HTTPResponse {
-	vit.T.Helper()
-	res, err := coreutils.FederationReq(vit.IFederation.URL(), url, "", opts...)
+	res, err := vit.IFederation.Func(url, body, opts...)
 	require.NoError(vit.T, err)
 	return res
 }
@@ -421,7 +445,7 @@ func (vit *VIT) refreshTokens() {
 				SubjectKind: istructs.SubjectKind_User,
 				ProfileWSID: prn.ProfileWSID,
 			}
-			as, err := vit.IAppStructsProvider.AppStructs(prn.AppQName)
+			as, err := vit.IAppStructsProvider.BuiltIn(prn.AppQName)
 			require.NoError(vit.T, err) // notest
 			newToken, err := as.AppTokens().IssueToken(authnz.DefaultPrincipalTokenExpiration, &principalPayload)
 			require.NoError(vit.T, err)
@@ -458,9 +482,9 @@ func (vit *VIT) NextName() string {
 
 // sets `bs` as state of Buckets for `rateLimitName` in `appQName`
 // will be automatically restored on vit.TearDown() to the state the Bucket was before MockBuckets() call
-func (vit *VIT) MockBuckets(appQName istructs.AppQName, rateLimitName string, bs irates.BucketState) {
+func (vit *VIT) MockBuckets(appQName appdef.AppQName, rateLimitName string, bs irates.BucketState) {
 	vit.T.Helper()
-	as, err := vit.IAppStructsProvider.AppStructs(appQName)
+	as, err := vit.IAppStructsProvider.BuiltIn(appQName)
 	require.NoError(vit.T, err)
 	appBuckets := istructsmem.IBucketsFromIAppStructs(as)
 	initialState, err := appBuckets.GetDefaultBucketsState(rateLimitName)
@@ -478,7 +502,7 @@ func (vit *VIT) MockBuckets(appQName istructs.AppQName, rateLimitName string, bs
 // an email was sent but CaptureEmail is not called -> test will be failed on VIT.TearDown()
 func (vit *VIT) CaptureEmail() (msg smtptest.Message) {
 	vit.T.Helper()
-	tmr := time.NewTimer(testEmailsAwaitingTimeout)
+	tmr := time.NewTimer(getTestEmailsAwaitingTimeout())
 	select {
 	case msg = <-vit.emailCaptor:
 		return msg
@@ -486,6 +510,10 @@ func (vit *VIT) CaptureEmail() (msg smtptest.Message) {
 		vit.T.Fatal("no email messages")
 	}
 	return
+}
+
+func (vit *VIT) Restart() {
+	vit.VoedgerVM.Shutdown()
 }
 
 // sets delay on IAppStorage.Get() in mem implementation
@@ -515,7 +543,7 @@ func (vit *VIT) SetMemStoragePutDelay(delay time.Duration) {
 func (vit *VIT) iterateDelaySetters(cb func(delaySetter istorage.IStorageDelaySetter)) {
 	vit.T.Helper()
 	for anyAppQName := range vit.VVMAppsBuilder {
-		as, err := vit.AppStorage(anyAppQName)
+		as, err := vit.IAppStorageProvider.AppStorage(anyAppQName)
 		require.NoError(vit.T, err)
 		delaySetter, ok := as.(istorage.IStorageDelaySetter)
 		if !ok {
@@ -542,19 +570,6 @@ func (ts *timeService) setCurrentInstant(now time.Time) {
 	ts.m.Lock()
 	ts.currentInstant = now
 	ts.m.Unlock()
-}
-
-func ScanSSE(data []byte, atEOF bool) (advance int, token []byte, err error) {
-	if atEOF && len(data) == 0 {
-		return 0, nil, nil
-	}
-	if i := bytes.Index(data, []byte("\n\n")); i >= 0 {
-		return i + 2, data[0:i], nil
-	}
-	if atEOF {
-		return len(data), data, nil
-	}
-	return 0, nil, nil
 }
 
 func (ec emailCaptor) checkEmpty(t testing.TB) {

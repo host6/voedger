@@ -8,14 +8,14 @@ package routerapp
 import (
 	"embed"
 
-	"github.com/voedger/voedger/pkg/cluster"
+	"github.com/voedger/voedger/pkg/appparts"
 )
 
-//go:embed schema.sql
+//go:embed schema.vsql
 var routerAppSchemaFS embed.FS
 
 const RouterAppFQN = "github.com/voedger/voedger/pkg/apps/sys/routerapp"
 
 const DefDeploymentPartsCount = 10
 
-var DefDeploymentEnginePoolSize = cluster.PoolSize(0, 0, 10)
+var DefDeploymentEnginePoolSize = appparts.PoolSize(0, 0, 10, 1)

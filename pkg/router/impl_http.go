@@ -8,6 +8,7 @@ package router
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -17,7 +18,8 @@ import (
 	"time"
 
 	"github.com/gorilla/mux"
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"golang.org/x/net/netutil"
 
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
@@ -36,11 +38,11 @@ func (s *httpsService) Prepare(work interface{}) error {
 }
 
 func (s *httpsService) Run(ctx context.Context) {
-	log.Printf("Starting HTTPS server on %s\n", s.server.Addr)
-	logger.Info("HTTPS server Write Timeout: ", s.server.WriteTimeout)
-	logger.Info("HTTPS server Read Timeout: ", s.server.ReadTimeout)
+	s.log("starting on %s", s.server.Addr)
+	s.log("write timeout: %d", s.server.WriteTimeout)
+	s.log("read timeout: %d", s.server.ReadTimeout)
 	if err := s.server.ServeTLS(s.listener, "", ""); err != http.ErrServerClosed {
-		log.Fatalf("Service.ServeTLS() failure: %s", err)
+		s.log("ServeTLS() error: %s", err.Error())
 	}
 }
 
@@ -51,20 +53,22 @@ func (s *httpService) Prepare(work interface{}) (err error) {
 	// https://dev.untill.com/projects/#!627072
 	s.router.SkipClean(true)
 
-	if err = s.registerHandlers(s.busTimeout, s.appsWSAmount); err != nil {
+	if err = s.registerHandlers(s.busTimeout, s.numsAppsWorkspaces); err != nil {
 		return err
 	}
 
-	if s.listener, err = net.Listen("tcp", coreutils.ServerAddress(s.RouterParams.Port)); err != nil {
+	if s.listener, err = net.Listen("tcp", s.listenAddress); err != nil {
 		return err
 	}
+
+	s.listeningPort.Store(int32(s.listener.Addr().(*net.TCPAddr).Port))
 
 	if s.RouterParams.ConnectionsLimit > 0 {
 		s.listener = netutil.LimitListener(s.listener, s.RouterParams.ConnectionsLimit)
 	}
 
 	s.server = &http.Server{
-		Addr:         coreutils.ServerAddress(s.RouterParams.Port),
+		Addr:         s.listenAddress,
 		Handler:      s.router,
 		ReadTimeout:  time.Duration(s.RouterParams.ReadTimeout) * time.Second,
 		WriteTimeout: time.Duration(s.RouterParams.WriteTimeout) * time.Second,
@@ -78,10 +82,14 @@ func (s *httpService) Run(ctx context.Context) {
 	s.server.BaseContext = func(l net.Listener) context.Context {
 		return ctx // need to track both client disconnect and app finalize
 	}
-	logger.Info("Starting HTTP server on", s.listener.Addr().(*net.TCPAddr).String())
+	s.log("starting on %s", s.listener.Addr().(*net.TCPAddr).String())
 	if err := s.server.Serve(s.listener); err != http.ErrServerClosed {
-		log.Println("main HTTP server failure: " + err.Error())
+		s.log("Serve() error: %s", err.Error())
 	}
+}
+
+func (s *httpService) log(format string, args ...interface{}) {
+	logger.Info(fmt.Sprintf("%s: %s", s.name, fmt.Sprintf(format, args...)))
 }
 
 // pipeline.IService
@@ -89,7 +97,7 @@ func (s *httpService) Stop() {
 	// ctx here is used to avoid eternal waiting for close idle connections and listeners
 	// all connections and listeners are closed in the explicit way (they're tracks ctx.Done()) so it is not necessary to track ctx here
 	if err := s.server.Shutdown(context.Background()); err != nil {
-		log.Println("http server Shutdown() failed: " + err.Error())
+		s.log("Shutdown() failed: %s", err.Error())
 		s.listener.Close()
 		s.server.Close()
 	}
@@ -102,10 +110,14 @@ func (s *httpService) Stop() {
 }
 
 func (s *httpService) GetPort() int {
-	return s.listener.Addr().(*net.TCPAddr).Port
+	port := s.listeningPort.Load()
+	if port == 0 {
+		panic("listener is not listening. Need to call http funcs before public service is started -> use IFederation.AdminFunc()")
+	}
+	return int(port)
 }
 
-func (s *httpService) registerHandlers(busTimeout time.Duration, appsWSAmount map[istructs.AppQName]istructs.AppWSAmount) (err error) {
+func (s *httpService) registerHandlers(busTimeout time.Duration, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) (err error) {
 	redirectMatcher, err := s.getRedirectMatcher()
 	if err != nil {
 		return err
@@ -125,7 +137,7 @@ func (s *httpService) registerHandlers(busTimeout time.Duration, appsWSAmount ma
 			Name("blob read")
 	}
 	s.router.HandleFunc(fmt.Sprintf("/api/{%s}/{%s}/{%s:[0-9]+}/{%s:[a-zA-Z0-9_/.]+}", AppOwner, AppName,
-		WSID, ResourceName), corsHandler(RequestHandler(s.bus, busTimeout, appsWSAmount))).
+		WSID, ResourceName), corsHandler(RequestHandler(s.bus, busTimeout, numsAppsWorkspaces))).
 		Methods("POST", "PATCH", "OPTIONS").Name("api")
 
 	s.router.Handle("/n10n/channel", corsHandler(s.subscribeAndWatchHandler())).Methods("GET")
@@ -150,10 +162,10 @@ func (s *httpService) registerHandlers(busTimeout time.Duration, appsWSAmount ma
 	return nil
 }
 
-func RequestHandler(bus ibus.IBus, busTimeout time.Duration, appsWSAmount map[istructs.AppQName]istructs.AppWSAmount) http.HandlerFunc {
+func RequestHandler(bus ibus.IBus, busTimeout time.Duration, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) http.HandlerFunc {
 	return func(resp http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
-		queueRequest, ok := createRequest(req.Method, req, resp, appsWSAmount)
+		queueRequest, ok := createRequest(req.Method, req, resp, numsAppsWorkspaces)
 		if !ok {
 			return
 		}
@@ -169,7 +181,11 @@ func RequestHandler(bus ibus.IBus, busTimeout time.Duration, appsWSAmount map[is
 		res, sections, secErr, err := bus.SendRequest2(requestCtx, queueRequest, busTimeout)
 		if err != nil {
 			logger.Error("IBus.SendRequest2 failed on ", queueRequest.Resource, ":", err, ". Body:\n", string(queueRequest.Body))
-			WriteTextResponse(resp, err.Error(), http.StatusInternalServerError)
+			status := http.StatusInternalServerError
+			if errors.Is(err, ibus.ErrBusTimeoutExpired) {
+				status = http.StatusServiceUnavailable
+			}
+			WriteTextResponse(resp, err.Error(), status)
 			return
 		}
 

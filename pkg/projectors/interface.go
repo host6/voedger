@@ -15,22 +15,29 @@ import (
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/itokens"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/utils/federation"
 )
 
 type TimeAfterFunc func(d time.Duration) <-chan time.Time
 
 type LogErrorFunc func(args ...interface{})
 
-type AsyncActualizerConf struct {
-	Ctx           context.Context
-	AppQName      istructs.AppQName
+type BasicAsyncActualizerConfig struct {
+	VvmName string
+
 	AppPartitions appparts.IAppPartitions
-	AppStructs    AppStructsFunc
 	SecretReader  isecrets.ISecretReader
-	Partition     istructs.PartitionID
+	Tokens        itokens.ITokens
+	Metrics       imetrics.IMetrics
+	Broker        in10n.IN10nBroker
+	Federation    federation.IFederation
+
+	Opts []state.StateOptFunc
+
 	// Optional. Default value: `time.After`
 	AfterError TimeAfterFunc
 	// Optional. Default value: `core-logger.Error`
@@ -43,18 +50,23 @@ type AsyncActualizerConf struct {
 	BundlesLimit int
 	//FlushInterval specifies how often the current actualizer flushes changes to underlying storage, optional, default value is 100 milliseconds
 	FlushInterval time.Duration
-	// FlushPositionInterval specifies how often actializer must save it's position, even when no events has been processed by actualizer. Default is 1 minute
+	// FlushPositionInterval specifies how often actualizer must save it's position, even when no events has been processed by actualizer. Default is 1 minute
 	FlushPositionInterval time.Duration
-
-	VvmName string
-	Metrics imetrics.IMetrics
-
-	Broker  in10n.IN10nBroker
-	channel in10n.ChannelID
-	Opts    []state.ActualizerStateOptFunc
 }
 
-type AppStructsFunc func() istructs.IAppStructs
+type IActualizersService interface {
+	pipeline.IServiceEx
+	appparts.IProcessorRunner
+}
+
+type AsyncActualizerConf struct {
+	BasicAsyncActualizerConfig
+
+	AppQName  appdef.AppQName
+	Partition istructs.PartitionID
+
+	channel in10n.ChannelID
+}
 
 type AsyncActualizerMetrics interface {
 	Increase(metricName string, partition istructs.PartitionID, projection appdef.QName, valueDelta float64)
@@ -63,7 +75,7 @@ type AsyncActualizerMetrics interface {
 
 type SyncActualizerConf struct {
 	Ctx          context.Context
-	AppStructs   AppStructsFunc
+	AppStructs   state.AppStructsFunc
 	SecretReader isecrets.ISecretReader
 	Partition    istructs.PartitionID
 	// Fork responsible for cloning work
@@ -76,10 +88,6 @@ type SyncActualizerConf struct {
 type ViewTypeBuilder func(builder appdef.IViewBuilder)
 
 type WorkToEventFunc func(work interface{}) istructs.IPLogEvent
-
-// AsyncActualizerFactory returns the ServiceOperator<AsyncActualizer>
-// workpiece must implement projectors.IAsyncActualizerWork
-type AsyncActualizerFactory func(conf AsyncActualizerConf, projection istructs.Projector) (pipeline.ISyncOperator, error)
 
 // SyncActualizerFactory returns the Operator<SyncActualizer>
 // Workpiece is ...?

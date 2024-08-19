@@ -9,13 +9,14 @@ import (
 	"regexp"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/voedger/voedger/pkg/goutils/testingu/require"
 )
 
 func TestAddView(t *testing.T) {
 	require := require.New(t)
 
 	adb := New()
+	adb.AddPackage("test", "test.com/test")
 
 	numName := NewQName("test", "natural")
 	_ = adb.AddData(numName, DataKind_int64, NullQName, MinExcl(0))
@@ -43,22 +44,22 @@ func TestAddView(t *testing.T) {
 			t.Run("panic if field already exists in view", func(t *testing.T) {
 				require.Panics(func() {
 					vb.Key().PartKey().AddField("pkF1", DataKind_int64)
-				})
+				}, require.Is(ErrAlreadyExistsError), require.Has("pkF1"))
 			})
 
 			t.Run("panic if variable length field added to pk", func(t *testing.T) {
 				require.Panics(func() {
 					vb.Key().PartKey().AddField("pkF3", DataKind_string)
-				})
+				}, require.Is(ErrUnsupportedError), require.Has("pkF3"))
 				require.Panics(func() {
 					vb.Key().PartKey().AddDataField("pkF3", digsData)
-				})
+				}, require.Is(ErrUnsupportedError), require.Has("pkF3"))
 			})
 
 			t.Run("panic if unknown data type field added to pk", func(t *testing.T) {
 				require.Panics(func() {
 					vb.Key().PartKey().AddDataField("pkF3", NewQName("test", "unknown"))
-				})
+				}, require.Is(ErrNotFoundError), require.Has("test.unknown"))
 			})
 		})
 
@@ -69,13 +70,13 @@ func TestAddView(t *testing.T) {
 			t.Run("panic if field already exists in view", func(t *testing.T) {
 				require.Panics(func() {
 					vb.Key().ClustCols().AddField("ccF1", DataKind_int64)
-				})
+				}, require.Is(ErrAlreadyExistsError), require.Has("ccF1"))
 			})
 
 			t.Run("panic if unknown data type field added to cc", func(t *testing.T) {
 				require.Panics(func() {
 					vb.Key().ClustCols().AddDataField("ccF3", NewQName("test", "unknown"))
-				})
+				}, require.Is(ErrNotFoundError), require.Has("test.unknown"))
 			})
 		})
 
@@ -273,10 +274,10 @@ func TestAddView(t *testing.T) {
 		t.Run("panic if add second variable length field", func(t *testing.T) {
 			require.Panics(func() {
 				vb.Key().ClustCols().AddField("ccF3_1", DataKind_bytes)
-			})
+			}, require.Is(ErrUnsupportedError), require.Has("ccF3"))
 			require.Panics(func() {
 				vb.Key().ClustCols().AddDataField("ccF3_1", kbName)
-			})
+			}, require.Is(ErrUnsupportedError), require.Has("ccF3"))
 		})
 
 		vb.Value().
@@ -349,24 +350,27 @@ func TestAddView(t *testing.T) {
 func TestViewValidate(t *testing.T) {
 	require := require.New(t)
 
-	app := New()
 	viewName := NewQName("test", "view")
-	v := app.AddView(viewName)
+
+	adb := New()
+	adb.AddPackage("test", "test.com/test")
+
+	v := adb.AddView(viewName)
 	require.NotNil(v)
 
 	t.Run("must be error if no pkey fields", func(t *testing.T) {
-		_, err := app.Build()
-		require.ErrorIs(err, ErrFieldsMissed)
+		_, err := adb.Build()
+		require.ErrorIs(err, ErrMissedError)
 	})
 
 	v.Key().PartKey().AddField("pk1", DataKind_bool)
 
 	t.Run("must be error if no ccols fields", func(t *testing.T) {
-		_, err := app.Build()
-		require.ErrorIs(err, ErrFieldsMissed)
+		_, err := adb.Build()
+		require.ErrorIs(err, ErrMissedError)
 	})
 
 	v.Key().ClustCols().AddField("cc1", DataKind_string, MaxLen(100))
-	_, err := app.Build()
+	_, err := adb.Build()
 	require.NoError(err)
 }

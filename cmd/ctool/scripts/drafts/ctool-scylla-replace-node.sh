@@ -54,7 +54,7 @@ if [ -n "${4+x}" ] && [ -n "$4" ]; then
     DC=""
 fi
 
-REPLACED_NODE_NAME=$(getent hosts "$2" | awk '{print $2}')
+REPLACED_NODE_NAME=$(grep "$2" /etc/hosts | grep db-node | awk '{print $2}')
 ssh-keyscan -p "$(utils_SSH_PORT)" -H "$REPLACED_NODE_NAME" >> ~/.ssh/known_hosts
 
 # Function to check if Scylla server is up and listening
@@ -131,10 +131,11 @@ wait_for_scylla() {
   fi
 }
 
-./docker-install.sh "$2"
+#./docker-install.sh "$2"
 ./swarm-add-node.sh "$MANAGER" "$2"
-./db-bootstrap-prepare.sh "$1" "$2"
 ./swarm-rm-node.sh "$MANAGER" "$1"
+./db-node-prepare.sh "$2" "$DC"
+./db-bootstrap-prepare.sh "$1" "$2"
 
 seed_list() {
   local node=$1

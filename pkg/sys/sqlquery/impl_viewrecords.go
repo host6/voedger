@@ -17,8 +17,7 @@ import (
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
-func readViewRecords(ctx context.Context, wsid istructs.WSID, viewRecordQName appdef.QName, expr sqlparser.Expr, appStructs istructs.IAppStructs, f *filter, callback istructs.ExecQueryCallback,
-	iws appdef.IWorkspace) error {
+func readViewRecords(ctx context.Context, wsid istructs.WSID, viewRecordQName appdef.QName, expr sqlparser.Expr, appStructs istructs.IAppStructs, f *filter, callback istructs.ExecQueryCallback) error {
 	view := appStructs.AppDef().View(viewRecordQName)
 
 	if !f.acceptAll {
@@ -97,6 +96,7 @@ func readViewRecords(ctx context.Context, wsid istructs.WSID, viewRecordQName ap
 		case appdef.DataKind_RecordID:
 			v, e := strconv.ParseFloat(string(k.value), bitSize64)
 			if e != nil {
+				// notest: avoided already by sqlparser
 				return e
 			}
 			kb.PutNumber(k.name, v)

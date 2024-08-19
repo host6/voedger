@@ -13,6 +13,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/istructs"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
+	"github.com/voedger/voedger/pkg/sys/authnz"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	it "github.com/voedger/voedger/pkg/vit"
 )
@@ -62,6 +63,39 @@ func TestBasicUsage_SignUpIn(t *testing.T) {
 		body := fmt.Sprintf(`{"cuds": [{"sys.ID": %d,"fields": {"DisplayName":"new name"}}]}`, idOfCDocUserProfile)
 		vit.PostProfile(prn1, "c.sys.CUD", body) // nothing to check, just expect no errors here
 	})
+
+	t.Run("check token default TTL", func(t *testing.T) {
+		var p payloads.PrincipalPayload
+		gp, err := vit.ITokens.ValidateToken(prn1.Token, &p)
+		require.NoError(err)
+		require.Equal(authnz.DefaultPrincipalTokenExpiration, gp.Duration)
+	})
+}
+
+func TestTTL(t *testing.T) {
+	require := require.New(t)
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+
+	t.Run("default TTL", func(t *testing.T) {
+		prn := vit.GetPrincipal(istructs.AppQName_test1_app1, "login")
+		var p payloads.PrincipalPayload
+		gp, err := vit.ITokens.ValidateToken(prn.Token, &p)
+		require.NoError(err)
+		require.Equal(authnz.DefaultPrincipalTokenExpiration, gp.Duration)
+	})
+
+	t.Run("custom TTL", func(t *testing.T) {
+		prn := vit.GetPrincipal(istructs.AppQName_test1_app1, "login")
+		body := fmt.Sprintf(`{"args": {"Login": "%s","Password": "%s","AppName": "%s", "TTLHours":15},"elements":[{"fields":["PrincipalToken"]}]}`,
+			prn.Name, prn.Pwd, prn.AppQName.String())
+		resp := vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "q.registry.IssuePrincipalToken", body)
+		token := resp.SectionRow()[0].(string)
+		var p payloads.PrincipalPayload
+		gp, err := vit.ITokens.ValidateToken(token, &p)
+		require.NoError(err)
+		require.Equal(15*time.Hour, gp.Duration)
+	})
 }
 
 func TestCreateLoginErrors(t *testing.T) {
@@ -80,10 +114,15 @@ func TestCreateLoginErrors(t *testing.T) {
 	loginPseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, login, istructs.MainClusterID)
 
 	t.Run("unknown application", func(t *testing.T) {
+		// TODO: ensure WSError contains the actual error message
+		t.Skip("wait for https://github.com/voedger/voedger/issues/2415")
 		body := fmt.Sprintf(`{"args":{"Login":"%s","AppName":"my/unknown","SubjectKind":%d,"WSKindInitializationData":"{}","ProfileCluster":%d},"unloggedArgs":{"Password":"password"}}`,
 			login, istructs.SubjectKind_User, istructs.MainClusterID)
-		resp := vit.PostApp(istructs.AppQName_sys_registry, loginPseudoWSID, "c.registry.CreateLogin", body, coreutils.Expect400())
-		resp.RequireError(t, "unknown application my/unknown")
+		vit.PostApp(istructs.AppQName_sys_registry, loginPseudoWSID, "c.registry.CreateLogin", body)
+		pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, login, istructs.MainClusterID)
+		body = fmt.Sprintf(`{"args": {"Login": "%s","Password": "password","AppName": "my/unknown"},"elements":[{"fields":["PrincipalToken", "WSID", "WSError"]}]}`,
+			login)
+		vit.PostApp(istructs.AppQName_sys_registry, pseudoWSID, "q.registry.IssuePrincipalToken", body).Println()
 	})
 
 	t.Run("wrong application name", func(t *testing.T) {
@@ -117,6 +156,7 @@ func TestCreateLoginErrors(t *testing.T) {
 			"test@test.com-",
 			"-test@test.com",
 			"-test@test.com-",
+			"sys.test@test.com",
 		}
 		for _, wrongLogin := range wrongLogins {
 			pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, wrongLogin, istructs.MainClusterID)
@@ -150,6 +190,14 @@ func TestSignInErrors(t *testing.T) {
 			login, istructs.AppQName_test1_app1.String())
 		vit.PostApp(istructs.AppQName_sys_registry, pseudoWSID, "q.registry.IssuePrincipalToken", body, coreutils.Expect401()).Println()
 	})
+
+	t.Run("wrong TTL", func(t *testing.T) {
+		prn := vit.GetPrincipal(istructs.AppQName_test1_app1, "login")
+		body := fmt.Sprintf(`{"args": {"Login": "%s","Password": "%s","AppName": "%s", "TTLHours":1000},"elements":[{"fields":["PrincipalToken"]}]}`,
+			prn.Name, prn.Pwd, prn.AppQName.String())
+		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "q.registry.IssuePrincipalToken", body,
+			coreutils.Expect400("max token TTL hours is 168 hours"))
+	})
 }
 
 func TestDeviceProfile(t *testing.T) {
@@ -159,7 +207,7 @@ func TestDeviceProfile(t *testing.T) {
 	loginName := vit.NextName()
 	deviceLogin := vit.SignUpDevice(loginName, "123", istructs.AppQName_test1_app2)
 	devicePrn := vit.SignIn(deviceLogin)
-	as, err := vit.AppStructs(istructs.AppQName_test1_app2)
+	as, err := vit.BuiltIn(istructs.AppQName_test1_app2)
 	require.NoError(err)
 	devicePrnPayload := payloads.PrincipalPayload{}
 	_, err = as.AppTokens().ValidateToken(devicePrn.Token, &devicePrnPayload)

@@ -6,8 +6,6 @@
 package main
 
 import (
-	"os"
-
 	"github.com/spf13/cobra"
 )
 
@@ -15,42 +13,31 @@ import (
 func newAcmeCmd() *cobra.Command {
 	acmeAddCmd := &cobra.Command{
 		Use:   "add [<domain1,domain2...>]",
-		Short: "Adds one or more domains to the acme domain list",
+		Short: "Add one or more domains to the ACME domain list",
 		Args:  cobra.ExactArgs(1),
 		RunE:  acmeAdd,
 	}
 
-	acmeAddCmd.PersistentFlags().StringVar(&sshKey, "ssh-key", "", "Path to SSH key")
-	value, exists := os.LookupEnv(envVoedgerSshKey)
-	if !exists || value == "" {
-		if err := acmeAddCmd.MarkPersistentFlagRequired("ssh-key"); err != nil {
-			loggerError(err.Error())
-			return nil
-		}
-	}
 	acmeListCmd := &cobra.Command{
 		Use:   "list",
-		Short: "Displaying a list of ACME domains",
+		Short: "Display the list of ACME domains",
 		RunE:  acmeList,
 	}
 
 	acmeRemoveCmd := &cobra.Command{
 		Use:   "remove [<domain1,domain2...>]",
-		Short: "Removes one or more domains from the acme domain list",
+		Short: "Remove one or more domains from the ACME domain list",
 		Args:  cobra.ExactArgs(1),
 		RunE:  acmeRemove,
 	}
-	acmeRemoveCmd.PersistentFlags().StringVar(&sshKey, "ssh-key", "", "Path to SSH key")
 
-	if !exists || value == "" {
-		if err := acmeRemoveCmd.MarkPersistentFlagRequired("ssh-key"); err != nil {
-			loggerError(err.Error())
-			return nil
-		}
-	}
 	acmeCmd := &cobra.Command{
 		Use:   "acme",
-		Short: "ACME settings",
+		Short: "Manage ACME settings",
+	}
+
+	if newCluster().Edition != clusterEditionCE && !addSshKeyFlag(acmeAddCmd, acmeRemoveCmd) {
+		return nil
 	}
 
 	acmeCmd.AddCommand(acmeAddCmd, acmeListCmd, acmeRemoveCmd)
@@ -62,7 +49,12 @@ func newAcmeCmd() *cobra.Command {
 func acmeAdd(cmd *cobra.Command, args []string) error {
 	cluster := newCluster()
 
-	if !cluster.clusterConfigFileExists() {
+	exists, err := cluster.clusterConfigFileExists()
+	if err != nil {
+		// notest
+		return err
+	}
+	if !exists {
 		return ErrClusterConfNotFound
 	}
 
@@ -94,7 +86,12 @@ func acmeAdd(cmd *cobra.Command, args []string) error {
 func acmeRemove(cmd *cobra.Command, args []string) error {
 	cluster := newCluster()
 
-	if !cluster.clusterConfigFileExists() {
+	exists, err := cluster.clusterConfigFileExists()
+	if err != nil {
+		// notest
+		return err
+	}
+	if !exists {
 		return ErrClusterConfNotFound
 	}
 
@@ -126,7 +123,12 @@ func acmeRemove(cmd *cobra.Command, args []string) error {
 func acmeList(cmd *cobra.Command, args []string) error {
 	cluster := newCluster()
 
-	if !cluster.clusterConfigFileExists() {
+	exists, err := cluster.clusterConfigFileExists()
+	if err != nil {
+		// notest
+		return err
+	}
+	if !exists {
 		return ErrClusterConfNotFound
 	}
 

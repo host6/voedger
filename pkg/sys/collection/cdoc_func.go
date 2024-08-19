@@ -15,76 +15,76 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	istructsmem "github.com/voedger/voedger/pkg/istructsmem"
-	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
-func provideQryCDoc(cfg *istructsmem.AppConfigType) {
-	cfg.Resources.Add(istructsmem.NewQueryFunction(
+func provideQryCDoc(sr istructsmem.IStatelessResources) {
+	sr.AddQueries(appdef.SysPackagePath, istructsmem.NewQueryFunction(
 		qNameQueryGetCDoc,
-		provideExecQryCDoc(cfg.AppDef)))
+		execQryCDoc),
+	)
 }
 
-func provideExecQryCDoc(appDef appdef.IAppDef) istructsmem.ExecQueryClosure {
-	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
-		rkb, err := args.State.KeyBuilder(state.Record, appdef.NullQName)
-		if err != nil {
-			return
-		}
-		rkb.PutRecordID(state.Field_ID, istructs.RecordID(args.ArgumentObject.AsInt64(field_ID)))
-		rsv, err := args.State.MustExist(rkb)
-		if err != nil {
-			return
-		}
-
-		vrkb, err := args.State.KeyBuilder(state.View, QNameCollectionView)
-		if err != nil {
-			return
-		}
-		vrkb.PutQName(Field_DocQName, rsv.AsQName(appdef.SystemField_QName))
-		vrkb.PutInt32(Field_PartKey, PartitionKeyCollection)
-		vrkb.PutRecordID(field_DocID, rsv.AsRecordID(appdef.SystemField_ID))
-
-		var doc *collectionObject
-
-		// build tree
-		err = args.State.Read(vrkb, func(key istructs.IKey, value istructs.IStateValue) (err error) {
-			rec := value.AsRecord(Field_Record)
-			if doc == nil {
-				cobj := newCollectionObject(rec)
-				doc = cobj
-			} else {
-				doc.addRawRecord(rec)
-			}
-			return
-		})
-		if err != nil {
-			return
-		}
-
-		if doc == nil {
-			return coreutils.NewHTTPErrorf(http.StatusNotFound, "Document not found")
-		}
-
-		doc.handleRawRecords()
-
-		var bytes []byte
-		var obj map[string]interface{}
-		refs := make(map[istructs.RecordID]bool)
-		obj, err = convert(doc, appDef, refs, istructs.NullRecordID)
-		if err != nil {
-			return
-		}
-		err = addRefs(obj, refs, args.State, appDef)
-		if err != nil {
-			return
-		}
-		bytes, err = marshal(obj)
-		if err != nil {
-			return
-		}
-		return callback(&cdocObject{data: string(bytes)})
+func execQryCDoc(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
+	rkb, err := args.State.KeyBuilder(sys.Storage_Record, appdef.NullQName)
+	if err != nil {
+		return
 	}
+	rkb.PutRecordID(sys.Storage_Record_Field_ID, istructs.RecordID(args.ArgumentObject.AsInt64(field_ID)))
+	rsv, err := args.State.MustExist(rkb)
+	if err != nil {
+		return
+	}
+
+	vrkb, err := args.State.KeyBuilder(sys.Storage_View, QNameCollectionView)
+	if err != nil {
+		return
+	}
+	vrkb.PutQName(Field_DocQName, rsv.AsQName(appdef.SystemField_QName))
+	vrkb.PutInt32(Field_PartKey, PartitionKeyCollection)
+	vrkb.PutRecordID(field_DocID, rsv.AsRecordID(appdef.SystemField_ID))
+
+	var doc *collectionObject
+
+	// build tree
+	err = args.State.Read(vrkb, func(key istructs.IKey, value istructs.IStateValue) (err error) {
+		rec := value.AsRecord(Field_Record)
+		if doc == nil {
+			cobj := newCollectionObject(rec)
+			doc = cobj
+		} else {
+			doc.addRawRecord(rec)
+		}
+		return
+	})
+	if err != nil {
+		return
+	}
+
+	if doc == nil {
+		return coreutils.NewHTTPErrorf(http.StatusNotFound, "Document not found")
+	}
+
+	doc.handleRawRecords()
+
+	var bytes []byte
+	var obj map[string]interface{}
+	refs := make(map[istructs.RecordID]bool)
+	appDef := args.State.AppStructs().AppDef()
+	obj, err = convert(doc, appDef, refs, istructs.NullRecordID)
+	if err != nil {
+		return
+	}
+	err = addRefs(obj, refs, args.State, appDef)
+	if err != nil {
+		return
+	}
+	bytes, err = marshal(obj)
+	if err != nil {
+		return
+	}
+	return callback(&cdocObject{data: string(bytes)})
 }
 
 func convert(doc istructs.IObject, appDef appdef.IAppDef, refs map[istructs.RecordID]bool, parent istructs.RecordID) (obj map[string]interface{}, err error) {
@@ -125,6 +125,7 @@ func convert(doc istructs.IObject, appDef appdef.IAppDef, refs map[istructs.Reco
 
 	return obj, nil
 }
+
 func addRefs(obj map[string]interface{}, refs map[istructs.RecordID]bool, s istructs.IState, appDef appdef.IAppDef) error {
 	if len(refs) == 0 {
 		return nil
@@ -135,11 +136,11 @@ func addRefs(obj map[string]interface{}, refs map[istructs.RecordID]bool, s istr
 		if recordId == istructs.NullRecordID {
 			continue
 		}
-		rkb, err := s.KeyBuilder(state.Record, appdef.NullQName)
+		rkb, err := s.KeyBuilder(sys.Storage_Record, appdef.NullQName)
 		if err != nil {
 			return err
 		}
-		rkb.PutRecordID(state.Field_ID, recordId)
+		rkb.PutRecordID(sys.Storage_Record_Field_ID, recordId)
 
 		rkv, err := s.MustExist(rkb)
 		if err != nil {

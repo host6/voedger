@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021-present Sigma-Soft, Ltd.
+ * @author: Nikolay Nikitin
  */
 
 package appdef_test
@@ -18,39 +19,37 @@ func ExampleIAppDef_Structures() {
 
 	// how to build AppDef with structures
 	{
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 
-		doc := appDef.AddCDoc(docName)
+		doc := adb.AddCDoc(docName)
 		doc.
 			AddField("f1", appdef.DataKind_int64, true).
 			AddField("f2", appdef.DataKind_string, false)
 		doc.AddContainer("rec", recName, 0, appdef.Occurs_Unbounded)
 
-		rec := appDef.AddCRecord(recName)
+		rec := adb.AddCRecord(recName)
 		rec.
 			AddField("f1", appdef.DataKind_int64, true).
 			AddField("f2", appdef.DataKind_string, false)
 
-		obj := appDef.AddObject(objName)
+		obj := adb.AddObject(objName)
 		obj.
 			AddField("f1", appdef.DataKind_int64, true).
 			AddField("f2", appdef.DataKind_string, false)
 		obj.AddContainer("child", childName, 0, appdef.Occurs_Unbounded)
 
-		child := appDef.AddObject(childName)
+		child := adb.AddObject(childName)
 		child.
 			AddField("f1", appdef.DataKind_int64, true).
 			AddField("f2", appdef.DataKind_string, false)
 
-		if a, err := appDef.Build(); err == nil {
-			app = a
-		} else {
-			panic(err)
-		}
+		app = adb.MustBuild()
 	}
 
 	// how to inspect builded AppDef with structures
 	{
+		// how to enum structures
 		cnt := 0
 		app.Structures(func(s appdef.IStructure) {
 			cnt++
@@ -58,8 +57,11 @@ func ExampleIAppDef_Structures() {
 			fmt.Printf("- user/overall field count: %d/%d\n", s.UserFieldCount(), s.FieldCount())
 			fmt.Printf("- container count: %d\n", s.ContainerCount())
 		})
-
 		fmt.Printf("Overall %d structures\n", cnt)
+
+		// how to find structure by name
+		fmt.Println(app.Structure(docName))
+		fmt.Println(app.Structure(appdef.NewQName("test", "unknown")))
 	}
 
 	// how to inspect builded AppDef with records
@@ -91,6 +93,8 @@ func ExampleIAppDef_Structures() {
 	// - user/overall field count: 2/7
 	// - container count: 0
 	// Overall 4 structures
+	// CDoc «test.document»
+	// <nil>
 	// 1. CDoc «test.document»
 	// - user/overall field count: 2/5
 	// - container count: 1

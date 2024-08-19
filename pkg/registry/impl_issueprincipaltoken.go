@@ -8,7 +8,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"time"
 
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/itokens"
@@ -38,15 +40,13 @@ func provideIssuePrincipalTokenExec(itokens itokens.ITokens) istructsmem.ExecQue
 		login := args.ArgumentObject.AsString(authnz.Field_Login)
 		appName := args.ArgumentObject.AsString(authnz.Field_AppName)
 
-		appQName, err := istructs.ParseAppQName(appName)
+		appQName, err := appdef.ParseAppQName(appName)
 		if err != nil {
 			// notest
 			// validated already on c.registry.CreateLogin
 			return err
 		}
-		if err != nil {
-			return coreutils.NewHTTPErrorf(http.StatusBadRequest, "failed to parse app qualified name", appQName.String(), ":", err)
-		}
+
 		// TODO: check we're called at our AppWSID?
 
 		cdocLogin, doesLoginExist, err := GetCDocLogin(login, args.State, args.WSID, appName)
@@ -81,7 +81,14 @@ func provideIssuePrincipalTokenExec(itokens itokens.ITokens) istructsmem.ExecQue
 			SubjectKind: istructs.SubjectKindType(cdocLogin.AsInt32(authnz.Field_SubjectKind)),
 			ProfileWSID: istructs.WSID(result.profileWSID),
 		}
-		if result.principalToken, err = itokens.IssueToken(appQName, authnz.DefaultPrincipalTokenExpiration, &principalPayload); err != nil {
+		ttl := time.Duration(args.ArgumentObject.AsInt32(field_TTLHours)) * time.Hour
+		if ttl == 0 {
+			ttl = authnz.DefaultPrincipalTokenExpiration
+		} else if ttl > maxTokenTTLHours*time.Hour {
+			return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Errorf("max token TTL hours is %d hours", maxTokenTTLHours))
+		}
+
+		if result.principalToken, err = itokens.IssueToken(appQName, ttl, &principalPayload); err != nil {
 			return fmt.Errorf("principal token issue failed: %w", err)
 		}
 

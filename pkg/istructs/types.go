@@ -5,21 +5,11 @@
 package istructs
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/voedger/voedger/pkg/appdef"
 )
-
-// AppQName is unique in cluster federation
-// <owner>/<name>
-// sys/registry
-// unTill/airs-bp
-// test1/app1
-// test1/app2
-// test2/app1
-// test2/app2
-// Ref. utils.go for methods
-type AppQName struct {
-	owner, name string
-}
 
 type SubjectLogin string
 
@@ -54,60 +44,95 @@ const (
 // panics if name does not exist in type
 // If field is nil zero value is returned
 type IRowReader interface {
-	AsInt32(name string) int32
-	AsInt64(name string) int64
-	AsFloat32(name string) float32
-	AsFloat64(name string) float64
+	AsInt32(appdef.FieldName) int32
+	AsInt64(appdef.FieldName) int64
+	AsFloat32(appdef.FieldName) float32
+	AsFloat64(appdef.FieldName) float64
 
 	// Returns bytes or raw field value
-	AsBytes(name string) []byte
+	AsBytes(appdef.FieldName) []byte
 
 	// Returns string or raw field value
-	AsString(name string) string
+	AsString(appdef.FieldName) string
 
-	AsQName(name string) appdef.QName
-	AsBool(name string) bool
-	AsRecordID(name string) RecordID
+	AsQName(appdef.FieldName) appdef.QName
+	AsBool(appdef.FieldName) bool
+	AsRecordID(appdef.FieldName) RecordID
 
 	// consts.NullRecord will be returned as null-values
-	RecordIDs(includeNulls bool, cb func(name string, value RecordID))
-	FieldNames(cb func(fieldName string))
+	RecordIDs(includeNulls bool, cb func(appdef.FieldName, RecordID))
+	FieldNames(cb func(appdef.FieldName))
 }
 
 type IRowWriter interface {
 
 	// The following functions panics if name has different type then value
 
-	PutInt32(name string, value int32)
-	PutInt64(name string, value int64)
-	PutFloat32(name string, value float32)
-	PutFloat64(name string, value float64)
+	PutInt32(appdef.FieldName, int32)
+	PutInt64(appdef.FieldName, int64)
+	PutFloat32(appdef.FieldName, float32)
+	PutFloat64(appdef.FieldName, float64)
 
 	// Puts value into bytes or raw data field.
-	PutBytes(name string, value []byte)
+	PutBytes(appdef.FieldName, []byte)
 
 	// Puts value into string or raw data field.
-	PutString(name, value string)
+	PutString(appdef.FieldName, string)
 
-	PutQName(name string, value appdef.QName)
-	PutBool(name string, value bool)
-	PutRecordID(name string, value RecordID)
+	PutQName(appdef.FieldName, appdef.QName)
+	PutBool(appdef.FieldName, bool)
+	PutRecordID(appdef.FieldName, RecordID)
 
 	// Puts value into int23, int64, float32, float64 or RecordID data type fields.
 	//
 	// Tries to make conversion from value to a name type
-	PutNumber(name string, value float64)
+	PutNumber(appdef.FieldName, float64)
 
 	// Puts value into string, bytes or QName data type field.
 	//
 	// Tries to make conversion from value to a name type
-	PutChars(name string, value string)
+	PutChars(appdef.FieldName, string)
 
 	// Puts value into fields. Field names are taken from map keys, values are taken from map values.
 	//
 	// Calls PutNumber for numbers and RecordIDs, PutChars for strings, bytes and QNames.
-	PutFromJSON(map[string]any)
+	PutFromJSON(map[appdef.FieldName]any)
 }
 
-// App Workspace amount type. Need to wire
-type AppWSAmount int
+type NumAppWorkspaces int
+type NumAppPartitions int
+type NumCommandProcessors int
+type NumQueryProcessors int
+
+// RowBuilder is a type for function that creates a row reader from a row writer.
+//
+// Should return errors.ErrUnsupported if the writer is not supported,
+// overwise should build the reader and return it or error.
+type RowBuilder func(IRowWriter) (IRowReader, error)
+
+// BuildRow builds a row reader from row writer.
+//
+// After calling the BuildRow, the writer should not be used,
+// as it can lead to changes in the returned reader.
+//
+// Returns errors.ErrUnsupported if the writer is not supported by known builders.
+func BuildRow(w IRowWriter) (IRowReader, error) {
+	for _, b := range builders {
+		r, err := b(w)
+		if err == nil {
+			return r, nil
+		}
+		if !errors.Is(err, errors.ErrUnsupported) {
+			return nil, err
+		}
+	}
+	return nil, fmt.Errorf("%w: unknown implementation %#v", errors.ErrUnsupported, w)
+}
+
+// CollectRowBuilder collects all row builders.
+func CollectRowBuilder(b RowBuilder) bool {
+	builders = append(builders, b)
+	return true
+}
+
+var builders []RowBuilder

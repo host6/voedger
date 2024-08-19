@@ -24,7 +24,8 @@ import (
 
 func Test_BasicUsage(t *testing.T) {
 	sp := istorageimpl.Provide(mem.Provide())
-	storage, _ := sp.AppStorage(istructs.AppQName_test1_app1)
+	storage, err := sp.AppStorage(istructs.AppQName_test1_app1)
+	require.NoError(t, err)
 
 	versions := vers.New()
 	if err := versions.Prepare(storage); err != nil {
@@ -34,10 +35,11 @@ func Test_BasicUsage(t *testing.T) {
 	testName := appdef.NewQName("test", "doc")
 
 	testAppDef := func() appdef.IAppDef {
-		app := appdef.New()
-		doc := app.AddCDoc(testName)
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+		doc := adb.AddCDoc(testName)
 		doc.SetSingleton()
-		appDef, err := app.Build()
+		appDef, err := adb.Build()
 		if err != nil {
 			panic(err)
 		}
@@ -108,21 +110,22 @@ func Test_SingletonsGetID(t *testing.T) {
 			err = versions.Prepare(storage)
 			require.NoError(err)
 
-			app := appdef.New()
+			adb := appdef.New()
+			adb.AddPackage("test", "test.com/test")
 
 			{
-				doc := app.AddCDoc(cDocName)
+				doc := adb.AddCDoc(cDocName)
 				doc.SetSingleton()
 				doc.AddField("f1", appdef.DataKind_QName, true)
 			}
 
 			{
-				doc := app.AddWDoc(wDocName)
+				doc := adb.AddWDoc(wDocName)
 				doc.SetSingleton()
 				doc.AddField("f1", appdef.DataKind_QName, true)
 			}
 
-			appDef, err := app.Build()
+			appDef, err := adb.Build()
 			require.NoError(err)
 
 			return storage, versions, appDef
@@ -205,18 +208,20 @@ func Test_Singletons_Errors(t *testing.T) {
 	})
 
 	t.Run("must error if unable store version of Singletons system  view", func(t *testing.T) {
-		storage := teststore.NewStorage()
+		storage := teststore.NewStorage(istructs.AppQName_test1_app1)
 		storage.SchedulePutError(testError, utils.ToBytes(consts.SysView_Versions), utils.ToBytes(vers.SysSingletonsVersion))
 
 		versions := vers.New()
 		err := versions.Prepare(storage)
 		require.NoError(err)
 
-		app := appdef.New()
-		doc := app.AddCDoc(cDocName)
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+
+		doc := adb.AddCDoc(cDocName)
 		doc.SetSingleton()
 		doc.AddField("f1", appdef.DataKind_QName, true)
-		appDef, err := app.Build()
+		appDef, err := adb.Build()
 		require.NoError(err)
 
 		stone := New()
@@ -226,18 +231,20 @@ func Test_Singletons_Errors(t *testing.T) {
 	})
 
 	t.Run("must error if maximum singletons is exceeded", func(t *testing.T) {
-		storage := teststore.NewStorage()
+		storage := teststore.NewStorage(istructs.AppQName_test1_app1)
 
 		versions := vers.New()
 		err := versions.Prepare(storage)
 		require.NoError(err)
 
-		appDefBuilder := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+
 		for id := istructs.FirstSingletonID; id <= istructs.MaxSingletonID; id++ {
-			doc := appDefBuilder.AddCDoc(appdef.NewQName("test", fmt.Sprintf("doc_%v", id)))
+			doc := adb.AddCDoc(appdef.NewQName("test", fmt.Sprintf("doc_%v", id)))
 			doc.SetSingleton()
 		}
-		appDef, err := appDefBuilder.Build()
+		appDef, err := adb.Build()
 		require.NoError(err)
 
 		st := New()
@@ -249,7 +256,7 @@ func Test_Singletons_Errors(t *testing.T) {
 	t.Run("must error if store ID for some singleton doc to storage is failed", func(t *testing.T) {
 		defName := appdef.NewQName("test", "ErrorDef")
 
-		storage := teststore.NewStorage()
+		storage := teststore.NewStorage(istructs.AppQName_test1_app1)
 		storage.SchedulePutError(testError, utils.ToBytes(consts.SysView_SingletonIDs, latestVersion), []byte(defName.String()))
 
 		versions := vers.New()
@@ -270,7 +277,7 @@ func Test_Singletons_Errors(t *testing.T) {
 	t.Run("must error if retrieve ID for some singleton doc from storage is failed", func(t *testing.T) {
 		defName := appdef.NewQName("test", "ErrorDef")
 
-		storage := teststore.NewStorage()
+		storage := teststore.NewStorage(istructs.AppQName_test1_app1)
 
 		versions := vers.New()
 		err := versions.Prepare(storage)
@@ -293,7 +300,7 @@ func Test_Singletons_Errors(t *testing.T) {
 	})
 
 	t.Run("must error if some some singleton QName from storage is not well formed", func(t *testing.T) {
-		storage := teststore.NewStorage()
+		storage := teststore.NewStorage(istructs.AppQName_test1_app1)
 
 		versions := vers.New()
 		err := versions.Prepare(storage)
@@ -312,6 +319,6 @@ func Test_Singletons_Errors(t *testing.T) {
 		st := New()
 		err = st.Prepare(storage, versions, nil)
 
-		require.ErrorIs(err, appdef.ErrInvalidQNameStringRepresentation)
+		require.ErrorIs(err, appdef.ErrConvertError)
 	})
 }

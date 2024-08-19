@@ -69,7 +69,8 @@ type ExecQueryCallback func(object IObject) error
 
 type ExecQueryArgs struct {
 	PrepareArgs
-	State IState
+	State   IState
+	Intents IIntents
 }
 
 type IState interface {
@@ -93,7 +94,18 @@ type IState interface {
 
 	// For projectors
 	PLogEvent() IPLogEvent
+
+	// For commands
+	CommandPrepareArgs() CommandPrepareArgs
+
+	// For queries
+	QueryPrepareArgs() PrepareArgs
+	QueryCallback() ExecQueryCallback
+
+	App() appdef.AppQName
+	AppStructs() IAppStructs
 }
+
 type IIntents interface {
 	// NewValue returns a new value builder for given get
 	// If a value with the same get already exists in storage, it will be replaced
@@ -101,6 +113,15 @@ type IIntents interface {
 
 	// UpdateValue returns a value builder to update existing value
 	UpdateValue(key IStateKeyBuilder, existingValue IStateValue) (builder IStateValueBuilder, err error)
+
+	// returns nil when not found
+	FindIntent(key IStateKeyBuilder) IStateValueBuilder
+
+	FindIntentWithOpKind(key IStateKeyBuilder) (IStateValueBuilder, bool)
+
+	IntentsCount() int
+	// iterate over all intents
+	Intents(iterFunc func(key IStateKeyBuilder, value IStateValueBuilder, isNew bool))
 }
 type IPkgNameResolver interface {
 	// Returns package path by package local name.
@@ -129,7 +150,10 @@ type IStateValue interface {
 }
 type IStateValueBuilder interface {
 	IValueBuilder
-	BuildValue() IStateValue
+
+	BuildValue() IStateValue // Currently used in testState and for the intents in the bundled storage. Must return nil of not supported by storage.
+
+	Equal(to IStateValueBuilder) bool // used in testState
 }
 type IStateKeyBuilder interface {
 	IKeyBuilder

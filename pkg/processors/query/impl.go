@@ -19,18 +19,21 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/cluster"
+	"github.com/voedger/voedger/pkg/goutils/iterate"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/isecretsimpl"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/istructsmem"
+	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/sys/authnz"
+	"github.com/voedger/voedger/pkg/utils/federation"
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
 	coreutils "github.com/voedger/voedger/pkg/utils"
@@ -90,7 +93,8 @@ func implRowsProcessorFactory(ctx context.Context, appDef appdef.IAppDef, state 
 
 func implServiceFactory(serviceChannel iprocbus.ServiceChannel, resultSenderClosableFactory ResultSenderClosableFactory,
 	appParts appparts.IAppPartitions, maxPrepareQueries int, metrics imetrics.IMetrics, vvm string,
-	authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer) pipeline.IService {
+	authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer, itokens itokens.ITokens, federation federation.IFederation,
+	statelessResources istructsmem.IStatelessResources) pipeline.IService {
 	secretReader := isecretsimpl.ProvideSecretReader()
 	return pipeline.NewService(func(ctx context.Context) {
 		var p pipeline.ISyncPipeline
@@ -107,24 +111,30 @@ func implServiceFactory(serviceChannel iprocbus.ServiceChannel, resultSenderClos
 				qpm.Increase(queriesTotal, 1.0)
 				rs := resultSenderClosableFactory(msg.RequestCtx(), msg.Sender())
 				qwork := newQueryWork(msg, rs, appParts, maxPrepareQueries, qpm, secretReader)
-				if p == nil {
-					p = newQueryProcessorPipeline(ctx, authn, authz)
-				}
-				err := p.SendSync(qwork)
-				if err != nil {
-					qpm.Increase(errorsTotal, 1.0)
-					p.Close()
-					p = nil
-				} else {
-					err = execAndSendResponse(ctx, qwork)
-				}
-				if qwork.rowsProcessor != nil {
-					// wait until all rows are sent
-					qwork.rowsProcessor.Close()
-				}
-				err = coreutils.WrapSysError(err, http.StatusInternalServerError)
-				rs.Close(err)
-				qwork.release()
+				func() { // borrowed application partition should be guaranteed to be freed
+					defer qwork.Release()
+					if p == nil {
+						p = newQueryProcessorPipeline(ctx, authn, authz, itokens, federation, statelessResources)
+					}
+					err := p.SendSync(qwork)
+					if err != nil {
+						qpm.Increase(errorsTotal, 1.0)
+						p.Close()
+						p = nil
+					} else {
+						if err = execQuery(ctx, qwork); err == nil {
+							if err = processors.CheckResponseIntent(qwork.state); err == nil {
+								err = qwork.state.ApplyIntents()
+							}
+						}
+					}
+					if qwork.rowsProcessor != nil {
+						// wait until all rows are sent
+						qwork.rowsProcessor.Close()
+					}
+					err = coreutils.WrapSysError(err, http.StatusInternalServerError)
+					rs.Close(err)
+				}()
 				metrics.IncreaseApp(queriesSeconds, vvm, msg.AppQName(), time.Since(now).Seconds())
 			case <-ctx.Done():
 			}
@@ -135,7 +145,7 @@ func implServiceFactory(serviceChannel iprocbus.ServiceChannel, resultSenderClos
 	})
 }
 
-func execAndSendResponse(ctx context.Context, qw *queryWork) (err error) {
+func execQuery(ctx context.Context, qw *queryWork) (err error) {
 	now := time.Now()
 	defer func() {
 		if r := recover(); r != nil {
@@ -144,27 +154,11 @@ func execAndSendResponse(ctx context.Context, qw *queryWork) (err error) {
 		}
 		qw.metrics.Increase(execSeconds, time.Since(now).Seconds())
 	}()
-	return qw.queryExec(ctx, qw.execQueryArgs, func(object istructs.IObject) error {
-		pathToIdx := make(map[string]int)
-		if qw.resultType.QName() == istructs.QNameRaw {
-			pathToIdx[processors.Field_RawObject_Body] = 0
-		} else {
-			for i, element := range qw.queryParams.Elements() {
-				pathToIdx[element.Path().Name()] = i
-			}
-		}
-		return qw.rowsProcessor.SendAsync(rowsWorkpiece{
-			object: object,
-			outputRow: &outputRow{
-				keyToIdx: pathToIdx,
-				values:   make([]interface{}, len(pathToIdx)),
-			},
-			enrichedRootFieldsKinds: make(map[string]appdef.DataKind),
-		})
-	})
+	return qw.appPart.Invoke(ctx, qw.msg.QName(), qw.state, qw.state)
 }
 
-func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer) pipeline.ISyncPipeline {
+func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthenticator, authz iauthnz.IAuthorizer,
+	itokens itokens.ITokens, federation federation.IFederation, statelessResources istructsmem.IStatelessResources) pipeline.ISyncPipeline {
 	ops := []*pipeline.WiredOperator{
 		operator("borrowAppPart", borrowAppPart),
 		operator("check function call rate", func(ctx context.Context, qw *queryWork) (err error) {
@@ -189,7 +183,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			return err
 		}),
 		operator("check cdoc.sys.WorkspaceDescriptor existence", func(ctx context.Context, qw *queryWork) (err error) {
-			if !coreutils.IsDummyWS(qw.msg.WSID()) && qw.wsDesc.QName() == appdef.NullQName {
+			if qw.wsDesc.QName() == appdef.NullQName {
 				// TODO: ws init check is simplified here because we need just IWorkspace to get the query from it.
 				return processors.ErrWSNotInited
 			}
@@ -223,12 +217,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			return nil
 		}),
 		operator("get IQuery", func(ctx context.Context, qw *queryWork) (err error) {
-			var queryType appdef.IType
-			if coreutils.IsDummyWS(qw.msg.WSID()) {
-				queryType = qw.appStructs.AppDef().Type(qw.msg.QName())
-			} else {
-				queryType = qw.iWorkspace.Type(qw.msg.QName())
-			}
+			queryType := qw.iWorkspace.Type(qw.msg.QName())
 			if queryType.Kind() == appdef.TypeKind_null {
 				return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("query %s does not exist in workspace %s", qw.msg.QName(), qw.iWorkspace.QName()))
 			}
@@ -268,21 +257,61 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			qw.execQueryArgs, err = newExecQueryArgs(qw.requestData, qw.msg.WSID(), qw)
 			return coreutils.WrapSysError(err, http.StatusBadRequest)
 		}),
+		operator("create callback func", func(ctx context.Context, qw *queryWork) (err error) {
+			qw.callbackFunc = func(object istructs.IObject) error {
+				pathToIdx := make(map[string]int)
+				if qw.resultType.QName() == istructs.QNameRaw {
+					pathToIdx[processors.Field_RawObject_Body] = 0
+				} else {
+					for i, element := range qw.queryParams.Elements() {
+						pathToIdx[element.Path().Name()] = i
+					}
+				}
+				return qw.rowsProcessor.SendAsync(rowsWorkpiece{
+					object: object,
+					outputRow: &outputRow{
+						keyToIdx: pathToIdx,
+						values:   make([]interface{}, len(pathToIdx)),
+					},
+					enrichedRootFieldsKinds: make(map[string]appdef.DataKind),
+				})
+			}
+			return nil
+		}),
 		operator("create state", func(ctx context.Context, qw *queryWork) (err error) {
 			qw.state = state.ProvideQueryProcessorStateFactory()(
 				qw.msg.RequestCtx(),
-				qw.appStructs,
+				func() istructs.IAppStructs { return qw.appStructs },
 				state.SimplePartitionIDFunc(qw.msg.Partition()),
 				state.SimpleWSIDFunc(qw.msg.WSID()),
 				qw.secretReader,
 				func() []iauthnz.Principal { return qw.principals },
 				func() string { return qw.msg.Token() },
-				nil) // TODO: provide ArgFunc
+				itokens,
+				func() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs },
+				func() istructs.IObject { return qw.execQueryArgs.ArgumentObject },
+				func() istructs.IObjectBuilder {
+					return qw.appStructs.ObjectBuilder(qw.resultType.QName())
+				},
+				federation,
+				func() istructs.ExecQueryCallback {
+					return qw.callbackFunc
+				},
+			)
 			qw.execQueryArgs.State = qw.state
+			qw.execQueryArgs.Intents = qw.state
 			return
 		}),
 		operator("get queryFunc", func(ctx context.Context, qw *queryWork) (err error) {
-			qw.queryFunc = qw.appStructs.Resources().QueryResource(qw.msg.QName()).(istructs.IQueryFunction)
+			iResource := qw.appStructs.Resources().QueryResource(qw.msg.QName())
+			if iResource.Kind() != istructs.ResourceKind_null {
+				qw.queryFunc = iResource.(istructs.IQueryFunction)
+			} else {
+				_, _, qw.queryFunc = iterate.FindFirstMap(statelessResources.Queries, func(path string, qry istructs.IQueryFunction) bool {
+					return qry.QName() == qw.msg.QName()
+				})
+			}
+
 			return nil
 		}),
 		operator("validate: get result type", func(ctx context.Context, qw *queryWork) (err error) {
@@ -292,11 +321,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			}
 			if qw.resultType.QName() == appdef.QNameANY {
 				qNameResultType := qw.queryFunc.ResultType(qw.execQueryArgs.PrepareArgs)
-				if coreutils.IsDummyWS(qw.msg.WSID()) {
-					qw.resultType = qw.appStructs.AppDef().Type(qNameResultType)
-				} else {
-					qw.resultType = qw.iWorkspace.Type(qNameResultType)
-				}
+				qw.resultType = qw.iWorkspace.Type(qNameResultType)
 				if qw.resultType.Kind() == appdef.TypeKind_null {
 					return coreutils.NewHTTPError(http.StatusBadRequest, fmt.Errorf("%s query result type %s does not exist in workspace %s", qw.iQuery.QName(), qNameResultType, qw.iWorkspace.QName()))
 				}
@@ -338,12 +363,6 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				qw.state, qw.queryParams, qw.resultType, qw.rs, qw.metrics)
 			return nil
 		}),
-		operator("get func exec", func(ctx context.Context, qw *queryWork) (err error) {
-			iResource := qw.appStructs.Resources().QueryResource(qw.iQuery.QName())
-			iQueryFunc := iResource.(istructs.IQueryFunction)
-			qw.queryExec = iQueryFunc.Exec
-			return nil
-		}),
 	}
 	return pipeline.NewSyncPipeline(requestCtx, "Query Processor", ops[0], ops[1:]...)
 }
@@ -355,7 +374,7 @@ type queryWork struct {
 	appParts appparts.IAppPartitions
 	// work
 	requestData       map[string]interface{}
-	state             istructs.IState
+	state             state.IHostState
 	queryParams       IQueryParams
 	appPart           appparts.IAppPartition
 	appStructs        istructs.IAppStructs
@@ -371,7 +390,8 @@ type queryWork struct {
 	iWorkspace        appdef.IWorkspace
 	iQuery            appdef.IQuery
 	wsDesc            istructs.IRecord
-	queryExec         func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) error
+	// queryExec         func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) error
+	callbackFunc istructs.ExecQueryCallback
 }
 
 func newQueryWork(msg IQueryMessage, rs IResultSenderClosable, appParts appparts.IAppPartitions,
@@ -392,9 +412,14 @@ func (qw *queryWork) GetPrincipals() []iauthnz.Principal {
 	return qw.principals
 }
 
+// need for various funcs of sys package
+func (qw *queryWork) GetAppStructs() istructs.IAppStructs {
+	return qw.appStructs
+}
+
 // borrows app partition for query
 func (qw *queryWork) borrow() (err error) {
-	if qw.appPart, err = qw.appParts.Borrow(qw.msg.AppQName(), qw.msg.Partition(), cluster.ProcessorKind_Query); err != nil {
+	if qw.appPart, err = qw.appParts.Borrow(qw.msg.AppQName(), qw.msg.Partition(), appparts.ProcessorKind_Query); err != nil {
 		return err
 	}
 	qw.appStructs = qw.appPart.AppStructs()
@@ -402,7 +427,7 @@ func (qw *queryWork) borrow() (err error) {
 }
 
 // releases borrowed app partition
-func (qw *queryWork) release() {
+func (qw *queryWork) Release() {
 	if ap := qw.appPart; ap != nil {
 		qw.appStructs = nil
 		qw.appPart = nil
@@ -411,8 +436,13 @@ func (qw *queryWork) release() {
 }
 
 // need or q.sys.EnrichPrincipalToken
-func (qw *queryWork) AppQName() istructs.AppQName {
+func (qw *queryWork) AppQName() appdef.AppQName {
 	return qw.msg.AppQName()
+}
+
+// need for sqlquery
+func (qw *queryWork) AppPartitions() appparts.IAppPartitions {
+	return qw.appParts
 }
 
 func borrowAppPart(_ context.Context, qw *queryWork) error {
@@ -427,14 +457,14 @@ func borrowAppPart(_ context.Context, qw *queryWork) error {
 }
 
 func operator(name string, doSync func(ctx context.Context, qw *queryWork) (err error)) *pipeline.WiredOperator {
-	return pipeline.WireFunc(name, func(ctx context.Context, work interface{}) (err error) {
+	return pipeline.WireFunc(name, func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 		return doSync(ctx, work.(*queryWork))
 	})
 }
 
 type queryMessage struct {
 	requestCtx context.Context
-	appQName   istructs.AppQName
+	appQName   appdef.AppQName
 	wsid       istructs.WSID
 	partition  istructs.PartitionID
 	sender     ibus.ISender
@@ -444,7 +474,7 @@ type queryMessage struct {
 	token      string
 }
 
-func (m queryMessage) AppQName() istructs.AppQName     { return m.appQName }
+func (m queryMessage) AppQName() appdef.AppQName       { return m.appQName }
 func (m queryMessage) WSID() istructs.WSID             { return m.wsid }
 func (m queryMessage) Sender() ibus.ISender            { return m.sender }
 func (m queryMessage) RequestCtx() context.Context     { return m.requestCtx }
@@ -459,7 +489,7 @@ func (m queryMessage) Body() []byte {
 	return []byte("{}")
 }
 
-func NewQueryMessage(requestCtx context.Context, appQName istructs.AppQName, partID istructs.PartitionID, wsid istructs.WSID, sender ibus.ISender, body []byte,
+func NewQueryMessage(requestCtx context.Context, appQName appdef.AppQName, partID istructs.PartitionID, wsid istructs.WSID, sender ibus.ISender, body []byte,
 	qName appdef.QName, host string, token string) IQueryMessage {
 	return queryMessage{
 		appQName:   appQName,
@@ -587,7 +617,7 @@ func (c *fieldsDefs) get(name appdef.QName) FieldsKinds {
 
 type queryProcessorMetrics struct {
 	vvm     string
-	app     istructs.AppQName
+	app     appdef.AppQName
 	metrics imetrics.IMetrics
 }
 

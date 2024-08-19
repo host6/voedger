@@ -29,8 +29,7 @@ func (r *enrichPrincipalTokenRR) AsString(string) string {
 // basic auth, WorkspaceOwner
 func provideExecQryEnrichPrincipalToken(atf payloads.IAppTokensFactory) istructsmem.ExecQueryClosure {
 	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
-		appQName := args.Workpiece.(interface{ AppQName() istructs.AppQName }).AppQName()
-		appTokens := atf.New(appQName)
+		appTokens := atf.New(args.State.App())
 
 		principalToken, err := state.GetPrincipalTokenFromState(args.State)
 		if err != nil {

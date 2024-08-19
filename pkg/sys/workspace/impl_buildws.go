@@ -5,20 +5,21 @@
 package workspace
 
 import (
-	"encoding/json"
+	"bytes"
 	"fmt"
-	"strconv"
+	"io"
 
-	"github.com/untillpro/goutils/logger"
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
+	"github.com/voedger/voedger/pkg/utils/federation"
 )
 
 // everything is validated already
-func buildWorkspace(templateName string, ep extensionpoints.IExtensionPoint, wsKind appdef.QName, federation coreutils.IFederation, newWSID int64,
-	targetAppQName istructs.AppQName, wsName string, systemPrincipalToken string) (err error) {
+func buildWorkspace(templateName string, ep extensionpoints.IExtensionPoint, wsKind appdef.QName, federation federation.IFederation, newWSID int64,
+	targetAppQName appdef.AppQName, wsName string, systemPrincipalToken string) (err error) {
 	wsTemplateBLOBs, wsTemplateData, err := ValidateTemplate(templateName, ep, wsKind)
 	if err != nil {
 		return fmt.Errorf("template validation failed: %w", err)
@@ -36,24 +37,9 @@ func buildWorkspace(templateName string, ep extensionpoints.IExtensionPoint, wsK
 	// update IDs in workspace template data with new blobs IDs
 	updateBLOBsIDsMap(wsTemplateData, blobsMap)
 
-	templateCUDs := make([]cud, 0, len(wsTemplateData))
-	for _, record := range wsTemplateData {
-		c := cud{
-			Fields: make(map[string]interface{}),
-		}
-		for field, value := range record {
-			c.Fields[field] = value
-		}
-		templateCUDs = append(templateCUDs, c)
-	}
+	cudBody := coreutils.JSONMapToCUDBody(wsTemplateData)
 	cudURL := fmt.Sprintf("api/%s/%d/c.sys.CUD", targetAppQName.String(), newWSID)
-	bb, err := json.Marshal(cuds{Cuds: templateCUDs})
-	if err != nil {
-		// validated already
-		// notest
-		return err
-	}
-	if _, err := coreutils.FederationFunc(federation.URL(), cudURL, string(bb), coreutils.WithAuthorizeBy(systemPrincipalToken), coreutils.WithDiscardResponse()); err != nil {
+	if _, err := federation.Func(cudURL, cudBody, coreutils.WithAuthorizeBy(systemPrincipalToken), coreutils.WithDiscardResponse()); err != nil {
 		return fmt.Errorf("c.sys.CUD failed: %w", err)
 	}
 	logger.Info(fmt.Sprintf("workspace %s build completed", wsName))
@@ -73,19 +59,20 @@ func updateBLOBsIDsMap(wsData []map[string]interface{}, blobsMap map[int64]map[s
 	}
 }
 
-func uploadBLOBs(blobs []BLOB, federation coreutils.IFederation, appQName istructs.AppQName, wsid int64, principalToken string) (blobsMap, error) {
+func uploadBLOBs(blobs []coreutils.BLOBWorkspaceTemplateField, federation federation.IFederation, appQName appdef.AppQName, wsid int64, principalToken string) (blobsMap, error) {
 	res := blobsMap{}
 	for _, blob := range blobs {
-		uploadBLOBURL := fmt.Sprintf("blob/%s/%d?name=%s&mimeType=%s", appQName.String(), wsid, blob.Name, blob.MimeType)
-		logger.Info("workspace build: uploading blob", blob.Name, "url:", uploadBLOBURL)
-
-		resp, err := coreutils.FederationPOST(federation.URL(), uploadBLOBURL, string(blob.Content), coreutils.WithAuthorizeBy(principalToken))
+		logger.Info("workspace build: uploading blob", blob.Name)
+		blobReader := coreutils.BLOBReader{
+			BLOBDesc: coreutils.BLOBDesc{
+				Name:     blob.Name,
+				MimeType: blob.MimeType,
+			},
+			ReadCloser: io.NopCloser(bytes.NewReader(blob.Content)),
+		}
+		newBLOBID, err := federation.UploadBLOB(appQName, istructs.WSID(wsid), blobReader, coreutils.WithAuthorizeBy(principalToken))
 		if err != nil {
 			return nil, fmt.Errorf("blob %s: %w", blob.Name, err)
-		}
-		newBLOBID, err := strconv.Atoi(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("blob %s: failed to parse the received blobID string: %w", blob.Name, err)
 		}
 
 		fieldBlobID, ok := res[int64(blob.RecordID)]

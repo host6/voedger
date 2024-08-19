@@ -14,23 +14,20 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-	"github.com/untillpro/goutils/exec"
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/exec"
+	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/parser"
 
 	"github.com/voedger/voedger/pkg/compile"
+	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
-func newBaselineCmd() *cobra.Command {
-	params := vpmParams{}
+func newBaselineCmd(params *vpmParams) *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "baseline [baseline-folder]",
+		Use:   "baseline baseline-folder",
 		Short: "create baseline schemas",
-		Args:  showHelpIfLackOfArgs(1),
+		Args:  exactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) (err error) {
-			params, err = prepareParams(params, args)
-			if err != nil {
-				return err
-			}
 			compileRes, err := compile.Compile(params.Dir)
 			if err != nil {
 				return err
@@ -38,7 +35,6 @@ func newBaselineCmd() *cobra.Command {
 			return baseline(compileRes, params.Dir, params.TargetDir)
 		},
 	}
-	initGlobalFlags(cmd, &params)
 	return cmd
 }
 
@@ -59,10 +55,12 @@ func baseline(compileRes *compile.Result, dir, targetDir string) error {
 	return nil
 }
 
-func saveBaselineInfo(compileRes *compile.Result, dir, baselineDir string) error {
+// saveBaselineInfo saves baseline info into target dir
+// baseline info includes baseline package url, timestamp and git commit hash
+func saveBaselineInfo(compileRes *compile.Result, dir, targetDir string) error {
 	var gitCommitHash string
 	sb := new(strings.Builder)
-	if err := new(exec.PipedExec).Command("git", "rev-parse", "HEAD").WorkingDir(dir).Run(sb, nil); err == nil {
+	if err := new(exec.PipedExec).Command("git", "rev-parse", "HEAD").WorkingDir(dir).Run(sb, os.Stderr); err == nil {
 		gitCommitHash = strings.TrimSpace(sb.String())
 	}
 
@@ -77,8 +75,8 @@ func saveBaselineInfo(compileRes *compile.Result, dir, baselineDir string) error
 		return err
 	}
 
-	baselineInfoFilePath := filepath.Join(baselineDir, baselineInfoFileName)
-	if err := os.WriteFile(baselineInfoFilePath, content, defaultPermissions); err != nil {
+	baselineInfoFilePath := filepath.Join(targetDir, baselineInfoFileName)
+	if err := os.WriteFile(baselineInfoFilePath, content, coreutils.FileMode_rw_rw_rw_); err != nil {
 		return err
 	}
 	if logger.IsVerbose() {
@@ -90,20 +88,18 @@ func saveBaselineInfo(compileRes *compile.Result, dir, baselineDir string) error
 func saveBaselineSchemas(pkgFiles packageFiles, baselineDir string) error {
 	for qpn, files := range pkgFiles {
 		packageDir := filepath.Join(baselineDir, qpn)
-		if err := os.MkdirAll(packageDir, defaultPermissions); err != nil {
+		if err := os.MkdirAll(packageDir, coreutils.FileMode_rwxrwxrwx); err != nil {
 			return err
 		}
 		for _, file := range files {
-			filePath := filepath.Join(packageDir, filepath.Base(file))
-			fileContent, err := os.ReadFile(file)
-			if err != nil {
-				return err
-			}
-			if err := os.WriteFile(filePath, fileContent, defaultPermissions); err != nil {
-				return err
+			base := filepath.Base(file)
+			fileNameExtensionless := base[:len(base)-len(filepath.Ext(base))]
+			if err := coreutils.CopyFile(file, packageDir, coreutils.WithNewName(fileNameExtensionless+parser.VSqlExt)); err != nil {
+				return fmt.Errorf(errFmtCopyFile, file, err)
 			}
 			if logger.IsVerbose() {
-				logger.Verbose("create baseline file: %s", filePath)
+				filePath := filepath.Join(packageDir, fileNameExtensionless+parser.VSqlExt)
+				logger.Verbose("baseline file created: %s", filePath)
 			}
 		}
 	}
@@ -111,9 +107,14 @@ func saveBaselineSchemas(pkgFiles packageFiles, baselineDir string) error {
 }
 
 func createBaselineDir(dir string) error {
-	if _, err := os.Stat(dir); !os.IsNotExist(err) {
+	exists, err := coreutils.Exists(dir)
+	if err != nil {
+		// notest
+		return err
+	}
+	if exists {
 		return fmt.Errorf("baseline directory already exists: %s", dir)
 	}
 	pkgDir := filepath.Join(dir, pkgDirName)
-	return os.MkdirAll(pkgDir, defaultPermissions)
+	return os.MkdirAll(pkgDir, coreutils.FileMode_rwxrwxrwx)
 }

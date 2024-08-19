@@ -13,16 +13,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/sys"
 )
 
 var (
-	testRecordQName1     = appdef.NewQName("test", "record1")
-	testRecordQName2     = appdef.NewQName("test", "record2")
-	testRecordQName3     = appdef.NewQName("test", "record3")
-	testViewRecordQName1 = appdef.NewQName("test", "viewRecord1")
-	testViewRecordQName2 = appdef.NewQName("test", "viewRecord2")
-	testStorage          = appdef.NewQName("test", "testStorage")
-	testWSQName          = appdef.NewQName("test", "testWS")
+	testRecordQName1      = appdef.NewQName("test", "record1")
+	testRecordQName2      = appdef.NewQName("test", "record2")
+	testRecordQName3      = appdef.NewQName("test", "record3")
+	testViewRecordQName1  = appdef.NewQName("test", "viewRecord1")
+	testViewRecordQName2  = appdef.NewQName("test", "viewRecord2")
+	testStorage           = appdef.NewQName("test", "testStorage")
+	testWSQName           = appdef.NewQName("test", "testWS")
+	testWSDescriptorQName = appdef.NewQName("test", "testWSDescriptor")
+	testAppQName          = appdef.NewAppQName("test", "testApp")
 )
 
 func TestSimpleWSIDFunc(t *testing.T) {
@@ -85,23 +88,23 @@ func Test_getStorageID(t *testing.T) {
 		}{
 			{
 				name:            "General storage key",
-				kb:              newKeyBuilder(Record, appdef.NullQName),
-				expectedStorage: Record,
+				kb:              newMapKeyBuilder(sys.Storage_Record, appdef.NullQName),
+				expectedStorage: sys.Storage_Record,
 			},
 			{
 				name:            "Email storage key",
-				kb:              &sendMailKeyBuilder{keyBuilder: newKeyBuilder(SendMail, appdef.NullQName)},
-				expectedStorage: SendMail,
+				kb:              &mailKeyBuilder{},
+				expectedStorage: sys.Storage_SendMail,
 			},
 			{
 				name:            "HTTP storage key",
-				kb:              &httpKeyBuilder{keyBuilder: newKeyBuilder(Http, appdef.NullQName)},
-				expectedStorage: Http,
+				kb:              &httpStorageKeyBuilder{},
+				expectedStorage: sys.Storage_Http,
 			},
 			{
 				name:            "View storage key",
 				kb:              &viewKeyBuilder{},
-				expectedStorage: View,
+				expectedStorage: sys.Storage_View,
 			},
 		}
 		for _, test := range tests {
@@ -112,6 +115,10 @@ func Test_getStorageID(t *testing.T) {
 
 type nilAppStructs struct {
 	istructs.IAppStructs
+}
+
+func nilAppStructsFunc() istructs.IAppStructs {
+	return &nilAppStructs{}
 }
 
 func (s *nilAppStructs) AppDef() appdef.IAppDef             { return nil }
@@ -140,6 +147,9 @@ type mockAppStructs struct {
 	mock.Mock
 }
 
+func (s *mockAppStructs) AppQName() appdef.AppQName {
+	return s.Called().Get(0).(appdef.AppQName)
+}
 func (s *mockAppStructs) AppDef() appdef.IAppDef {
 	return s.Called().Get(0).(appdef.IAppDef)
 }
@@ -278,11 +288,11 @@ func (s *mockStorage) Get(key istructs.IStateKeyBuilder) (value istructs.IStateV
 func (s *mockStorage) Read(key istructs.IStateKeyBuilder, callback istructs.ValueCallback) (err error) {
 	return s.Called(key, callback).Error(0)
 }
-func (s *mockStorage) ProvideValueBuilder(key istructs.IStateKeyBuilder, existingBuilder istructs.IStateValueBuilder) istructs.IStateValueBuilder {
-	return s.Called(key, existingBuilder).Get(0).(istructs.IStateValueBuilder)
+func (s *mockStorage) ProvideValueBuilder(key istructs.IStateKeyBuilder, existingBuilder istructs.IStateValueBuilder) (istructs.IStateValueBuilder, error) {
+	return s.Called(key, existingBuilder).Get(0).(istructs.IStateValueBuilder), nil
 }
-func (s *mockStorage) ProvideValueBuilderForUpdate(key istructs.IStateKeyBuilder, existingValue istructs.IStateValue, existingBuilder istructs.IStateValueBuilder) istructs.IStateValueBuilder {
-	return s.Called(key, existingValue, existingBuilder).Get(0).(istructs.IStateValueBuilder)
+func (s *mockStorage) ProvideValueBuilderForUpdate(key istructs.IStateKeyBuilder, existingValue istructs.IStateValue, existingBuilder istructs.IStateValueBuilder) (istructs.IStateValueBuilder, error) {
+	return s.Called(key, existingValue, existingBuilder).Get(0).(istructs.IStateValueBuilder), nil
 }
 func (s *mockStorage) Validate(items []ApplyBatchItem) (err error) {
 	return s.Called(items).Error(0)
@@ -362,18 +372,6 @@ func (w *mockRowWriter) PutQName(name string, value appdef.QName)         { w.Ca
 func (w *mockRowWriter) PutBool(name string, value bool)                  { w.Called(name, value) }
 func (w *mockRowWriter) PutRecordID(name string, value istructs.RecordID) { w.Called(name, value) }
 
-func errorFromPanic(f func()) (err error) {
-	defer func() {
-		defer func() {
-			if r := recover(); r != nil {
-				err = r.(error)
-			}
-		}()
-		f()
-	}()
-	return
-}
-
 type mockWLogEvent struct {
 	mock.Mock
 }
@@ -381,6 +379,7 @@ type mockWLogEvent struct {
 func (e *mockWLogEvent) ArgumentObject() istructs.IObject {
 	return e.Called().Get(0).(istructs.IObject)
 }
+func (e *mockWLogEvent) Bytes() []byte { return e.Called().Get(0).([]byte) }
 func (e *mockWLogEvent) CUDs(cb func(rec istructs.ICUDRow)) {
 	e.Called(cb)
 }

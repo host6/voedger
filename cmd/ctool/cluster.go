@@ -10,7 +10,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"net"
 	"os"
 	"os/user"
@@ -20,7 +19,8 @@ import (
 	"testing"
 
 	"github.com/spf13/cobra"
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/logger"
+	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
 var dryRun bool
@@ -39,6 +39,7 @@ func newCluster() *clusterType {
 		ReplacedAddresses:     make([]string, 0),
 		Cron:                  &cronType{},
 		Acme:                  &acmeType{Domains: make([]string, 0)},
+		Alert:                 &alertType{DiscordWebhook: emptyDiscordWebhookUrl},
 	}
 
 	sshKey, exists := os.LookupEnv(envVoedgerSshKey)
@@ -63,8 +64,14 @@ func newCluster() *clusterType {
 	if cluster.dryRun {
 
 		dryRunDir := filepath.Join(dir, dryRunDir)
-		if _, err := os.Stat(dryRunDir); os.IsNotExist(err) {
-			err := os.Mkdir(dryRunDir, rwxrwxrwx)
+		exists, err := coreutils.Exists(dryRunDir)
+		if err != nil {
+			// notest
+			loggerError(err.Error())
+			return nil
+		}
+		if !exists {
+			err := os.Mkdir(dryRunDir, coreutils.FileMode_rwxrwxrwx)
 			if err != nil {
 				loggerError(err.Error())
 				return nil
@@ -75,13 +82,25 @@ func newCluster() *clusterType {
 		// Remove the old dry run configuration file
 		// Under tests, you do not need to delete for the possibility of testing command sequences
 		if !testing.Testing() {
-			if fileExists(dryRunClusterConfigFileName) {
+			exists, err := coreutils.Exists(dryRunClusterConfigFileName)
+			if err != nil {
+				// notest
+				loggerError(err.Error())
+				return nil
+			}
+			if exists {
 				os.Remove(dryRunClusterConfigFileName)
 			}
 		}
 
-		if fileExists(cluster.configFileName) {
-			if err := copyFile(cluster.configFileName, dryRunClusterConfigFileName); err != nil {
+		exists, err = coreutils.Exists(cluster.configFileName)
+		if err != nil {
+			// notest
+			loggerError(err.Error())
+			return nil
+		}
+		if exists {
+			if err := coreutils.CopyFile(cluster.configFileName, dryRunClusterConfigFileName); err != nil {
 				loggerError(err.Error())
 				return nil
 			}
@@ -90,7 +109,13 @@ func newCluster() *clusterType {
 		cluster.configFileName = dryRunClusterConfigFileName
 	}
 
-	if cluster.clusterConfigFileExists() {
+	exists, err := cluster.clusterConfigFileExists()
+	if err != nil {
+		// notest
+		loggerError(err.Error())
+		return nil
+	}
+	if exists {
 		cluster.exists = true
 		if err := cluster.loadFromJSON(); err != nil {
 			loggerError(err.Error())
@@ -150,26 +175,48 @@ func (n *nodeType) address() string {
 // nolint
 func (n *nodeType) nodeName() string {
 	if n.cluster.Edition == clusterEditionSE {
-		switch n.idx {
-		case 1:
-			return "app-node-1"
-		case 2:
-			return "app-node-2"
-		case 3:
-			return "db-node-1"
-		case 4:
-			return "db-node-2"
-		case 5:
-			return "db-node-3"
-		default:
-			return "node"
+		if n.cluster.SubEdition == clusterSubEditionSE3 {
+			return fmt.Sprintf("node-%d", n.idx)
+		} else {
+			switch n.idx {
+			case 1:
+				return "app-node-1"
+			case 2:
+				return "app-node-2"
+			case 3:
+				return "db-node-1"
+			case 4:
+				return "db-node-2"
+			case 5:
+				return "db-node-3"
+			default:
+				return "node"
+
+			}
 		}
+
 	} else if n.cluster.Edition == clusterEditionCE {
-		return "CENode"
+		return ceNodeName
 	} else {
 		return "node"
 	}
+}
 
+// nolint
+func (n *nodeType) hostNames() []string {
+	if n.cluster.SubEdition == clusterSubEditionSE5 {
+		return []string{n.nodeName()}
+	} else if n.cluster.SubEdition == clusterSubEditionSE3 {
+		switch n.idx {
+		case 1:
+			return []string{"app-node-1", "db-node-1"}
+		case 2:
+			return []string{"app-node-2", "db-node-2"}
+		case 3:
+			return []string{"db-node-3"}
+		}
+	}
+	return []string{n.nodeName()}
 }
 
 // the minimum amount of RAM required by the node (as string)
@@ -194,7 +241,7 @@ func (n *nodeType) nodeControllerFunction() error {
 	}
 
 	switch n.NodeRole {
-	case nrDBNode, nrAppNode:
+	case nrDBNode, nrAppNode, nrAppDbNode:
 		return seNodeControllerFunction(n)
 	case nrCENode:
 		return ceNodeControllerFunction(n)
@@ -204,8 +251,10 @@ func (n *nodeType) nodeControllerFunction() error {
 }
 
 func (n *nodeType) success() {
-	n.ActualNodeState = newNodeState(n.DesiredNodeState.Address, n.desiredNodeVersion(n.cluster))
-	n.DesiredNodeState.clear()
+	if n.DesiredNodeState != nil {
+		n.ActualNodeState = newNodeState(n.DesiredNodeState.Address, n.desiredNodeVersion(n.cluster))
+		n.DesiredNodeState.clear()
+	}
 	n.Error = ""
 }
 
@@ -233,17 +282,27 @@ func (n *nodeType) actualNodeVersion() string {
 	return n.ActualNodeState.NodeVersion
 }
 
-func (n *nodeType) label(key string) string {
+// nolint
+func (n *nodeType) label(key string) []string {
 	switch n.NodeRole {
 	case nrCENode:
-		return "ce"
+		return []string{"ce"}
 	case nrAppNode:
 		if key != swarmAppLabelKey {
-			return fmt.Sprintf("AppNode%d", n.idx)
+			return []string{fmt.Sprintf("AppNode%d", n.idx)}
 		}
-		return "AppNode"
+		return []string{"AppNode"}
 	case nrDBNode:
-		return fmt.Sprintf("DBNode%d", n.idx-seNodeCount)
+		if n.cluster.SubEdition == clusterSubEditionSE3 {
+			return []string{fmt.Sprintf("DBNode%d", n.idx)}
+		}
+		return []string{fmt.Sprintf("DBNode%d", n.idx-seNodeCount)}
+	case nrAppDbNode:
+		if key != swarmAppLabelKey {
+			return []string{fmt.Sprintf("AppNode%d", n.idx), fmt.Sprintf("DBNode%d", n.idx)}
+		}
+		return []string{"AppNode", fmt.Sprintf("DBNode%d", n.idx)}
+
 	}
 
 	err := fmt.Errorf(errInvalidNodeRole, n.address(), ErrInvalidNodeRole)
@@ -358,7 +417,7 @@ func (c *cmdType) validate(cluster *clusterType) error {
 // or
 // init [SE] [ipAddr1] [ipAddr2] [ipAddr3] [ipAddr4] [ipAddr5]
 // nolint
-func validateInitCmd(cmd *cmdType, cluster *clusterType) error {
+func validateInitCmd(cmd *cmdType, _ *clusterType) error {
 
 	if len(cmd.Args) == 0 {
 		return ErrMissingCommandArguments
@@ -375,7 +434,7 @@ func validateInitCmd(cmd *cmdType, cluster *clusterType) error {
 }
 
 // update [desiredVersion]
-func validateUpgradeCmd(cmd *cmdType, cluster *clusterType) error {
+func validateUpgradeCmd(_ *cmdType, _ *clusterType) error {
 	return nil
 }
 
@@ -523,23 +582,51 @@ func (a *acmeType) removeDomains(domainsStr string) {
 	}
 }
 
+type alertType struct {
+	DiscordWebhook string `json:"DiscordWebhook,omitempty"`
+}
+
 type clusterType struct {
 	configFileName        string
 	sshKey                string
 	exists                bool //the cluster is loaded from "cluster.json" at the start of ctool
 	dryRun                bool
 	Edition               string
+	SubEdition            string `json:"SubEdition,omitempty"`
 	ActualClusterVersion  string
-	DesiredClusterVersion string    `json:"DesiredClusterVersion,omitempty"`
-	SshPort               string    `json:"SSHPort,omitempty"`
-	Acme                  *acmeType `json:"Acme,omitempty"`
-	Cmd                   *cmdType  `json:"Cmd,omitempty"`
-	LastAttemptError      string    `json:"LastAttemptError,omitempty"`
-	SkipStacks            []string  `json:"SkipStacks,omitempty"`
-	Cron                  *cronType `json:"Cron,omitempty"`
+	DesiredClusterVersion string     `json:"DesiredClusterVersion,omitempty"`
+	SshPort               string     `json:"SSHPort,omitempty"`
+	Acme                  *acmeType  `json:"Acme,omitempty"`
+	Cmd                   *cmdType   `json:"Cmd,omitempty"`
+	LastAttemptError      string     `json:"LastAttemptError,omitempty"`
+	SkipStacks            []string   `json:"SkipStacks,omitempty"`
+	Cron                  *cronType  `json:"Cron,omitempty"`
+	Alert                 *alertType `json:"Alert,omitempty"`
 	Nodes                 []nodeType
 	ReplacedAddresses     []string `json:"ReplacedAddresses,omitempty"`
 	Draft                 bool     `json:"Draft,omitempty"`
+}
+
+// map[hostname]ipAddress
+func (c *clusterType) hosts() map[string]string {
+	hosts := make(map[string]string)
+	var addr string
+	for _, n := range c.Nodes {
+		for i := 0; i < len(n.hostNames()); i++ {
+			if n.DesiredNodeState != nil && len(n.DesiredNodeState.Address) > 0 {
+				addr = n.DesiredNodeState.Address
+			} else {
+				addr = n.address()
+			}
+			hosts[n.hostNames()[i]] = addr
+		}
+	}
+	return hosts
+}
+
+// apply the cluster data to the template file
+func (c *clusterType) updateTemplateFile(filename string) error {
+	return prepareScriptFromTemplate(filename, c)
 }
 
 func (c *clusterType) clusterControllerFunction() error {
@@ -577,6 +664,18 @@ func equalIPs(ip1, ip2 string) bool {
 }
 
 func (c *clusterType) nodeByHost(addrOrHostName string) *nodeType {
+
+	if c.SubEdition == clusterSubEditionSE3 {
+		switch {
+		case addrOrHostName == "app-node-1" || addrOrHostName == "db-node-1":
+			addrOrHostName = "node-1"
+		case addrOrHostName == "app-node-2" || addrOrHostName == "db-node-2":
+			addrOrHostName = "node-2"
+		case addrOrHostName == "db-node-3":
+			addrOrHostName = "node-3"
+		}
+	}
+
 	for i, n := range c.Nodes {
 		if addrOrHostName == n.nodeName() || equalIPs(n.ActualNodeState.Address, addrOrHostName) {
 			return &c.Nodes[i]
@@ -613,6 +712,7 @@ func (c *clusterType) applyCmd(cmd *cmdType) error {
 	case ckReplace:
 		oldAddr := cmd.Args[0]
 		newAddr := cmd.Args[1]
+		cmd.SkipStacks = c.SkipStacks
 
 		if c.addressInReplacedList(newAddr) {
 			return fmt.Errorf(errAddressInReplacedList, newAddr, ErrAddressCannotBeUsed)
@@ -637,11 +737,6 @@ func (c *clusterType) applyCmd(cmd *cmdType) error {
 				return fmt.Errorf(errHostIsNotAvailable, newAddr, ErrHostIsNotAvailable)
 			}
 
-			if len(c.Cron.Backup) > 0 && node.NodeRole == nrDBNode {
-				if err := checkBackupFolderOnHost(c, newAddr); err != nil {
-					return err
-				}
-			}
 		}
 
 		node.DesiredNodeState = newNodeState(newAddr, node.desiredNodeVersion(c))
@@ -651,6 +746,7 @@ func (c *clusterType) applyCmd(cmd *cmdType) error {
 		}
 	case ckUpgrade:
 		c.DesiredClusterVersion = version
+		cmd.SkipStacks = c.SkipStacks
 		for i := range c.Nodes {
 			c.Nodes[i].DesiredNodeState.NodeVersion = version
 			c.Nodes[i].DesiredNodeState.Address = c.Nodes[i].ActualNodeState.Address
@@ -689,7 +785,7 @@ func (c *clusterType) saveToJSON() error {
 		if err != nil {
 			return err
 		}
-		err = ioutil.WriteFile(c.configFileName, b, rwxrwxrwx)
+		err = os.WriteFile(c.configFileName, b, coreutils.FileMode_rwxrwxrwx)
 	}
 	return err
 }
@@ -704,15 +800,8 @@ func (c *clusterType) addressInReplacedList(address string) bool {
 	return false
 }
 
-func (c *clusterType) clusterConfigFileExists() bool {
-	_, err := os.Stat(c.configFileName)
-	if err == nil {
-		return true
-	}
-	if os.IsNotExist(err) {
-		return false
-	}
-	return false
+func (c *clusterType) clusterConfigFileExists() (bool, error) {
+	return coreutils.Exists(c.configFileName)
 }
 
 func (c *clusterType) loadFromJSON() error {
@@ -732,7 +821,12 @@ func (c *clusterType) loadFromJSON() error {
 		}
 	}()
 
-	if !c.clusterConfigFileExists() {
+	exists, err := c.clusterConfigFileExists()
+	if err != nil {
+		// notest
+		return err
+	}
+	if !exists {
 		return ErrClusterConfNotFound
 	}
 
@@ -750,6 +844,10 @@ func (c *clusterType) loadFromJSON() error {
 		c.Nodes[i].cluster = c
 	}
 
+	if c.Edition == clusterEditionSE && c.SubEdition != clusterSubEditionSE3 {
+		c.SubEdition = clusterSubEditionSE5
+	}
+
 	if err == nil {
 		err = c.setEnv()
 	}
@@ -760,23 +858,60 @@ func (c *clusterType) loadFromJSON() error {
 // Installation of the necessary variables of the environment
 func (c *clusterType) setEnv() error {
 
-	logger.Verbose(fmt.Sprintf("Set env %s = %s", envVoedgerNodeSshPort, c.SshPort))
+	setEnv := "Set env %s = %s"
+
+	logger.Verbose(fmt.Sprintf(setEnv, envVoedgerNodeSshPort, c.SshPort))
 	if err := os.Setenv(envVoedgerNodeSshPort, c.SshPort); err != nil {
 		return err
 	}
 
-	logger.Verbose(fmt.Sprintf("Set env %s = %s", envVoedgerAcmeDomains, c.Acme.domains()))
+	logger.Verbose(fmt.Sprintf(setEnv, envVoedgerAcmeDomains, c.Acme.domains()))
 	if err := os.Setenv(envVoedgerAcmeDomains, c.Acme.domains()); err != nil {
 		return err
 	}
 
 	if c.sshKey != "" {
-		logger.Verbose(fmt.Sprintf("Set env %s = %s", envVoedgerSshKey, c.sshKey))
+		logger.Verbose(fmt.Sprintf(setEnv, envVoedgerSshKey, c.sshKey))
 		if err := os.Setenv(envVoedgerSshKey, c.sshKey); err != nil {
 			return err
 		}
 	}
 
+	if c.Edition == clusterEditionSE {
+		if c.SubEdition == clusterSubEditionSE5 {
+			logger.Verbose(fmt.Sprintf(setEnv, envVoedgerEdition, clusterSubEditionSE5))
+			if err := os.Setenv(envVoedgerEdition, clusterSubEditionSE5); err != nil {
+				return err
+			}
+		} else if c.SubEdition == clusterSubEditionSE3 {
+			logger.Verbose(fmt.Sprintf(setEnv, envVoedgerEdition, clusterSubEditionSE3))
+			if err := os.Setenv(envVoedgerEdition, clusterSubEditionSE3); err != nil {
+				return err
+			}
+		}
+
+	}
+
+	if c.Edition == clusterEditionCE && len(c.Nodes) == 1 {
+		var port string
+
+		if c.Acme != nil && c.Acme.domains() != "" {
+			port = httpsPort
+		} else {
+			port = httpPort
+		}
+
+		logger.Verbose(fmt.Sprintf(setEnv, envVoedgerHttpPort, port))
+		if err := os.Setenv(envVoedgerHttpPort, port); err != nil {
+			return err
+		}
+
+		ceNode := c.Nodes[0].address()
+		logger.Verbose(fmt.Sprintf(setEnv, envVoedgerCeNode, ceNode))
+		if err := os.Setenv(envVoedgerCeNode, ceNode); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -786,13 +921,6 @@ func (c *clusterType) readFromInitArgs(cmd *cobra.Command, args []string) error 
 	defer c.updateNodeIndexes()
 	// nolint
 	defer c.saveToJSON()
-
-	skipStacks, err := cmd.Flags().GetStringSlice("skip-stack")
-	if err != nil {
-		fmt.Println("Error getting skip-stack values:", err)
-		return err
-	}
-	c.SkipStacks = skipStacks
 
 	if cmd == initCECmd { // CE args
 		c.Edition = clusterEditionCE
@@ -807,22 +935,51 @@ func (c *clusterType) readFromInitArgs(cmd *cobra.Command, args []string) error 
 			c.Nodes[0].DesiredNodeState.Address = "0.0.0.0"
 		}
 	} else { // SE args
-		c.Edition = clusterEditionSE
-		c.Nodes = make([]nodeType, 5)
+		skipStacks, err := cmd.Flags().GetStringSlice("skip-stack")
+		if err != nil {
+			fmt.Println("Error getting skip-stack values:", err)
+			return err
+		}
+		c.SkipStacks = skipStacks
 
-		for i := 0; i < initSeArgCount; i++ {
-			if i < seNodeCount {
-				c.Nodes[i].NodeRole = nrAppNode
-			} else {
-				c.Nodes[i].NodeRole = nrDBNode
+		if len(args) == se5NodeCount {
+
+			c.Edition = clusterEditionSE
+			c.SubEdition = clusterSubEditionSE5
+			c.Nodes = make([]nodeType, se5NodeCount)
+
+			for i := 0; i < se5NodeCount; i++ {
+				if i < seNodeCount {
+					c.Nodes[i].NodeRole = nrAppNode
+				} else {
+					c.Nodes[i].NodeRole = nrDBNode
+				}
+				c.Nodes[i].DesiredNodeState = newNodeState(args[i], c.DesiredClusterVersion)
+				c.Nodes[i].ActualNodeState = newNodeState("", "")
+				c.Nodes[i].cluster = c
 			}
-			c.Nodes[i].DesiredNodeState = newNodeState(args[i], c.DesiredClusterVersion)
-			c.Nodes[i].ActualNodeState = newNodeState("", "")
-			c.Nodes[i].cluster = c
+		} else if len(args) == se3NodeCount {
+			c.Edition = clusterEditionSE
+			c.SubEdition = clusterSubEditionSE3
+			c.Nodes = make([]nodeType, se3NodeCount)
+
+			for i := 0; i < se3NodeCount; i++ {
+				if i < seNodeCount {
+					c.Nodes[i].NodeRole = nrAppDbNode
+				} else {
+					c.Nodes[i].NodeRole = nrDBNode
+				}
+				c.Nodes[i].DesiredNodeState = newNodeState(args[i], c.DesiredClusterVersion)
+				c.Nodes[i].ActualNodeState = newNodeState("", "")
+				c.Nodes[i].cluster = c
+			}
+		} else {
+			return ErrInvalidNumberOfArguments
+
 		}
 
 	}
-	return nil
+	return c.setEnv()
 }
 
 // nolint
@@ -894,7 +1051,12 @@ func (c *clusterType) checkVersion() error {
 
 	var clusterVersion string
 
-	if c.clusterConfigFileExists() && !c.Cmd.isEmpty() {
+	exists, err := c.clusterConfigFileExists()
+	if err != nil {
+		// notest
+		return err
+	}
+	if exists && !c.Cmd.isEmpty() {
 		clusterVersion = c.DesiredClusterVersion
 	}
 

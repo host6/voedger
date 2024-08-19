@@ -8,7 +8,7 @@ package appdef
 import (
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/voedger/voedger/pkg/goutils/testingu/require"
 )
 
 func TestNew(t *testing.T) {
@@ -25,12 +25,17 @@ func TestNew(t *testing.T) {
 
 	require.Equal(adb.AppDef(), app, "should be ok get AppDef after build")
 
-	t.Run("must ok to read well known types", func(t *testing.T) {
+	t.Run("must ok to read sys package", func(t *testing.T) {
+		require.Equal([]string{SysPackage}, app.PackageLocalNames())
+		require.Equal(SysPackagePath, app.PackageFullPath(SysPackage))
+	})
+
+	t.Run("must ok to read sys types", func(t *testing.T) {
 		require.Equal(NullType, app.TypeByName(NullQName))
 		require.Equal(AnyType, app.TypeByName(QNameANY))
 	})
 
-	t.Run("must ok to read well known data", func(t *testing.T) {
+	t.Run("must ok to read sys data types", func(t *testing.T) {
 		require.Equal(SysData_RecordID, app.Data(SysData_RecordID).QName())
 		require.Equal(SysData_String, app.Data(SysData_String).QName())
 		require.Equal(SysData_bytes, app.Data(SysData_bytes).QName())
@@ -54,68 +59,32 @@ func Test_NullAppDef(t *testing.T) {
 		}
 	})
 
+	t.Run("should be return sys package only", func(t *testing.T) {
+		require.Equal([]string{SysPackage}, app.PackageLocalNames())
+		require.Equal(SysPackagePath, app.PackageFullPath(SysPackage))
+	})
+
 	t.Run("should be null return other members", func(t *testing.T) {
-		require.Empty(app.Comment())
-		require.Empty(app.PackageLocalNames())
+		app.Types(func(typ IType) {
+			if !typ.IsSystem() {
+				t.Errorf("unexpected user type %v", typ)
+			}
+		})
+	})
+}
 
-		require.Zero(
-			func() int {
-				cnt := 0
-				app.Types(func(t IType) {
-					if !t.IsSystem() {
-						cnt++
-					}
-				})
-				return cnt
-			}(),
-			"must be no user types")
+func Test_appDefBuilder_MustBuild(t *testing.T) {
+	require := require.New(t)
 
-		require.Zero(
-			func() int {
-				cnt := 0
-				app.Records(func(r IRecord) {
-					if !r.IsSystem() {
-						cnt++
-					}
-				})
-				return cnt
-			}(),
-			"must be no user records")
+	require.NotNil(New().MustBuild(), "Should be ok if no errors in builder")
 
-		require.Zero(
-			func() int {
-				cnt := 0
-				app.Structures(func(s IStructure) {
-					if !s.IsSystem() {
-						cnt++
-					}
-				})
-				return cnt
-			}(),
-			"must be no user structures")
+	t.Run("should panic if errors in builder", func(t *testing.T) {
+		adb := New()
+		adb.AddView(NewQName("test", "emptyView"))
 
-		require.Zero(
-			func() int {
-				cnt := 0
-				app.Projectors(func(p IProjector) {
-					if !p.IsSystem() {
-						cnt++
-					}
-				})
-				return cnt
-			}(),
-			"must be no user projectors")
-
-		require.Zero(
-			func() int {
-				cnt := 0
-				app.Extensions(func(e IExtension) {
-					if !e.IsSystem() {
-						cnt++
-					}
-				})
-				return cnt
-			}(),
-			"must be no user extensions")
+		require.Panics(func() { _ = adb.MustBuild() },
+			require.Is(ErrMissedError),
+			require.Has("emptyView"),
+		)
 	})
 }

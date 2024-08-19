@@ -7,8 +7,8 @@ package iauthnzimpl
 import (
 	"fmt"
 
-	"github.com/untillpro/goutils/logger"
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
 )
@@ -47,6 +47,14 @@ var defaultACL = ACL{
 				qNameQryIssueVerifiedValueTokenForResetPassword,
 				qNameCmdChangePassword,
 				qNameQryModules,
+				// https://dev.untill.com/projects/#!688808
+				qNameQryGetDigitalReceipt,
+				// https://dev.untill.com/projects/#!688808
+				qNameQrySendReceiptByEmail,
+				// https://dev.untill.com/projects/#!698913
+				qNameQryQueryResellerInfo,
+				// https://dev.untill.com/projects/#!700365
+				qNameQryGetResellers,
 			},
 		},
 		policy: ACPolicy_Allow,
@@ -75,7 +83,17 @@ var defaultACL = ACL{
 
 				qNameQryDescribePackage,
 				qNameQryDescribePackageNames,
+
+				qNameCmdVSqlUpdate,
 			},
+		},
+		policy: ACPolicy_Deny,
+	},
+	{
+		desc: "revoke insert or update on wdoc.air.LastNumbers from all",
+		pattern: PatternType{
+			opKindsPattern: []iauthnz.OperationKindType{iauthnz.OperationKind_INSERT, iauthnz.OperationKind_UPDATE},
+			qNamesPattern:  []appdef.QName{qNameWDocLastNumbers},
 		},
 		policy: ACPolicy_Deny,
 	},
@@ -184,17 +202,22 @@ var defaultACL = ACL{
 	},
 	{
 		// ACL for portals https://dev.untill.com/projects/#!637208
-		desc: "allow SELECT cdoc.air.ResellerSubscriptionsProfile to air.AirReseller",
+		desc: "allow SELECT cdoc.air.ResellerSubscriptionsProfile to air.SubscriptionReseller",
 		pattern: PatternType{
-			opKindsPattern:    []iauthnz.OperationKindType{iauthnz.OperationKind_SELECT},
-			qNamesPattern:     []appdef.QName{qNameCDocResellerSubscriptionsProfile},
-			principalsPattern: [][]iauthnz.Principal{{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleAirReseller}}},
+			opKindsPattern: []iauthnz.OperationKindType{iauthnz.OperationKind_SELECT},
+			qNamesPattern:  []appdef.QName{qNameCDocResellerSubscriptionsProfile},
+			principalsPattern: [][]iauthnz.Principal{
+				{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleAirReseller}}, // deprecated
+				// OR
+				// https://dev.untill.com/projects/#!694587
+				{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleSubscriptionReseller}},
+			},
 		},
 		policy: ACPolicy_Allow,
 	},
 	{
 		// ACL for portals https://dev.untill.com/projects/#!637208
-		desc: "allow exec few portals-related funcs to air.AirReseller",
+		desc: "allow exec few portals-related funcs to air.SubscriptionReseller",
 		pattern: PatternType{
 			qNamesPattern: []appdef.QName{
 				qNameCmdStoreResellerSubscriptionsProfile,
@@ -213,13 +236,18 @@ var defaultACL = ACL{
 				// https://dev.untill.com/projects/#!675263
 				qNameQryPaidSubscriptionInvoicesReport,
 			},
-			principalsPattern: [][]iauthnz.Principal{{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleAirReseller}}},
+			principalsPattern: [][]iauthnz.Principal{
+				{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleAirReseller}}, // deprecated
+				// OR
+				// https://dev.untill.com/projects/#!694587
+				{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleSubscriptionReseller}},
+			},
 		},
 		policy: ACPolicy_Allow,
 	},
 	{
 		// ACL for portals https://dev.untill.com/projects/#!637208
-		desc: "allow SELECT cdoc.air.UPProfile to air.UntillPaymentsReseller and air.AirReseller",
+		desc: "allow SELECT cdoc.air.UPProfile to air.UntillPaymentsReseller and air.UntillPaymentsUser",
 		pattern: PatternType{
 			opKindsPattern: []iauthnz.OperationKindType{iauthnz.OperationKind_SELECT},
 			qNamesPattern:  []appdef.QName{qNameCDocUPProfile},
@@ -252,16 +280,6 @@ var defaultACL = ACL{
 		policy: ACPolicy_Allow,
 	},
 	{
-		desc: "q.air.QueryResellerInfo is allowed for authenticated users",
-		pattern: PatternType{
-			qNamesPattern: []appdef.QName{
-				qNameQryQueryResellerInfo,
-			},
-			principalsPattern: [][]iauthnz.Principal{{{Kind: iauthnz.PrincipalKind_User}}},
-		},
-		policy: ACPolicy_Allow,
-	},
-	{
 		desc: "grant exec on few funcs to role air.UntillPaymentsUser",
 		pattern: PatternType{
 			qNamesPattern: []appdef.QName{
@@ -287,6 +305,8 @@ var defaultACL = ACL{
 				qNameCmdVoidUntillPayment,
 				// https://dev.untill.com/projects/#!683625
 				qNameQryCreateTap2PaySession,
+				// https://dev.untill.com/projects/#!693712
+				qNameCmdSaveTap2PayPayment,
 			},
 			principalsPattern: [][]iauthnz.Principal{
 				{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleUntillPaymentsUser}},
@@ -330,6 +350,10 @@ var defaultACL = ACL{
 				qNameQryGetUPInvoiceParties,
 				qNameQryGetUPTransferInstrument,
 				qNameCmdRetryTransferUPPayout,
+				// https://dev.untill.com/projects/#!685617
+				qNameQryGetUPLocationRates,
+				// https://dev.untill.com/projects/#!685179
+				qNameQryUpdateShopperStatement,
 			},
 			principalsPattern: [][]iauthnz.Principal{
 				{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleUntillPaymentsReseller}},
@@ -379,6 +403,26 @@ var defaultACL = ACL{
 			opKindsPattern:    []iauthnz.OperationKindType{iauthnz.OperationKind_UPDATE},
 			qNamesPattern:     []appdef.QName{qNameCDocReseller},
 			principalsPattern: [][]iauthnz.Principal{{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceAdmin}}},
+		},
+		policy: ACPolicy_Allow,
+	},
+	{
+		// https://github.com/voedger/voedger/issues/2470
+		desc: "grant exec on q.sys.State to role.air.BOReader",
+		pattern: PatternType{
+			opKindsPattern:    []iauthnz.OperationKindType{iauthnz.OperationKind_EXECUTE},
+			qNamesPattern:     []appdef.QName{qNameQryState},
+			principalsPattern: [][]iauthnz.Principal{{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleBOReader}}},
+		},
+		policy: ACPolicy_Allow,
+	},
+	{
+		// https://github.com/voedger/voedger/issues/2470
+		desc: "grant select on field q.sys.State.State to role.air.BOReader",
+		pattern: PatternType{
+			opKindsPattern:    []iauthnz.OperationKindType{iauthnz.OperationKind_SELECT},
+			fieldsPattern:     [][]string{{"State"}},
+			principalsPattern: [][]iauthnz.Principal{{{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleBOReader}}},
 		},
 		policy: ACPolicy_Allow,
 	},

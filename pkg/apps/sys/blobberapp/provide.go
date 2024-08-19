@@ -5,21 +5,18 @@
 package blobberapp
 
 import (
-	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/apps"
-	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/extensionpoints"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/parser"
-	"github.com/voedger/voedger/pkg/sys"
-	"github.com/voedger/voedger/pkg/sys/smtp"
+	"github.com/voedger/voedger/pkg/sys/sysprovide"
 )
 
-func Provide(smtpCfg smtp.Cfg) apps.AppBuilder {
-	return func(apis apps.APIs, cfg *istructsmem.AppConfigType, appDefBuilder appdef.IAppDefBuilder, ep extensionpoints.IExtensionPoint) apps.BuiltInAppDef {
-		sysPackageFS := sys.Provide(cfg, appDefBuilder, smtpCfg, ep, nil, apis.TimeFunc, apis.ITokens, apis.IFederation, apis.IAppStructsProvider, apis.IAppTokensFactory,
-			apis.NumCommandProcessors, nil, apis.IAppStorageProvider) // need to generate AppWorkspaces only
+func Provide() apps.AppBuilder {
+	return func(apis apps.APIs, cfg *istructsmem.AppConfigType, ep extensionpoints.IExtensionPoint) apps.BuiltInAppDef {
+		sysPackageFS := sysprovide.Provide(cfg) // need to generate AppWorkspaces only
 		blobberAppPackageFS := parser.PackageFS{
 			Path: BlobberAppFQN,
 			FS:   blobberSchemaFS,
@@ -27,8 +24,8 @@ func Provide(smtpCfg smtp.Cfg) apps.AppBuilder {
 		return apps.BuiltInAppDef{
 			AppQName: istructs.AppQName_sys_blobber,
 			Packages: []parser.PackageFS{sysPackageFS, blobberAppPackageFS},
-			AppDeploymentDescriptor: cluster.AppDeploymentDescriptor{
-				PartsCount:     DefDeploymentPartsCount,
+			AppDeploymentDescriptor: appparts.AppDeploymentDescriptor{
+				NumParts:       DefDeploymentPartsCount,
 				EnginePoolSize: DefDeploymentEnginePoolSize,
 			},
 		}

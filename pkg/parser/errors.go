@@ -30,6 +30,7 @@ var ErrAbstractWorkspaceDescriptor = errors.New("abstract workspace cannot have 
 var ErrNestedTablesNotSupportedInTypes = errors.New("nested tables not supported in types")
 var ErrSysWorkspaceNotFound = errors.New("sys.Workspace type not found")
 var ErrInheritanceFromSysWorkspaceNotAllowed = errors.New("explicit inheritance from sys.Workspace not allowed")
+var ErrScheduledProjectorDeprecated = errors.New("scheduled projector deprecated; use jobs instead")
 
 var ErrMustBeNotNull = errors.New("field has to be NOT NULL")
 var ErrCircularReferenceInInherits = errors.New("circular reference in INHERITS")
@@ -45,7 +46,11 @@ func ErrLocalPackageNameRedeclared(localPkgName, newLocalPkgName string) error {
 }
 
 func ErrAppDoesNotDefineUseOfPackage(name string) error {
-	return fmt.Errorf("application does not define use of package %s", name)
+	return fmt.Errorf("application does not define use of package %s. Check if the package is defined in IMPORT SCHEMA and parsed under the same name", name)
+}
+
+func ErrInvalidCronSchedule(schedule string) error {
+	return fmt.Errorf("invalid cron schedule: %s", schedule)
 }
 
 func ErrUndefinedCommand(name DefQName) error {
@@ -56,8 +61,16 @@ func ErrUndefinedQuery(name DefQName) error {
 	return fmt.Errorf("undefined query: %s", name.String())
 }
 
+func ErrUndefinedJob(name DefQName) error {
+	return fmt.Errorf("undefined job: %s", name)
+}
+
 func ErrUndefinedRate(name DefQName) error {
 	return fmt.Errorf("undefined rate: %s", name)
+}
+
+func ErrUndefinedView(name DefQName) error {
+	return fmt.Errorf("undefined view: %s", name)
 }
 
 func ErrUndefinedWorkspace(name DefQName) error {
@@ -98,7 +111,7 @@ func ErrCheckRegexpErr(e error) error {
 
 // Golang: could not import github.com/alecthomas/participle/v2/asd (no required module provides package "github.com/alecthomas/participle/v2/asd")
 func ErrCouldNotImport(pkgName string) error {
-	return fmt.Errorf("could not import %s", pkgName)
+	return fmt.Errorf("could not import %s. Check if the package is parsed under exactly this name", pkgName)
 }
 
 func ErrUnexpectedRootTableKind(kind int) error {
@@ -175,6 +188,10 @@ func ErrPackageRedeclared(name string) error {
 
 func ErrViewFieldVarchar(name string) error {
 	return fmt.Errorf("varchar field %s not supported in partition key", name)
+}
+
+func ErrViewFieldRecord(name string) error {
+	return fmt.Errorf("record field %s not supported in partition key", name)
 }
 
 func ErrViewFieldBytes(name string) error {

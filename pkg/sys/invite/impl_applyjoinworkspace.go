@@ -11,27 +11,28 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
-	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/authnz"
 	"github.com/voedger/voedger/pkg/sys/collection"
 	coreutils "github.com/voedger/voedger/pkg/utils"
+	"github.com/voedger/voedger/pkg/utils/federation"
 )
 
-func asyncProjectorApplyJoinWorkspace(timeFunc coreutils.TimeFunc, federation coreutils.IFederation, appQName istructs.AppQName, tokens itokens.ITokens) istructs.Projector {
+func asyncProjectorApplyJoinWorkspace(timeFunc coreutils.TimeFunc, federation federation.IFederation, tokens itokens.ITokens) istructs.Projector {
 	return istructs.Projector{
 		Name: qNameAPApplyJoinWorkspace,
-		Func: applyJoinWorkspace(timeFunc, federation, appQName, tokens),
+		Func: applyJoinWorkspace(timeFunc, federation, tokens),
 	}
 }
 
-func applyJoinWorkspace(timeFunc coreutils.TimeFunc, federation coreutils.IFederation, appQName istructs.AppQName, tokens itokens.ITokens) func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
+func applyJoinWorkspace(timeFunc coreutils.TimeFunc, federation federation.IFederation, tokens itokens.ITokens) func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
 	return func(event istructs.IPLogEvent, s istructs.IState, intents istructs.IIntents) (err error) {
 		// it is AFTER EXECUTE ON (InitiateJoinWorkspace) so no doc checking here
-		skbCDocInvite, err := s.KeyBuilder(state.Record, qNameCDocInvite)
+		skbCDocInvite, err := s.KeyBuilder(sys.Storage_Record, qNameCDocInvite)
 		if err != nil {
 			return
 		}
-		skbCDocInvite.PutRecordID(state.Field_ID, event.ArgumentObject().AsRecordID(field_InviteID))
+		skbCDocInvite.PutRecordID(sys.Storage_Record_Field_ID, event.ArgumentObject().AsRecordID(field_InviteID))
 		svCDocInvite, err := s.MustExist(skbCDocInvite)
 		if err != nil {
 			return
@@ -55,24 +56,25 @@ func applyJoinWorkspace(timeFunc coreutils.TimeFunc, federation coreutils.IFeder
 			return nil
 		}
 
-		skbCDocWorkspaceDescriptor, err := s.KeyBuilder(state.Record, authnz.QNameCDocWorkspaceDescriptor)
+		skbCDocWorkspaceDescriptor, err := s.KeyBuilder(sys.Storage_Record, authnz.QNameCDocWorkspaceDescriptor)
 		if err != nil {
 			return err
 		}
-		skbCDocWorkspaceDescriptor.PutQName(state.Field_Singleton, authnz.QNameCDocWorkspaceDescriptor)
+		skbCDocWorkspaceDescriptor.PutQName(sys.Storage_Record_Field_Singleton, authnz.QNameCDocWorkspaceDescriptor)
 		svCDocWorkspaceDescriptor, err := s.MustExist(skbCDocWorkspaceDescriptor)
 		if err != nil {
 			return
 		}
 
+		appQName := s.App()
+
 		token, err := payloads.GetSystemPrincipalToken(tokens, appQName)
 		if err != nil {
 			return
 		}
-		_, err = coreutils.FederationFunc(
-			federation.URL(),
+		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CreateJoinedWorkspace", appQName, svCDocInvite.AsInt64(field_InviteeProfileWSID)),
-			fmt.Sprintf(`{"args":{"Roles":"%s","InvitingWorkspaceWSID":%d,"WSName":"%s"}}`,
+			fmt.Sprintf(`{"args":{"Roles":"%s","InvitingWorkspaceWSID":%d,"WSName":%q}}`,
 				svCDocInvite.AsString(Field_Roles), event.Workspace(), svCDocWorkspaceDescriptor.AsString(authnz.Field_WSName)),
 			coreutils.WithAuthorizeBy(token),
 			coreutils.WithDiscardResponse(),
@@ -82,7 +84,7 @@ func applyJoinWorkspace(timeFunc coreutils.TimeFunc, federation coreutils.IFeder
 		}
 
 		// Find cdoc.sys.Subject by cdoc.air.Invite
-		skbViewCollection, err := s.KeyBuilder(state.View, collection.QNameCollectionView)
+		skbViewCollection, err := s.KeyBuilder(sys.Storage_View, collection.QNameCollectionView)
 		if err != nil {
 			return
 		}
@@ -116,8 +118,7 @@ func applyJoinWorkspace(timeFunc coreutils.TimeFunc, federation coreutils.IFeder
 			body = fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"Roles":"%s"}}]}`,
 				svCDocSubject.AsRecordID(appdef.SystemField_ID), svCDocInvite.AsString(Field_Roles))
 		}
-		resp, err := coreutils.FederationFunc(
-			federation.URL(),
+		resp, err := federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			body,
 			coreutils.WithAuthorizeBy(token))
@@ -134,8 +135,7 @@ func applyJoinWorkspace(timeFunc coreutils.TimeFunc, federation coreutils.IFeder
 			body = fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"State":%d,"Updated":%d}}]}`,
 				svCDocInvite.AsRecordID(appdef.SystemField_ID), State_Joined, timeFunc().UnixMilli())
 		}
-		_, err = coreutils.FederationFunc(
-			federation.URL(),
+		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			body,
 			coreutils.WithAuthorizeBy(token),

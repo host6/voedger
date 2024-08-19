@@ -10,7 +10,6 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	"github.com/voedger/voedger/pkg/istorage/provider"
@@ -23,7 +22,9 @@ import (
 func Example() {
 	buildAppDef := func(verInfo ...string) (appdef.IAppDefBuilder, appdef.IAppDef) {
 		adb := appdef.New()
-		adb.AddCDoc(appdef.NewQName("ver", "info")).SetComment(verInfo...)
+		adb.AddPackage("test", "test.com/test")
+
+		adb.AddCDoc(appdef.NewQName("test", "verInfo")).SetComment(verInfo...)
 		app, err := adb.Build()
 		if err != nil {
 			panic(err)
@@ -34,8 +35,8 @@ func Example() {
 	appConfigs := istructsmem.AppConfigsType{}
 	adb_1_v1, app_1_v1 := buildAppDef("app-1 ver.1")
 	adb_2_v1, app_2_v1 := buildAppDef("app-2 ver.1")
-	appConfigs.AddConfig(istructs.AppQName_test1_app1, adb_1_v1)
-	appConfigs.AddConfig(istructs.AppQName_test1_app2, adb_2_v1)
+	appConfigs.AddBuiltInAppConfig(istructs.AppQName_test1_app1, adb_1_v1).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
+	appConfigs.AddBuiltInAppConfig(istructs.AppQName_test1_app2, adb_2_v1).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 	appStructs := istructsmem.Provide(
 		appConfigs,
@@ -60,13 +61,13 @@ func Example() {
 
 	fmt.Println("*** Add ver 1 ***")
 
-	appParts.DeployApp(istructs.AppQName_test1_app1, app_1_v1, 1, cluster.PoolSize(2, 2, 2))
-	appParts.DeployApp(istructs.AppQName_test1_app2, app_2_v1, 1, cluster.PoolSize(2, 2, 2))
+	appParts.DeployApp(istructs.AppQName_test1_app1, nil, app_1_v1, 1, appparts.PoolSize(2, 2, 2, 2), istructs.DefaultNumAppWorkspaces)
+	appParts.DeployApp(istructs.AppQName_test1_app2, nil, app_2_v1, 1, appparts.PoolSize(2, 2, 2, 2), istructs.DefaultNumAppWorkspaces)
 
 	appParts.DeployAppPartitions(istructs.AppQName_test1_app1, []istructs.PartitionID{1})
 	appParts.DeployAppPartitions(istructs.AppQName_test1_app2, []istructs.PartitionID{1})
 
-	a1_v1_p1, err := appParts.Borrow(istructs.AppQName_test1_app1, 1, cluster.ProcessorKind_Command)
+	a1_v1_p1, err := appParts.Borrow(istructs.AppQName_test1_app1, 1, appparts.ProcessorKind_Command)
 	if err != nil {
 		panic(err)
 	}
@@ -74,7 +75,7 @@ func Example() {
 
 	report(a1_v1_p1)
 
-	a2_v1_p1, err := appParts.Borrow(istructs.AppQName_test1_app2, 1, cluster.ProcessorKind_Query)
+	a2_v1_p1, err := appParts.Borrow(istructs.AppQName_test1_app2, 1, appparts.ProcessorKind_Query)
 	if err != nil {
 		panic(err)
 	}
@@ -85,7 +86,7 @@ func Example() {
 	// Output:
 	// *** Add ver 1 ***
 	// test1/app1 partition 1
-	// - CDoc «ver.info» app-1 ver.1
+	// - CDoc «test.verInfo» app-1 ver.1
 	// test1/app2 partition 1
-	// - CDoc «ver.info» app-2 ver.1
+	// - CDoc «test.verInfo» app-2 ver.1
 }

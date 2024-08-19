@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/untillpro/goutils/logger"
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 	it "github.com/voedger/voedger/pkg/vit"
@@ -37,9 +37,9 @@ func InitiateEmailVerificationFunc(vit *it.VIT, f func() *coreutils.FuncResponse
 	return
 }
 
-func WaitForIndexOffset(vit *it.VIT, ws *it.AppWorkspace, index appdef.QName, offset int64) {
+func WaitForIndexOffset(vit *it.VIT, ws *it.AppWorkspace, index appdef.QName, offset istructs.Offset) {
 	type entity struct {
-		Last int64 `json:"Last"`
+		LastOffset istructs.Offset
 	}
 
 	body := fmt.Sprintf(`
@@ -63,7 +63,7 @@ func WaitForIndexOffset(vit *it.VIT, ws *it.AppWorkspace, index appdef.QName, of
 		if err != nil {
 			logger.Error(err)
 		}
-		if e.Last == offset {
+		if e.LastOffset == offset {
 			break
 		}
 	}

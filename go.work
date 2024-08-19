@@ -1,9 +1,10 @@
-go 1.21.4
+go 1.22.1
 
 use (
 	.
 	./cmd/ctool
 	./cmd/edger
-	./pkg/iextenginewazero/_testdata
 	./examples/airs-bp/air/extwasm
+	./pkg/iextengine/wazero/_testdata
+	./pkg/sys/it/testdata/apps/test2.app1/src
 )

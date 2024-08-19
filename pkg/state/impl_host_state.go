@@ -26,10 +26,6 @@ type hostState struct {
 	intentsLimit   int
 }
 
-func (s *hostState) PLogEvent() istructs.IPLogEvent {
-	panic("PLogEvent only available in actualizers")
-}
-
 func newHostState(name string, intentsLimit int, appStructsFunc AppStructsFunc) *hostState {
 	return &hostState{
 		name:           name,
@@ -50,12 +46,36 @@ func supports(ops int, op int) bool {
 	return ops&op == op
 }
 
-func (s *hostState) PackageFullPath(localName string) string {
+func (s hostState) App() appdef.AppQName {
+	return s.appStructsFunc().AppQName()
+}
+
+func (s hostState) AppStructs() istructs.IAppStructs {
+	return s.appStructsFunc()
+}
+
+func (s hostState) CommandPrepareArgs() istructs.CommandPrepareArgs {
+	panic(errCommandPrepareArgsNotSupportedByState)
+}
+
+func (s hostState) PackageFullPath(localName string) string {
 	return s.appStructsFunc().AppDef().PackageFullPath(localName)
 }
 
-func (s *hostState) PackageLocalName(fullPath string) string {
+func (s hostState) PackageLocalName(fullPath string) string {
 	return s.appStructsFunc().AppDef().PackageLocalName(fullPath)
+}
+
+func (s hostState) PLogEvent() istructs.IPLogEvent {
+	panic("PLogEvent only available in actualizers")
+}
+
+func (s hostState) QueryPrepareArgs() istructs.PrepareArgs {
+	panic(errQueryPrepareArgsNotSupportedByState)
+}
+
+func (s hostState) QueryCallback() istructs.ExecQueryCallback {
+	panic(errQueryCallbackNotSupportedByState)
 }
 
 func (s *hostState) addStorage(storageName appdef.QName, storage IStateStorage, ops int) {
@@ -244,6 +264,36 @@ func (s *hostState) Read(key istructs.IStateKeyBuilder, callback istructs.ValueC
 	}
 	return storage.Read(key, callback)
 }
+func (s *hostState) FindIntent(key istructs.IStateKeyBuilder) istructs.IStateValueBuilder {
+	for _, item := range s.intents[key.Storage()] {
+		if item.key.Equals(key) {
+			return item.value
+		}
+	}
+	return nil
+}
+
+func (s *hostState) FindIntentWithOpKind(key istructs.IStateKeyBuilder) (vb istructs.IStateValueBuilder, isNew bool) {
+	for _, item := range s.intents[key.Storage()] {
+		if item.key.Equals(key) {
+			return item.value, item.isNew
+		}
+	}
+	return nil, false
+}
+
+func (s *hostState) IntentsCount() int {
+	return s.isIntentsSize()
+}
+
+func (s *hostState) Intents(iterFunc func(key istructs.IStateKeyBuilder, value istructs.IStateValueBuilder, isNew bool)) {
+	for _, items := range s.intents {
+		for _, item := range items {
+			iterFunc(item.key, item.value, item.isNew)
+		}
+	}
+}
+
 func (s *hostState) NewValue(key istructs.IStateKeyBuilder) (eb istructs.IStateValueBuilder, err error) {
 	storage, ok := s.withInsert[key.Storage()]
 	if !ok {
@@ -255,8 +305,12 @@ func (s *hostState) NewValue(key istructs.IStateKeyBuilder) (eb istructs.IStateV
 	}
 
 	// TODO later: implement re-using of value builders
-	builder := storage.ProvideValueBuilder(key, nil)
-	s.putToIntents(key.Storage(), key, builder)
+	builder, err := storage.ProvideValueBuilder(key, nil)
+	if err != nil {
+		// notest
+		return nil, err
+	}
+	s.putToIntents(key.Storage(), key, builder, true)
 
 	return builder, nil
 }
@@ -271,8 +325,12 @@ func (s *hostState) UpdateValue(key istructs.IStateKeyBuilder, existingValue ist
 	}
 
 	// TODO later: implement re-using of value builders
-	builder := storage.ProvideValueBuilderForUpdate(key, existingValue, nil)
-	s.putToIntents(key.Storage(), key, builder)
+	builder, err := storage.ProvideValueBuilderForUpdate(key, existingValue, nil)
+	if err != nil {
+		// notest
+		return nil, err
+	}
+	s.putToIntents(key.Storage(), key, builder, false)
 
 	return builder, nil
 }
@@ -310,8 +368,8 @@ func (s *hostState) ClearIntents() {
 		s.intents[sid] = s.intents[sid][0:0]
 	}
 }
-func (s *hostState) putToIntents(storage appdef.QName, kb istructs.IStateKeyBuilder, vb istructs.IStateValueBuilder) {
-	s.intents[storage] = append(s.intents[storage], ApplyBatchItem{key: kb, value: vb})
+func (s *hostState) putToIntents(storage appdef.QName, kb istructs.IStateKeyBuilder, vb istructs.IStateValueBuilder, isNew bool) {
+	s.intents[storage] = append(s.intents[storage], ApplyBatchItem{key: kb, value: vb, isNew: isNew})
 }
 func (s *hostState) isIntentsFull() bool {
 	return s.isIntentsSize() >= s.intentsLimit

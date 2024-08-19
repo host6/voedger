@@ -22,6 +22,13 @@ type noRelease struct{}
 
 func (e noRelease) Release() {}
 
+type workpiece struct {
+	slots map[string]interface{}
+}
+
+func (w workpiece) Release() {
+}
+
 func TestBasicUsage_SyncPipeline(t *testing.T) {
 
 	// Конвейер состоит из операторов
@@ -30,18 +37,14 @@ func TestBasicUsage_SyncPipeline(t *testing.T) {
 	// Workpieces go through the pipelines operators
 
 	// Sync pipeline can use any workpiece type, e.g.:
-	type workpiece struct {
-		slots map[string]interface{}
-	}
-
 	// Simplified operator as a function, sets name slot
-	funcOpSetName := func(_ context.Context, work interface{}) error {
+	funcOpSetName := func(_ context.Context, work IWorkpiece) error {
 		work.(workpiece).slots["name"] = "michael"
 		return nil
 	}
 
 	// Simplified operator as a function, sets age
-	funcOpSetAge := func(ctx context.Context, work interface{}) (err error) {
+	funcOpSetAge := func(ctx context.Context, work IWorkpiece) (err error) {
 		work.(workpiece).slots["age"] = "39"
 		return nil
 	}
@@ -189,7 +192,7 @@ func TestBasicUsage_AsyncSwitchOperator(t *testing.T) {
 
 func TestBasicUsage_ForkOperator(t *testing.T) {
 	operator := ForkOperator(
-		func(work interface{}, branchNumber int) (fork interface{}, err error) {
+		func(work IWorkpiece, branchNumber int) (fork IWorkpiece, err error) {
 			fork = newTestWork()
 			for k, v := range work.(testwork).slots {
 				fork.(testwork).slots[k] = v
@@ -232,12 +235,15 @@ func TestBasicUsage_ForkOperator(t *testing.T) {
 	})
 }
 
+type workPiece struct {
+	kind   string
+	text   string
+	number int
+}
+
+func (w *workPiece) Release() {}
+
 func TestBasicUsage_SwitchOperator(t *testing.T) {
-	type workPiece struct {
-		kind   string
-		text   string
-		number int
-	}
 	switchLogic := mockSwitch{
 		func(work interface{}) (branchName string, err error) {
 			switch work.(*workPiece).kind {
@@ -418,6 +424,10 @@ func TestBasicUsage_AsyncPipeline_FlushByTimer(t *testing.T) {
 	t.Run("Should flush with valid workpieces", func(t *testing.T) {
 		mustHave := func(result *sync.Map, key string) bool {
 			_, ok := result.Load(key)
+			for !ok {
+				time.Sleep(time.Duration(10) * time.Millisecond)
+				_, ok = result.Load(key)
+			}
 			return ok
 		}
 		times := 0
@@ -447,12 +457,10 @@ func TestBasicUsage_AsyncPipeline_FlushByTimer(t *testing.T) {
 				}).create(), time.Duration(20)*time.Millisecond))
 
 		require.NoError(t, pipeline.SendAsync(userEntry{role: "admin", name: "John"}))
-		time.Sleep(time.Duration(50) * time.Millisecond)
 		require.True(t, mustHave(result, "JOHN"))
 		require.NoError(t, pipeline.SendAsync(userEntry{role: "admin", name: "Chip"}))
 		require.NoError(t, pipeline.SendAsync(userEntry{role: "waiter", name: "Wrong man"}))
 		require.NoError(t, pipeline.SendAsync(userEntry{role: "admin", name: "Dale"}))
-		time.Sleep(time.Duration(50) * time.Millisecond)
 		require.True(t, mustHave(result, "CHIP"))
 		require.True(t, mustHave(result, "DALE"))
 		require.GreaterOrEqual(t, times, 1)

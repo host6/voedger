@@ -8,7 +8,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -16,6 +15,7 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	coreutils "github.com/voedger/voedger/pkg/utils"
 
 	"github.com/robfig/cron/v3"
 )
@@ -27,32 +27,43 @@ var (
 
 // nolint
 func newBackupCmd() *cobra.Command {
-	backupNodeCmd := &cobra.Command{
-		Use:   "node [<node> <target folder>]",
-		Short: "Backup db node",
-		Args: func(cmd *cobra.Command, args []string) error {
-			if len(args) != 2 {
-				return ErrInvalidNumberOfArguments
-			}
-			return nil
-		},
-		RunE: backupNode,
+
+	c := newCluster()
+
+	var backupNodeCmd *cobra.Command
+
+	if c.Edition == clusterEditionCE {
+		backupNodeCmd = &cobra.Command{
+			Use:   "node [<target folder>]",
+			Short: "Backup a database node",
+			Args: func(cmd *cobra.Command, args []string) error {
+				if len(args) != 1 {
+					return ErrInvalidNumberOfArguments
+				}
+				return nil
+			},
+			RunE: backupCENode,
+		}
+	} else {
+		backupNodeCmd = &cobra.Command{
+			Use:   "node [<node> <target folder>]",
+			Short: "Backup a database node",
+			Args: func(cmd *cobra.Command, args []string) error {
+				if len(args) != 2 {
+					return ErrInvalidNumberOfArguments
+				}
+				return nil
+			},
+			RunE: backupNode,
+		}
+		backupNodeCmd.PersistentFlags().StringVarP(&sshPort, "ssh-port", "p", "22", "SSH port")
 	}
 
-	backupNodeCmd.PersistentFlags().StringVarP(&sshPort, "ssh-port", "p", "22", "SSH port")
 	backupNodeCmd.PersistentFlags().StringVarP(&expireTime, "expire", "e", "", "Expire time for backup (e.g. 7d, 1m)")
-	backupNodeCmd.PersistentFlags().StringVar(&sshKey, "ssh-key", "", "Path to SSH key")
-	value, exists := os.LookupEnv(envVoedgerSshKey)
-	if !exists || value == "" {
-		if err := backupNodeCmd.MarkPersistentFlagRequired("ssh-key"); err != nil {
-			loggerError(err.Error())
-			return nil
-		}
-	}
 
 	backupCronCmd := &cobra.Command{
 		Use:   "cron [<cron event>]",
-		Short: "Installation of a backup database of schedule",
+		Short: "Install a scheduled backup for the database",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 1 {
 				return ErrInvalidNumberOfArguments
@@ -61,19 +72,12 @@ func newBackupCmd() *cobra.Command {
 		},
 		RunE: backupCron,
 	}
-	backupCronCmd.PersistentFlags().StringVar(&sshKey, "ssh-key", "", "Path to SSH key")
-	value, exists = os.LookupEnv(envVoedgerSshKey)
-	if !exists || value == "" {
-		if err := backupCronCmd.MarkPersistentFlagRequired("ssh-key"); err != nil {
-			loggerError(err.Error())
-			return nil
-		}
-	}
+
 	backupCronCmd.PersistentFlags().StringVarP(&expireTime, "expire", "e", "", "Expire time for backup (e.g. 7d, 1m)")
 
 	backupListCmd := &cobra.Command{
 		Use:   "list",
-		Short: "Display a list of existing backups on all DB nodes",
+		Short: "Display a list of existing backups on all database nodes",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 0 {
 				return ErrInvalidNumberOfArguments
@@ -82,18 +86,12 @@ func newBackupCmd() *cobra.Command {
 		},
 		RunE: backupList,
 	}
-	backupListCmd.PersistentFlags().StringVar(&sshKey, "ssh-key", "", "Path to SSH key")
-	if !exists || value == "" {
-		if err := backupListCmd.MarkPersistentFlagRequired("ssh-key"); err != nil {
-			loggerError(err.Error())
-			return nil
-		}
-	}
+
 	backupListCmd.PersistentFlags().BoolVar(&jsonFormatBackupList, "json", false, "Output in JSON format")
 
 	backupNowCmd := &cobra.Command{
 		Use:   "now",
-		Short: "Backap database",
+		Short: "Backup the database",
 		Args: func(cmd *cobra.Command, args []string) error {
 			if len(args) != 0 {
 				return ErrInvalidNumberOfArguments
@@ -103,19 +101,14 @@ func newBackupCmd() *cobra.Command {
 		RunE: backupNow,
 	}
 
-	backupNowCmd.PersistentFlags().StringVar(&sshKey, "ssh-key", "", "Path to SSH key")
-	if !exists || value == "" {
-		if err := backupNowCmd.MarkPersistentFlagRequired("ssh-key"); err != nil {
-			loggerError(err.Error())
-			return nil
-		}
-	}
-
 	backupCmd := &cobra.Command{
 		Use:   "backup",
-		Short: "Backup database",
+		Short: "Backup the database",
 	}
 
+	if c.Edition != clusterEditionCE && !addSshKeyFlag(backupCmd) {
+		return nil
+	}
 	backupCmd.AddCommand(backupNodeCmd, backupCronCmd, backupListCmd, backupNowCmd)
 
 	return backupCmd
@@ -190,11 +183,74 @@ func validateBackupNodeCmd(cmd *cmdType, cluster *clusterType) error {
 		err = errors.Join(err, fmt.Errorf(errHostNotFoundInCluster, cmd.Args[1], ErrHostNotFoundInCluster))
 	}
 
-	if !fileExists(cmd.Args[3]) {
+	exists, errExists := coreutils.Exists(cmd.Args[3])
+	if errExists != nil {
+		// notest
+		err = errors.Join(err, errExists)
+		return err
+	}
+	if !exists {
 		err = errors.Join(err, fmt.Errorf(errSshKeyNotFound, cmd.Args[3], ErrFileNotFound))
 	}
 
 	return err
+}
+
+func newBackupErrorEvent(host string, err error) *eventType {
+	return &eventType{
+		StartsAt: customTime(time.Now()),
+		EndsAt:   customTime(time.Now().Add(time.Minute)),
+		Annotations: map[string]string{
+			"backup": "Backup failed",
+			"error":  err.Error(),
+		},
+		Labels: map[string]string{
+			alertLabelSource:   "ctool",
+			alertLabelInstance: host,
+			alertLabelSeverity: "error",
+		},
+		GeneratorURL: fmt.Sprintf("http://%s:9093", host)}
+}
+
+func backupCENode(cmd *cobra.Command, args []string) error {
+	cluster := newCluster()
+
+	var err error
+
+	host := "ce-node"
+
+	if err = mkCommandDirAndLogFile(cmd, cluster); err != nil {
+		if e := newBackupErrorEvent(host, err).postAlert(cluster); e != nil {
+			err = errors.Join(err, e)
+		}
+		return err
+	}
+
+	if expireTime != "" {
+		expire, e := newExpireType(expireTime)
+		if e != nil {
+			if err := newBackupErrorEvent(host, e).postAlert(cluster); err != nil {
+				e = errors.Join(err, e)
+			}
+			return e
+		}
+		cluster.Cron.ExpireTime = expire.string()
+	}
+
+	loggerInfo("Backup node", strings.Join(args, " "))
+	if err = newScriptExecuter("", "").
+		run("ce/backup-node.sh", args...); err != nil {
+		if e := newBackupErrorEvent(host, err).postAlert(cluster); e != nil {
+			err = errors.Join(err, e)
+		}
+		return err
+	}
+
+	if err = deleteExpireBacupsCE(cluster); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func backupNode(cmd *cobra.Command, args []string) error {
@@ -202,13 +258,21 @@ func backupNode(cmd *cobra.Command, args []string) error {
 
 	var err error
 
+	host := args[0]
+
 	if err = mkCommandDirAndLogFile(cmd, cluster); err != nil {
+		if e := newBackupErrorEvent(host, err).postAlert(cluster); e != nil {
+			err = errors.Join(err, e)
+		}
 		return err
 	}
 
 	if expireTime != "" {
 		expire, e := newExpireType(expireTime)
 		if e != nil {
+			if err := newBackupErrorEvent(host, e).postAlert(cluster); err != nil {
+				e = errors.Join(err, e)
+			}
 			return e
 		}
 		cluster.Cron.ExpireTime = expire.string()
@@ -217,6 +281,9 @@ func backupNode(cmd *cobra.Command, args []string) error {
 	loggerInfo("Backup node", strings.Join(args, " "))
 	if err = newScriptExecuter(cluster.sshKey, "").
 		run("backup-node.sh", args...); err != nil {
+		if e := newBackupErrorEvent(host, err).postAlert(cluster); e != nil {
+			err = errors.Join(err, e)
+		}
 		return err
 	}
 
@@ -252,15 +319,22 @@ func backupNow(cmd *cobra.Command, args []string) error {
 
 	folder := newBackupFolderName()
 
-	for _, n := range cluster.Nodes {
-		if n.NodeRole != nrDBNode {
-			continue
-		}
+	sBackupNode := "BackupNode"
 
-		loggerInfo("Backup node", n.nodeName(), n.address())
-		if err = newScriptExecuter(cluster.sshKey, "").
-			run("backup-node.sh", n.address(), folder); err != nil {
-			return err
+	for _, n := range cluster.Nodes {
+		if n.NodeRole == nrDBNode {
+			loggerInfo(sBackupNode, n.nodeName(), n.address())
+			if err = newScriptExecuter(cluster.sshKey, "").
+				run("backup-node.sh", n.address(), folder); err != nil {
+				return err
+			}
+		}
+		if n.NodeRole == nrCENode {
+			loggerInfo(sBackupNode, n.nodeName(), n.address())
+			if err = newScriptExecuter("", "").
+				run("ce/backup-node.sh", folder); err != nil {
+				return err
+			}
 		}
 	}
 	return nil
@@ -320,11 +394,18 @@ func checkBackupFolders(cluster *clusterType) error {
 				err = errors.Join(err, fmt.Errorf(errBackupFolderIsNotPrepared, n.nodeName()+" "+n.address(), ErrBackupFolderIsNotPrepared))
 			}
 		}
+		if n.NodeRole == nrCENode {
+			if e := newScriptExecuter("", "").
+				run("ce/check-folder.sh", backupFolder); e != nil {
+				err = errors.Join(err, fmt.Errorf(errBackupFolderIsNotPrepared, n.nodeName()+" "+n.address(), ErrBackupFolderIsNotPrepared))
+			}
+		}
 	}
 	return err
 }
 
 // Checking the presence of a Backup folder on node
+// nolint
 func checkBackupFolderOnHost(cluster *clusterType, addr string) error {
 	if e := newScriptExecuter(cluster.sshKey, "").
 		run("check-remote-folder.sh", addr, backupFolder); e != nil {
@@ -370,11 +451,17 @@ func getBackupList(cluster *clusterType) (string, error) {
 		args = []string{"json"}
 	}
 
-	if err = newScriptExecuter(cluster.sshKey, "").run("backup-list.sh", args...); err != nil {
-		return "", nil
+	if cluster.Edition == clusterEditionCE {
+		if err = newScriptExecuter("", "").run("ce/backup-list.sh", args...); err != nil {
+			return "", nil
+		}
+	} else {
+		if err = newScriptExecuter(cluster.sshKey, "").run("backup-list.sh", args...); err != nil {
+			return "", nil
+		}
 	}
 
-	fContent, e := ioutil.ReadFile(backupFName)
+	fContent, e := os.ReadFile(backupFName)
 	if e != nil {
 		return "", e
 	}
@@ -391,6 +478,21 @@ func deleteExpireBacups(cluster *clusterType, hostAddr string) error {
 	loggerInfo("Search and delete expire backups on", hostAddr)
 	if err := newScriptExecuter(cluster.sshKey, "").
 		run("delete-expire-backups-ssh.sh", hostAddr, backupFolder, cluster.Cron.ExpireTime); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func deleteExpireBacupsCE(cluster *clusterType) error {
+
+	if cluster.Cron.ExpireTime == "" {
+		return nil
+	}
+
+	loggerInfo("Search and delete expire backups on ce-node")
+	if err := newScriptExecuter("", "").
+		run("ce/delete-expire-backups.sh", backupFolder, cluster.Cron.ExpireTime); err != nil {
 		return err
 	}
 

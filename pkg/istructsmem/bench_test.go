@@ -68,9 +68,10 @@ func bench_BuildRawEvent(b *testing.B, numOfIntFields int) {
 
 	// application
 	appDef := func() appdef.IAppDefBuilder {
-		app := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 
-		doc := app.AddODoc(oDocQName)
+		doc := adb.AddODoc(oDocQName)
 		for i := 0; i < numOfIntFields; i++ {
 
 			intFieldName := fmt.Sprintf("i%v", i)
@@ -84,14 +85,15 @@ func bench_BuildRawEvent(b *testing.B, numOfIntFields int) {
 			stringFieldValues[stringFieldName] = stringFieldName
 
 		}
-		app.AddCommand(cmdQName).SetParam(oDocQName)
-		return app
+		adb.AddCommand(cmdQName).SetParam(oDocQName)
+		return adb
 	}
 
 	// Con
 
 	configs := make(AppConfigsType, 1)
-	cfg := configs.AddConfig(appName, appDef())
+	cfg := configs.AddBuiltInAppConfig(appName, appDef())
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 	// Register command
 	{
@@ -100,7 +102,7 @@ func bench_BuildRawEvent(b *testing.B, numOfIntFields int) {
 
 	provider := Provide(configs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
 
-	appStructs, err := provider.AppStructs(appName)
+	appStructs, err := provider.BuiltIn(appName)
 	require.NoError(err)
 
 	start := time.Now()

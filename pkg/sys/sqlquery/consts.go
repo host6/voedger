@@ -6,16 +6,13 @@ package sqlquery
 
 import (
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/istructs"
 )
 
 const (
-	base          = 10
-	bitSize64     = 64
-	DefaultLimit  = 100
-	DefaultOffset = istructs.FirstOffset
-	field_Query   = "Query"
-	flag_WSID     = "--wsid="
+	base         = 10
+	bitSize64    = 64
+	DefaultLimit = 100
+	field_Query  = "Query"
 )
 
 var (

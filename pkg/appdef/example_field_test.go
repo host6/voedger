@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021-present Sigma-Soft, Ltd.
+ * @author: Nikolay Nikitin
  */
 
 package appdef_test
@@ -19,20 +20,17 @@ func ExampleIFieldsBuilder_AddField() {
 
 	// how to build doc with string field
 	{
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 
-		doc := appDef.AddODoc(docName)
+		doc := adb.AddODoc(docName)
 		doc.
 			AddField("code", appdef.DataKind_string, true, appdef.MinLen(1), appdef.MaxLen(4), appdef.Pattern(`^\d+$`)).
 			SetFieldComment("code", "Code is string containing from one to four digits").
 			AddField("barCode", appdef.DataKind_bytes, false, appdef.MaxLen(4096)).
 			SetFieldComment("barCode", "Bar code scan data, up to 4 KB")
 
-		if a, err := appDef.Build(); err == nil {
-			app = a
-		} else {
-			panic(err)
-		}
+		app = adb.MustBuild()
 	}
 
 	// how to inspect fields
@@ -82,31 +80,28 @@ func ExampleIFieldsBuilder_AddDataField() {
 	// how to build doc with string field
 	{
 
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 
 		str10name := appdef.NewQName("test", "str10")
-		str10 := appDef.AddData(str10name, appdef.DataKind_string, appdef.NullQName, appdef.MinLen(10), appdef.MaxLen(10))
+		str10 := adb.AddData(str10name, appdef.DataKind_string, appdef.NullQName, appdef.MinLen(10), appdef.MaxLen(10))
 		str10.SetComment("String with 10 characters exact")
 
 		dig10name := appdef.NewQName("test", "dig10")
-		_ = appDef.AddData(dig10name, appdef.DataKind_string, str10name, appdef.Pattern(`^\d+$`, "only digits"))
+		_ = adb.AddData(dig10name, appdef.DataKind_string, str10name, appdef.Pattern(`^\d+$`, "only digits"))
 
 		monthName := appdef.NewQName("test", "month")
-		month := appDef.AddData(monthName, appdef.DataKind_int32, appdef.NullQName, appdef.MinExcl(0), appdef.MaxIncl(12))
+		month := adb.AddData(monthName, appdef.DataKind_int32, appdef.NullQName, appdef.MinExcl(0), appdef.MaxIncl(12))
 		month.SetComment("Month number, left-open range (0-12]")
 
-		doc := appDef.AddCDoc(docName)
+		doc := adb.AddCDoc(docName)
 		doc.
 			AddDataField("code", dig10name, true).
 			SetFieldComment("code", "Code is string containing 10 digits").
 			AddDataField("month", monthName, true).
 			SetFieldComment("month", "Month number natural up to 12")
 
-		if a, err := appDef.Build(); err == nil {
-			app = a
-		} else {
-			panic(err)
-		}
+		app = adb.MustBuild()
 	}
 
 	// how to inspect fields
@@ -155,19 +150,16 @@ func ExampleIFieldsBuilder_SetFieldVerify() {
 
 	// how to build doc with verified field
 	{
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 
-		doc := appDef.AddCDoc(docName)
+		doc := adb.AddCDoc(docName)
 		doc.
 			AddField("pin", appdef.DataKind_string, true, appdef.MinLen(4), appdef.MaxLen(4), appdef.Pattern(`^\d+$`)).
 			SetFieldComment("pin", "Secret four digits pin code").
 			SetFieldVerify("pin", appdef.VerificationKind_EMail, appdef.VerificationKind_Phone)
 
-		if a, err := appDef.Build(); err == nil {
-			app = a
-		} else {
-			panic(err)
-		}
+		app = adb.MustBuild()
 	}
 
 	// how to inspect verified field

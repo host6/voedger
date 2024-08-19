@@ -9,16 +9,18 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
-	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/authnz"
 	coreutils "github.com/voedger/voedger/pkg/utils"
+	"github.com/voedger/voedger/pkg/utils/federation"
 )
 
-func provideResetPassword(cfgRegistry *istructsmem.AppConfigType, itokens itokens.ITokens, federation coreutils.IFederation) {
+func provideResetPassword(cfgRegistry *istructsmem.AppConfigType, itokens itokens.ITokens, federation federation.IFederation) {
 
 	// sys/registry/pseudoProfileWSID/q.sys.InitiateResetPasswordByEmail
 	// null auth
@@ -42,14 +44,14 @@ func provideResetPassword(cfgRegistry *istructsmem.AppConfigType, itokens itoken
 
 // sys/registry/pseudoWSID
 // null auth
-func provideQryInitiateResetPasswordByEmailExec(itokens itokens.ITokens, federation coreutils.IFederation) istructsmem.ExecQueryClosure {
+func provideQryInitiateResetPasswordByEmailExec(itokens itokens.ITokens, federation federation.IFederation) istructsmem.ExecQueryClosure {
 	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 		loginAppStr := args.ArgumentObject.AsString(authnz.Field_AppName)
 		email := args.ArgumentObject.AsString(field_Email)
 		language := args.ArgumentObject.AsString(field_Language)
 		login := email // TODO: considering login is email
 
-		loginAppQName, err := istructs.ParseAppQName(loginAppStr)
+		loginAppQName, err := appdef.ParseAppQName(loginAppStr)
 		if err != nil {
 			return coreutils.NewHTTPError(http.StatusBadRequest, err)
 		}
@@ -63,11 +65,11 @@ func provideQryInitiateResetPasswordByEmailExec(itokens itokens.ITokens, federat
 		}
 
 		// check CDoc<registry.Login>.WSID != 0
-		kb, err := args.State.KeyBuilder(state.Record, QNameCDocLogin)
+		kb, err := args.State.KeyBuilder(sys.Storage_Record, QNameCDocLogin)
 		if err != nil {
 			return err
 		}
-		kb.PutRecordID(state.Field_ID, cdocLoginID)
+		kb.PutRecordID(sys.Storage_Record_Field_ID, cdocLoginID)
 		sv, err := args.State.MustExist(kb)
 		if err != nil {
 			return err
@@ -83,7 +85,7 @@ func provideQryInitiateResetPasswordByEmailExec(itokens itokens.ITokens, federat
 		}
 		body := fmt.Sprintf(`{"args":{"Entity":"%s","Field":"%s","Email":"%s","TargetWSID":%d,"ForRegistry":true,"Language":"%s"},"elements":[{"fields":["VerificationToken"]}]}`,
 			QNameCommandResetPasswordByEmailUnloggedParams, field_Email, email, profileWSID, language) // targetWSID - is the workspace we're going to use the verified value at
-		resp, err := coreutils.FederationFunc(federation.URL(), fmt.Sprintf("api/%s/%d/q.sys.InitiateEmailVerification", loginAppQName, profileWSID), body, coreutils.WithAuthorizeBy(sysToken))
+		resp, err := federation.Func(fmt.Sprintf("api/%s/%d/q.sys.InitiateEmailVerification", loginAppQName, profileWSID), body, coreutils.WithAuthorizeBy(sysToken))
 		if err != nil {
 			return fmt.Errorf("q.sys.InitiateEmailVerification failed: %w", err)
 		}
@@ -95,14 +97,14 @@ func provideQryInitiateResetPasswordByEmailExec(itokens itokens.ITokens, federat
 
 // sys/registry/pseudoWSID
 // null auth
-func provideIssueVerifiedValueTokenForResetPasswordExec(itokens itokens.ITokens, federation coreutils.IFederation) istructsmem.ExecQueryClosure {
+func provideIssueVerifiedValueTokenForResetPasswordExec(itokens itokens.ITokens, federation federation.IFederation) istructsmem.ExecQueryClosure {
 	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 		token := args.ArgumentObject.AsString(field_VerificationToken)
 		code := args.ArgumentObject.AsString(field_VerificationCode)
 		profileWSID := args.ArgumentObject.AsInt64(field_ProfileWSID)
 		loginAppStr := args.ArgumentObject.AsString(authnz.Field_AppName)
 
-		loginAppQName, err := istructs.ParseAppQName(loginAppStr)
+		loginAppQName, err := appdef.ParseAppQName(loginAppStr)
 		if err != nil {
 			return coreutils.NewHTTPError(http.StatusBadRequest, err)
 		}
@@ -113,7 +115,7 @@ func provideIssueVerifiedValueTokenForResetPasswordExec(itokens itokens.ITokens,
 		}
 
 		body := fmt.Sprintf(`{"args":{"VerificationToken":"%s","VerificationCode":"%s","ForRegistry":true},"elements":[{"fields":["VerifiedValueToken"]}]}`, token, code)
-		resp, err := coreutils.FederationFunc(federation.URL(), fmt.Sprintf("api/%s/%d/q.sys.IssueVerifiedValueToken", loginAppQName, profileWSID), body, coreutils.WithAuthorizeBy(sysToken))
+		resp, err := federation.Func(fmt.Sprintf("api/%s/%d/q.sys.IssueVerifiedValueToken", loginAppQName, profileWSID), body, coreutils.WithAuthorizeBy(sysToken))
 		if err != nil {
 			return err
 		}

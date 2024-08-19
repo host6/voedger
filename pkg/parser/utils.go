@@ -60,7 +60,7 @@ func iterate(c IStatementCollection, callback func(stmt interface{})) {
 	})
 }
 
-func resolveInCtx[stmtType *TableStmt | *TypeStmt | *FunctionStmt | *CommandStmt | *ProjectorStmt |
+func resolveInCtx[stmtType *TableStmt | *TypeStmt | *FunctionStmt | *CommandStmt | *ProjectorStmt | *JobStmt |
 	*RateStmt | *TagStmt | *WorkspaceStmt | *StorageStmt | *ViewStmt | *LimitStmt | *QueryStmt | *RoleStmt | *DeclareStmt](fn DefQName, ictx *iterateCtx, cb func(f stmtType, schema *PackageSchemaAST) error) error {
 	var err error
 	var item stmtType
@@ -87,8 +87,12 @@ func resolveInCtx[stmtType *TableStmt | *TypeStmt | *FunctionStmt | *CommandStmt
 			return ErrUndefinedType(fn)
 		case *WorkspaceStmt:
 			return ErrUndefinedWorkspace(fn)
+		case *JobStmt:
+			return ErrUndefinedJob(fn)
 		case *RateStmt:
 			return ErrUndefinedRate(fn)
+		case *ViewStmt:
+			return ErrUndefinedView(fn)
 		default:
 			return ErrUndefined(fn.String())
 		}
@@ -114,7 +118,7 @@ func lookupInSysPackage[stmtType *WorkspaceStmt](ctx *basicContext, fn DefQName)
 func getCurrentWorkspace(ictx *iterateCtx) *WorkspaceStmt {
 	var ic *iterateCtx = ictx
 	var ws *WorkspaceStmt = nil
-	for ic != nil && ws == nil {
+	for ic != nil {
 		if _, isWorkspace := ic.collection.(*WorkspaceStmt); isWorkspace {
 			ws = ic.collection.(*WorkspaceStmt)
 			break
@@ -124,7 +128,7 @@ func getCurrentWorkspace(ictx *iterateCtx) *WorkspaceStmt {
 	return ws
 }
 
-func lookupInCtx[stmtType *TableStmt | *TypeStmt | *FunctionStmt | *CommandStmt | *RateStmt | *TagStmt | *ProjectorStmt |
+func lookupInCtx[stmtType *TableStmt | *TypeStmt | *FunctionStmt | *CommandStmt | *RateStmt | *TagStmt | *ProjectorStmt | *JobStmt |
 	*WorkspaceStmt | *ViewStmt | *StorageStmt | *LimitStmt | *QueryStmt | *RoleStmt | *WsDescriptorStmt | *DeclareStmt](fn DefQName, ictx *iterateCtx) (stmtType, *PackageSchemaAST, error) {
 	schema, err := getTargetSchema(fn, ictx)
 	if err != nil {
@@ -154,47 +158,51 @@ func lookupInCtx[stmtType *TableStmt | *TypeStmt | *FunctionStmt | *CommandStmt 
 		}
 	}
 
-	if schema == ictx.pkg {
-		ws := getCurrentWorkspace(ictx)
-		// First look in the current workspace
-		if ws != nil {
-			ws.Iterate(lookupCallback)
-			if item == nil {
-				var value interface{} = item
-				if _, ok := value.(*WorkspaceStmt); !ok { //  when looking for something else than a workspace, look in the inherited workspaces
-					for _, dq := range ws.Inherits {
-						err := resolveInCtx[*WorkspaceStmt](dq, ictx, func(f *WorkspaceStmt, schema *PackageSchemaAST) error {
-							f.Iterate(lookupCallback)
-							return nil
-						})
-						if err != nil {
-							return nil, nil, err
-						}
+	ws := getCurrentWorkspace(ictx)
+	// First look in the current workspace
+	if ws != nil {
+		ws.Iterate(lookupCallback)
+		if item == nil {
+			var value interface{} = item
+			if _, ok := value.(*WorkspaceStmt); !ok { //  when looking for something else than a workspace, look in the inherited workspaces
+				for _, dq := range ws.Inherits {
+					err := resolveInCtx[*WorkspaceStmt](dq, ictx, func(f *WorkspaceStmt, schema *PackageSchemaAST) error {
+						f.Iterate(lookupCallback)
+						return nil
+					})
+					if err != nil {
+						return nil, nil, err
+					}
+				}
+				if item == nil {
+					sysWorkspace, err := lookupInSysPackage(ictx.basicContext, DefQName{Package: appdef.SysPackage, Name: rootWorkspaceName})
+					if err != nil {
+						return nil, nil, err
+					}
+					if sysWorkspace != nil {
+						sysWorkspace.Iterate(lookupCallback)
 					}
 				}
 			}
 		}
-
-		// Look in the package
-		if item == nil {
-			schema.Ast.Iterate(lookupCallback)
-		}
-
-		// Look in the sys package
-		if item == nil && maybeSysPkg(fn.Package) { // Look in sys pkg
-			schema = ictx.app.Packages[appdef.SysPackage]
-			if schema == nil {
-				return nil, nil, ErrCouldNotImport(appdef.SysPackage)
-			}
-			iterPkg := func(coll IStatementCollection) {
-				coll.Iterate(lookupCallback)
-			}
-			iterPkg(schema.Ast)
-		}
-		return item, schema, nil
 	}
 
-	schema.Ast.Iterate(lookupCallback)
+	// Look in the package
+	if item == nil {
+		schema.Ast.Iterate(lookupCallback)
+	}
+
+	// Look in the sys package
+	if item == nil && maybeSysPkg(fn.Package) { // Look in sys pkg
+		schema = ictx.app.Packages[appdef.SysPackage]
+		if schema == nil {
+			return nil, nil, ErrCouldNotImport(appdef.SysPackage)
+		}
+		iterPkg := func(coll IStatementCollection) {
+			coll.Iterate(lookupCallback)
+		}
+		iterPkg(schema.Ast)
+	}
 	return item, schema, nil
 }
 
@@ -209,7 +217,7 @@ func iteratePackage(pkg *PackageSchemaAST, ctx *basicContext, callback func(stmt
 }
 
 func iteratePackageStmt[stmtType *TableStmt | *TypeStmt | *ViewStmt | *CommandStmt | *QueryStmt |
-	*WorkspaceStmt | *AlterWorkspaceStmt | *ProjectorStmt | *RateStmt](pkg *PackageSchemaAST, ctx *basicContext, callback func(stmt stmtType, ctx *iterateCtx)) {
+	*WorkspaceStmt | *AlterWorkspaceStmt | *ProjectorStmt | *JobStmt | *RateStmt](pkg *PackageSchemaAST, ctx *basicContext, callback func(stmt stmtType, ctx *iterateCtx)) {
 	iteratePackage(pkg, ctx, func(stmt interface{}, ctx *iterateCtx) {
 		if s, ok := stmt.(stmtType); ok {
 			callback(s, ctx)
@@ -238,8 +246,8 @@ func isInternalName(pkgName Ident, pkgAst *PackageSchemaAST) bool {
 	return pkg == "" || pkg == pkgAst.Name
 }
 
-func getPackageName(pkgQN string) string {
-	parts := strings.Split(pkgQN, "/")
+func GetPackageName(pkgPath string) string {
+	parts := strings.Split(pkgPath, "/")
 	if len(parts) == 0 {
 		return ""
 	}
@@ -343,9 +351,6 @@ func dataTypeToDataKind(t DataType) appdef.DataKind {
 	}
 	if t.Timestamp {
 		return appdef.DataKind_int64
-	}
-	if t.Record {
-		return appdef.DataKind_Record
 	}
 	return appdef.DataKind_null
 }

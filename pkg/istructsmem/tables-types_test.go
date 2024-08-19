@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	log "github.com/untillpro/goutils/logger"
+	log "github.com/voedger/voedger/pkg/goutils/logger"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -124,16 +124,17 @@ func Test_newRecord(t *testing.T) {
 		})
 
 		t.Run("newTestCRec must return non empty, full filled and valid «test.Record»", func(t *testing.T) {
-			rec := newTestCRecord(100501)
+			const recID istructs.RecordID = 100501
+			rec := newTestCRecord(recID)
 			require.False(rec.empty())
 			require.Equal(test.testCRec, rec.QName())
-			require.Equal(istructs.RecordID(100501), rec.ID())
-			require.Equal(istructs.RecordID(100501), rec.AsRecordID(appdef.SystemField_ID))
+			require.Equal(recID, rec.ID())
+			require.Equal(recID, rec.AsRecordID(appdef.SystemField_ID))
 			require.Equal(istructs.NullRecordID, rec.Parent())
 			require.Equal("", rec.Container())
 			require.True(rec.IsActive())
 
-			testTestCRec(t, rec, 100501)
+			testTestCRec(t, rec, recID)
 
 			rec.PutRecordID(appdef.SystemField_ParentID, doc.ID())
 			require.Equal(doc.ID(), rec.Parent())
@@ -142,6 +143,13 @@ func Test_newRecord(t *testing.T) {
 			rec.PutString(appdef.SystemField_Container, "record")
 			require.Equal("record", rec.Container())
 			require.Equal("record", rec.AsString(appdef.SystemField_Container))
+
+			t.Run("Should be ok to get sys.ID and sys.ParentID through AsInt64() and AsFloat64()", func(t *testing.T) {
+				require.Equal(float64(recID), rec.AsFloat64(appdef.SystemField_ID))
+				require.Equal(float64(doc.ID()), rec.AsFloat64(appdef.SystemField_ParentID))
+				require.Equal(int64(recID), rec.AsInt64(appdef.SystemField_ID))
+				require.Equal(int64(doc.ID()), rec.AsInt64(appdef.SystemField_ParentID))
+			})
 
 			t.Run("system field counters for test CRecord", func(t *testing.T) {
 				sysCnt := 0
@@ -360,9 +368,11 @@ func Test_LoadStoreRecord_Bytes(t *testing.T) {
 		newFieldName := func(oldValue string) string { return oldValue + "_1" }
 		oldFieldName := func(newValue string) string { return newValue[:len(newValue)-2] }
 
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
+
 		t.Run("must be ok to build application", func(t *testing.T) {
-			newCDoc := appDef.AddCDoc(test.testCDoc)
+			newCDoc := adb.AddCDoc(test.testCDoc)
 
 			oldCDoc := rec1.appCfg.AppDef.CDoc(test.testCDoc)
 			for _, f := range oldCDoc.Fields() {
@@ -370,10 +380,11 @@ func Test_LoadStoreRecord_Bytes(t *testing.T) {
 					newCDoc.AddField(newFieldName(f.Name()), f.DataKind(), f.Required())
 				}
 			}
-			appDef.AddObject(test.tablePhotos) // for reading QName_1 field value
+			adb.AddObject(test.tablePhotos) // for reading QName_1 field value
 		})
 
-		newConfig := newAppConfig(test.AppCfg.Name, appDef)
+		newConfig := newBuiltInAppConfig(test.AppCfg.Name, adb)
+		newConfig.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 		err := newConfig.prepare(nil, test.AppCfg.storage)
 		require.NoError(err)
@@ -411,7 +422,7 @@ func TestModifiedFields(t *testing.T) {
 
 	t.Run("no modifications", func(t *testing.T) {
 		rec := newRecord(test.AppCfg)
-		rec.ModifiedFields(func(fieldName string, newValue interface{}) {
+		rec.ModifiedFields(func(fieldName appdef.FieldName, newValue interface{}) {
 			t.Fail()
 		})
 	})
@@ -421,11 +432,11 @@ func TestModifiedFields(t *testing.T) {
 		rec.PutInt32("int32", 42)
 		rec.PutBool(appdef.SystemField_IsActive, false) // should be mentioned on ModifiedFields()
 		require.NoError(rec.build())
-		actualModifications := map[string]bool{}
-		rec.ModifiedFields(func(fieldName string, newValue interface{}) {
+		actualModifications := map[appdef.FieldName]bool{}
+		rec.ModifiedFields(func(fieldName appdef.FieldName, newValue interface{}) {
 			actualModifications[fieldName] = true
 		})
-		expectedModifications := map[string]bool{
+		expectedModifications := map[appdef.FieldName]bool{
 			"int32":                     true,
 			appdef.SystemField_IsActive: true,
 		}

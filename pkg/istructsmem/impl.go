@@ -33,14 +33,14 @@ import (
 type appStructsProviderType struct {
 	locker           sync.RWMutex
 	configs          AppConfigsType
-	structures       map[istructs.AppQName]*appStructsType
+	structures       map[appdef.AppQName]*appStructsType
 	bucketsFactory   irates.BucketsFactoryType
 	appTokensFactory payloads.IAppTokensFactory
 	storageProvider  istorage.IAppStorageProvider
 }
 
-// istructs.IAppStructsProvider.AppStructs
-func (provider *appStructsProviderType) AppStructs(appName istructs.AppQName) (structs istructs.IAppStructs, err error) {
+// istructs.IAppStructsProvider.BuiltIn
+func (provider *appStructsProviderType) BuiltIn(appName appdef.AppQName) (structs istructs.IAppStructs, err error) {
 
 	appCfg, ok := provider.configs[appName]
 	if !ok {
@@ -67,9 +67,24 @@ func (provider *appStructsProviderType) AppStructs(appName istructs.AppQName) (s
 	return app, nil
 }
 
-// istructs.IAppStructsProvider.AppStructsByDef
-func (provider *appStructsProviderType) AppStructsByDef(aqn istructs.AppQName, appDef appdef.IAppDef) (structs istructs.IAppStructs, err error) {
-	return provider.AppStructs(aqn)
+// istructs.IAppStructsProvider.New
+func (provider *appStructsProviderType) New(name appdef.AppQName, def appdef.IAppDef, id istructs.ClusterAppID, wsCount istructs.NumAppWorkspaces) (istructs.IAppStructs, error) {
+	provider.locker.Lock()
+	defer provider.locker.Unlock()
+
+	cfg := provider.configs.AddAppConfig(name, id, def, wsCount)
+	buckets := provider.bucketsFactory()
+	appTokens := provider.appTokensFactory.New(name)
+	appStorage, err := provider.storageProvider.AppStorage(name)
+	if err != nil {
+		return nil, err
+	}
+	if err = cfg.prepare(buckets, appStorage); err != nil {
+		return nil, err
+	}
+	app := newAppStructs(cfg, buckets, appTokens)
+	//provider.structures[name] = app
+	return app, nil
 }
 
 // appStructsType implements IAppStructs interface
@@ -82,16 +97,14 @@ type appStructsType struct {
 	viewRecords appViewRecords
 	buckets     irates.IBuckets
 	descr       *descr.Application
-	appWSAmount istructs.AppWSAmount
 	appTokens   istructs.IAppTokens
 }
 
 func newAppStructs(appCfg *AppConfigType, buckets irates.IBuckets, appTokens istructs.IAppTokens) *appStructsType {
 	app := appStructsType{
-		config:      appCfg,
-		buckets:     buckets,
-		appWSAmount: istructs.DefaultAppWSAmount,
-		appTokens:   appTokens,
+		config:    appCfg,
+		buckets:   buckets,
+		appTokens: appTokens,
 	}
 	app.events = newEvents(&app)
 	app.records = newRecords(&app)
@@ -136,22 +149,23 @@ func (app *appStructsType) ClusterAppID() istructs.ClusterAppID {
 }
 
 // istructs.IAppStructs.AppQName
-func (app *appStructsType) AppQName() istructs.AppQName {
+func (app *appStructsType) AppQName() appdef.AppQName {
 	return app.config.Name
+}
+
+func (app *appStructsType) AppTokens() istructs.IAppTokens {
+	return app.appTokens
+}
+
+// istructs.IAppStructs.AsyncProjectors
+func (app *appStructsType) AsyncProjectors() istructs.Projectors {
+	return app.config.AsyncProjectors()
 }
 
 // IAppStructs.Buckets() - wrong, import cycle between istructs and irates
 // so let's add simple method to use it at utils.IBucketsFromIAppStructs()
 func (app *appStructsType) Buckets() irates.IBuckets {
 	return app.buckets
-}
-
-func (app *appStructsType) SyncProjectors() istructs.Projectors {
-	return app.config.syncProjectors
-}
-
-func (app *appStructsType) AsyncProjectors() istructs.Projectors {
-	return app.config.asyncProjectors
 }
 
 func (app *appStructsType) CUDValidators() []istructs.CUDValidator {
@@ -162,13 +176,7 @@ func (app *appStructsType) EventValidators() []istructs.EventValidator {
 	return app.config.eventValidators
 }
 
-func (app *appStructsType) WSAmount() istructs.AppWSAmount {
-	return app.appWSAmount
-}
-
-func (app *appStructsType) AppTokens() istructs.IAppTokens {
-	return app.appTokens
-}
+// func (app appStructsType) GetAppStorage
 
 func (app *appStructsType) IsFunctionRateLimitsExceeded(funcQName appdef.QName, wsid istructs.WSID) bool {
 	rateLimits, ok := app.config.FunctionRateLimits.limits[funcQName]
@@ -196,6 +204,15 @@ func (app *appStructsType) IsFunctionRateLimitsExceeded(funcQName appdef.QName, 
 	return !app.buckets.TakeTokens(keys, 1)
 }
 
+// istructs.IAppStructs.SyncProjectors
+func (app *appStructsType) SyncProjectors() istructs.Projectors {
+	return app.config.SyncProjectors()
+}
+
+func (app *appStructsType) NumAppWorkspaces() istructs.NumAppWorkspaces {
+	return app.config.numAppWorkspaces
+}
+
 func (app *appStructsType) describe() *descr.Application {
 	if app.descr == nil {
 		app.descr = descr.Provide(app, app.config.FunctionRateLimits.limits)
@@ -211,7 +228,7 @@ func (app *appStructsType) DescribePackageNames() (names []string) {
 	return names
 }
 
-// istructs.IAppStructs.DescribePackage: Describe package content
+// istructs.IAppStructs.DescribePoackage: Describe package content
 func (app *appStructsType) DescribePackage(name string) interface{} {
 	return app.describe().Packages[name]
 }
@@ -231,6 +248,21 @@ func newEvents(app *appStructsType) appEventsType {
 	}
 }
 
+// istructs.IEvents.BuildPLogEvent
+func (e *appEventsType) BuildPLogEvent(ev istructs.IRawEvent) istructs.IPLogEvent {
+	dbEvent := ev.(*eventType)
+
+	if n := dbEvent.QName(); n != istructs.QNameForCorruptedData {
+		panic(fmt.Errorf("%w: QName() is «%v», expected «%v»", ErrorEventNotValid, n, istructs.QNameForCorruptedData))
+	}
+
+	if o := dbEvent.PLogOffset(); o != istructs.NullOffset {
+		panic(fmt.Errorf("%w: PLogOffset() is «%v», expected «%v»", ErrorEventNotValid, o, istructs.NullOffset))
+	}
+
+	return dbEvent
+}
+
 // istructs.IEvents.GetSyncRawEventBuilder
 func (e *appEventsType) GetSyncRawEventBuilder(params istructs.SyncRawEventBuilderParams) istructs.IRawEventBuilder {
 	return newSyncEventBuilder(e.app.config, params)
@@ -245,7 +277,10 @@ func (e *appEventsType) GetNewRawEventBuilder(params istructs.NewRawEventBuilder
 func (e *appEventsType) PutPlog(ev istructs.IRawEvent, buildErr error, generator istructs.IIDGenerator) (event istructs.IPLogEvent, err error) {
 	dbEvent := ev.(*eventType)
 
-	dbEvent.setBuildError(buildErr)
+	if buildErr != nil {
+		dbEvent.setBuildError(buildErr)
+	}
+
 	if dbEvent.valid() {
 		if err := dbEvent.regenerateIDs(generator); err != nil {
 			dbEvent.setBuildError(err)
@@ -263,9 +298,8 @@ func (e *appEventsType) PutPlog(ev istructs.IRawEvent, buildErr error, generator
 
 	if err = e.app.config.storage.Put(pKey, cCols, evData); err == nil {
 		event = dbEvent
+		e.plogCache.Put(p, o, event)
 	}
-
-	e.plogCache.Put(p, o, event)
 
 	return event, err
 }
@@ -565,4 +599,37 @@ func (recs *appRecordsType) GetSingleton(workspace istructs.WSID, qName appdef.Q
 		return NewNullRecord(istructs.NullRecordID), err
 	}
 	return recs.Get(workspace, true, id)
+}
+
+func (recs *appRecordsType) GetSingletonID(qName appdef.QName) (istructs.RecordID, error) {
+	return recs.app.config.singletons.ID(qName)
+}
+
+// istructs.IRecords.PutJSON
+func (recs *appRecordsType) PutJSON(ws istructs.WSID, j map[appdef.FieldName]any) error {
+	rec := newRecord(recs.app.config)
+
+	rec.PutFromJSON(j)
+
+	if err := rec.build(); err != nil {
+		return err
+	}
+
+	storable := func(k appdef.TypeKind) bool {
+		return k == appdef.TypeKind_GDoc || k == appdef.TypeKind_CDoc || k == appdef.TypeKind_WDoc ||
+			k == appdef.TypeKind_GRecord || k == appdef.TypeKind_CRecord || k == appdef.TypeKind_WRecord
+	}
+
+	if k := rec.typeDef().Kind(); !storable(k) {
+		return fmt.Errorf("%v is not storable record type: %w", rec.typeDef(), ErrWrongType)
+	}
+
+	if rec.ID() == istructs.NullRecordID {
+		return fmt.Errorf("can not put record with null %s: %w", appdef.SystemField_ID, ErrFieldIsEmpty)
+	}
+	if rec.ID().IsRaw() {
+		return fmt.Errorf("can not put record with raw %s: %w", appdef.SystemField_ID, ErrRawRecordIDUnexpected)
+	}
+
+	return recs.putRecord(ws, rec.ID(), rec.storeToBytes())
 }

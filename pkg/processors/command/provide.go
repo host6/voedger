@@ -9,7 +9,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/iauthnz"
@@ -29,7 +30,7 @@ type workspace struct {
 type cmdProc struct {
 	pNumber       istructs.PartitionID
 	appPartition  *appPartition
-	appPartitions map[istructs.AppQName]*appPartition
+	appPartitions map[appdef.AppQName]*appPartition
 	n10nBroker    in10n.IN10nBroker
 	now           coreutils.TimeFunc
 	authenticator iauthnz.IAuthenticator
@@ -49,7 +50,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, now coreutils.TimeF
 	return func(commandsChannel CommandChannel, partitionID istructs.PartitionID) pipeline.IService {
 		cmdProc := &cmdProc{
 			pNumber:       partitionID,
-			appPartitions: map[istructs.AppQName]*appPartition{},
+			appPartitions: map[appdef.AppQName]*appPartition{},
 			n10nBroker:    n10nBroker,
 			now:           now,
 			authenticator: authenticator,
@@ -58,9 +59,8 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, now coreutils.TimeF
 
 		return pipeline.NewService(func(vvmCtx context.Context) {
 			hsp := newHostStateProvider(vvmCtx, partitionID, secretReader)
-			//syncActualizerOperator := syncActualizerFactory(vvmCtx, partitionID)
 			cmdProc.storeOp = pipeline.NewSyncPipeline(vvmCtx, "store",
-				pipeline.WireFunc("applyRecords", func(ctx context.Context, work interface{}) (err error) {
+				pipeline.WireFunc("applyRecords", func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 					// sync apply records
 					cmd := work.(*cmdWorkpiece)
 					if err = cmd.appStructs.Records().Apply(cmd.pLogEvent); err != nil {
@@ -71,14 +71,12 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, now coreutils.TimeF
 					// forK: sync projector and PutWLog
 
 					pipeline.ForkBranch(
-						pipeline.NewSyncOp(func(ctx context.Context, work interface{}) (err error) {
+						pipeline.NewSyncOp(func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 							cmd := work.(*cmdWorkpiece)
-
 							cmd.syncProjectorsStart = time.Now()
 							err = cmd.appPart.DoSyncActualizer(ctx, work)
 							cmd.metrics.increase(ProjectorsSeconds, time.Since(cmd.syncProjectorsStart).Seconds())
 							cmd.syncProjectorsStart = time.Time{}
-
 							if err != nil {
 								cmd.appPartitionRestartScheduled = true
 							}
@@ -87,7 +85,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, now coreutils.TimeF
 						}),
 					),
 
-					pipeline.ForkBranch(pipeline.NewSyncOp(func(ctx context.Context, work interface{}) (err error) {
+					pipeline.ForkBranch(pipeline.NewSyncOp(func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 						// put WLog
 						cmd := work.(*cmdWorkpiece)
 						if err = cmd.appStructs.Events().PutWlog(cmd.pLogEvent); err != nil {
@@ -108,8 +106,6 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, now coreutils.TimeF
 				pipeline.WireFunc("getIWorkspace", getIWorkspace),
 				pipeline.WireFunc("getAppPartition", cmdProc.getAppPartition),
 				pipeline.WireFunc("getICommand", getICommand),
-				pipeline.WireFunc("getResources", getResources),
-				pipeline.WireFunc("getExec", getExec),
 				pipeline.WireFunc("authorizeRequest", cmdProc.authorizeRequest),
 				pipeline.WireFunc("unmarshalRequestBody", unmarshalRequestBody),
 				pipeline.WireFunc("getWorkspace", cmdProc.getWorkspace),
@@ -118,6 +114,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, now coreutils.TimeF
 				pipeline.WireFunc("getUnloggedArgsObject", getUnloggedArgsObject),
 				pipeline.WireFunc("checkArgsRefIntegrity", checkArgsRefIntegrity),
 				pipeline.WireFunc("parseCUDs", parseCUDs),
+				pipeline.WireFunc("checkCUDsAllowed", checkCUDsAllowed),
 				pipeline.WireSyncOperator("wrongArgsCatcher", &wrongArgsCatcher{}), // any error before -> wrap error into bad request http error
 				pipeline.WireFunc("authorizeCUDs", cmdProc.authorizeCUDs),
 				pipeline.WireFunc("checkIsActiveinCUDs", checkIsActiveInCUDs),
@@ -125,6 +122,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, now coreutils.TimeF
 				pipeline.WireFunc("getCmdResultBuilder", cmdProc.getCmdResultBuilder),
 				pipeline.WireFunc("buildCommandArgs", cmdProc.buildCommandArgs),
 				pipeline.WireFunc("execCommand", execCommand),
+				pipeline.WireFunc("checkResponseIntent", checkResponseIntent),
 				pipeline.WireFunc("build raw event", buildRawEvent),
 				pipeline.WireFunc("eventValidators", cmdProc.eventValidators),
 				pipeline.WireFunc("validateCUDsQNames", cmdProc.validateCUDsQNames),
@@ -153,20 +151,22 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, now coreutils.TimeF
 							metrics: metrics,
 						},
 					}
-					cmd.metrics.increase(CommandsTotal, 1.0)
-					cmdHandlingErr := cmdPipeline.SendSync(cmd)
-					if cmdHandlingErr != nil {
-						logger.Error(cmdHandlingErr)
-					}
-					sendResponse(cmd, cmdHandlingErr)
-					if cmd.appPartitionRestartScheduled {
-						logger.Info(fmt.Sprintf("partition %d will be restarted due of an error on writing to Log: %s", cmd.cmdMes.PartitionID(), cmdHandlingErr))
-						delete(cmdProc.appPartitions, cmd.cmdMes.AppQName())
-					}
-					cmd.release()
+					func() { // borrowed application partition should be guaranteed to be freed
+						defer cmd.Release()
+						cmd.metrics.increase(CommandsTotal, 1.0)
+						cmdHandlingErr := cmdPipeline.SendSync(cmd)
+						if cmdHandlingErr != nil {
+							logger.Error(cmdHandlingErr)
+						}
+						sendResponse(cmd, cmdHandlingErr)
+						if cmd.appPartitionRestartScheduled {
+							logger.Info(fmt.Sprintf("partition %d will be restarted due of an error on writing to Log: %s", cmd.cmdMes.PartitionID(), cmdHandlingErr))
+							delete(cmdProc.appPartitions, cmd.cmdMes.AppQName())
+						}
+					}()
 					metrics.IncreaseApp(CommandsSeconds, string(vvm), cmdMes.AppQName(), time.Since(start).Seconds())
 				case <-vvmCtx.Done():
-					cmdProc.appPartitions = map[istructs.AppQName]*appPartition{} // clear appPartitions to test recovery
+					cmdProc.appPartitions = map[appdef.AppQName]*appPartition{} // clear appPartitions to test recovery
 					return
 				}
 			}

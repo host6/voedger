@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/voedger/voedger/pkg/goutils/testingu/require"
 )
 
 func Test_AppDef_AddGDoc(t *testing.T) {
@@ -19,9 +19,10 @@ func Test_AppDef_AddGDoc(t *testing.T) {
 	docName, recName := NewQName("test", "doc"), NewQName("test", "rec")
 
 	t.Run("must be ok to add document", func(t *testing.T) {
-		appDef := New()
+		adb := New()
+		adb.AddPackage("test", "test.com/test")
 
-		doc := appDef.AddGDoc(docName)
+		doc := adb.AddGDoc(docName)
 
 		t.Run("must be ok to add doc fields", func(t *testing.T) {
 			doc.
@@ -30,7 +31,7 @@ func Test_AppDef_AddGDoc(t *testing.T) {
 		})
 
 		t.Run("must be ok to add child", func(t *testing.T) {
-			rec := appDef.AddGRecord(recName)
+			rec := adb.AddGRecord(recName)
 			doc.AddContainer("rec", recName, 0, Occurs_Unbounded)
 
 			t.Run("must be ok to add rec fields", func(t *testing.T) {
@@ -45,7 +46,7 @@ func Test_AppDef_AddGDoc(t *testing.T) {
 		})
 
 		t.Run("must be ok to build", func(t *testing.T) {
-			a, err := appDef.Build()
+			a, err := adb.Build()
 			require.NoError(err)
 			require.NotNil(a)
 
@@ -114,6 +115,23 @@ func Test_AppDef_AddGDoc(t *testing.T) {
 		})
 	})
 
+	t.Run("must be ok to enumerate docs", func(t *testing.T) {
+		var docs []QName
+		app.GDocs(func(doc IGDoc) {
+			docs = append(docs, doc.QName())
+		})
+		require.Len(docs, 1)
+		require.Equal(docName, docs[0])
+		t.Run("must be ok to enumerate recs", func(t *testing.T) {
+			var recs []QName
+			app.GRecords(func(rec IGRecord) {
+				recs = append(recs, rec.QName())
+			})
+			require.Len(recs, 1)
+			require.Equal(recName, recs[0])
+		})
+	})
+
 	t.Run("check nil returns", func(t *testing.T) {
 		unknown := NewQName("test", "unknown")
 		require.Equal(NullType, app.Type(unknown))
@@ -128,26 +146,21 @@ func Test_AppDef_AddGDoc(t *testing.T) {
 		require.Nil(app.Object(unknown))
 	})
 
-	t.Run("panic if name is empty", func(t *testing.T) {
-		apb := New()
-		require.Panics(func() {
-			apb.AddGDoc(NullQName)
-		})
-	})
+	require.Panics(func() {
+		New().AddGDoc(NullQName)
+	}, require.Is(ErrMissedError))
 
-	t.Run("panic if name is invalid", func(t *testing.T) {
-		apb := New()
-		require.Panics(func() {
-			apb.AddGDoc(NewQName("naked", "🔫"))
-		})
-	})
+	require.Panics(func() {
+		New().AddGDoc(NewQName("naked", "🔫"))
+	}, require.Is(ErrInvalidError), require.Has("naked.🔫"))
 
 	t.Run("panic if type with name already exists", func(t *testing.T) {
 		testName := NewQName("test", "dupe")
-		apb := New()
-		apb.AddGDoc(testName)
+		adb := New()
+		adb.AddPackage("test", "test.com/test")
+		adb.AddGDoc(testName)
 		require.Panics(func() {
-			apb.AddGDoc(testName)
-		})
+			adb.AddGDoc(testName)
+		}, require.Is(ErrAlreadyExistsError), require.Has(testName.String()))
 	})
 }

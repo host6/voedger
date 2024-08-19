@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021-present Sigma-Soft, Ltd.
+ * @author: Nikolay Nikitin
  */
 
 package appdef_test
@@ -23,18 +24,19 @@ func ExampleIAppDefBuilder_AddProjector() {
 
 	// how to build AppDef with projectors
 	{
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 
-		appDef.AddCRecord(recName).SetComment("record is trigger for projector")
-		appDef.AddCDoc(docName).SetComment("doc is state for projector")
+		adb.AddCRecord(recName).SetComment("record is trigger for projector")
+		adb.AddCDoc(docName).SetComment("doc is state for projector")
 
-		v := appDef.AddView(viewName)
+		v := adb.AddView(viewName)
 		v.Key().PartKey().AddDataField("id", appdef.SysData_RecordID)
 		v.Key().ClustCols().AddDataField("name", appdef.SysData_String)
 		v.Value().AddDataField("data", appdef.SysData_bytes, false, appdef.MaxLen(1024))
 		v.SetComment("view is intent for projector")
 
-		prj := appDef.AddProjector(prjName)
+		prj := adb.AddProjector(prjName)
 		prj.SetWantErrors()
 		prj.Events().
 			Add(recName, appdef.ProjectorEventKind_AnyChanges...).
@@ -46,11 +48,7 @@ func ExampleIAppDefBuilder_AddProjector() {
 			Add(sysViews, viewName).
 			SetComment(sysViews, "projector needs to update «test.view» from «sys.views» storage")
 
-		if a, err := appDef.Build(); err == nil {
-			app = a
-		} else {
-			panic(err)
-		}
+		app = adb.MustBuild()
 	}
 
 	// how to inspect builded AppDef with projector

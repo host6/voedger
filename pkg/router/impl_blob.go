@@ -22,10 +22,13 @@ import (
 
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
+	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/iblobstorage"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
+	"github.com/voedger/voedger/pkg/utils/utils"
 )
 
 type blobWriteDetailsSingle struct {
@@ -42,14 +45,13 @@ type blobReadDetails struct {
 }
 
 type blobBaseMessage struct {
-	req                 *http.Request
-	resp                http.ResponseWriter
-	doneChan            chan struct{}
-	wsid                istructs.WSID
-	appQName            istructs.AppQName
-	header              map[string][]string
-	clusterAppBlobberID istructs.ClusterAppID
-	blobMaxSize         BLOBMaxSizeType
+	req         *http.Request
+	resp        http.ResponseWriter
+	doneChan    chan struct{}
+	wsid        istructs.WSID
+	appQName    appdef.AppQName
+	header      map[string][]string
+	blobMaxSize BLOBMaxSizeType
 }
 
 type blobMessage struct {
@@ -64,29 +66,29 @@ func (bm *blobBaseMessage) Release() {
 func blobReadMessageHandler(bbm blobBaseMessage, blobReadDetails blobReadDetails, blobStorage iblobstorage.IBLOBStorage, bus ibus.IBus, busTimeout time.Duration) {
 	defer close(bbm.doneChan)
 
-	// request to HVM to check the principalToken
+	// request to VVM to check the principalToken
 	req := ibus.Request{
 		Method:   ibus.HTTPMethodPOST,
 		WSID:     int64(bbm.wsid),
 		AppQName: bbm.appQName.String(),
-		Resource: "c.sys.DownloadBLOBHelper",
+		Resource: "q.sys.DownloadBLOBAuthnz",
 		Header:   bbm.header,
 		Body:     []byte(`{}`),
 		Host:     localhost,
 	}
 	blobHelperResp, _, _, err := bus.SendRequest2(bbm.req.Context(), req, busTimeout)
 	if err != nil {
-		WriteTextResponse(bbm.resp, "failed to exec c.sys.DownloadBLOBHelper: "+err.Error(), http.StatusInternalServerError)
+		WriteTextResponse(bbm.resp, "failed to exec q.sys.DownloadBLOBAuthnz: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if blobHelperResp.StatusCode != http.StatusOK {
-		WriteTextResponse(bbm.resp, "c.sys.DownloadBLOBHelper returned error: "+string(blobHelperResp.Data), blobHelperResp.StatusCode)
+		WriteTextResponse(bbm.resp, "q.sys.DownloadBLOBAuthnz returned error: "+string(blobHelperResp.Data), blobHelperResp.StatusCode)
 		return
 	}
 
 	// read the BLOB
 	key := iblobstorage.KeyType{
-		AppID: bbm.clusterAppBlobberID,
+		AppID: istructs.ClusterAppID_sys_blobber,
 		WSID:  bbm.wsid,
 		ID:    blobReadDetails.blobID,
 	}
@@ -103,6 +105,7 @@ func blobReadMessageHandler(bbm blobBaseMessage, blobReadDetails blobReadDetails
 		return nil
 	}
 	if err := blobStorage.ReadBLOB(bbm.req.Context(), key, stateWriterDiscard, bbm.resp); err != nil {
+		logger.Error(fmt.Sprintf("failed to read or send BLOB: id %d, appQName %s, wsid %d: %s", blobReadDetails.blobID, bbm.appQName, bbm.wsid, err.Error()))
 		if errors.Is(err, iblobstorage.ErrBLOBNotFound) {
 			WriteTextResponse(bbm.resp, err.Error(), http.StatusNotFound)
 			return
@@ -112,9 +115,9 @@ func blobReadMessageHandler(bbm blobBaseMessage, blobReadDetails blobReadDetails
 }
 
 func writeBLOB(ctx context.Context, wsid int64, appQName string, header map[string][]string, resp http.ResponseWriter,
-	clusterAppBlobberID istructs.ClusterAppID, blobName, blobMimeType string, blobStorage iblobstorage.IBLOBStorage, body io.ReadCloser,
+	blobName, blobMimeType string, blobStorage iblobstorage.IBLOBStorage, body io.ReadCloser,
 	blobMaxSize int64, bus ibus.IBus, busTimeout time.Duration) (blobID int64) {
-	// request HVM for check the principalToken and get a blobID
+	// request VVM for check the principalToken and get a blobID
 	req := ibus.Request{
 		Method:   ibus.HTTPMethodPOST,
 		WSID:     wsid,
@@ -143,7 +146,7 @@ func writeBLOB(ctx context.Context, wsid int64, appQName string, header map[stri
 	blobID = int64(newIDs["1"].(float64))
 	// write the BLOB
 	key := iblobstorage.KeyType{
-		AppID: clusterAppBlobberID,
+		AppID: istructs.ClusterAppID_sys_blobber,
 		WSID:  istructs.WSID(wsid),
 		ID:    istructs.RecordID(blobID),
 	}
@@ -198,7 +201,7 @@ func blobWriteMessageHandlerMultipart(bbm blobBaseMessage, blobStorage iblobstor
 			}
 			break
 		}
-		contentDisposition := part.Header.Get("Content-Disposition")
+		contentDisposition := part.Header.Get(coreutils.ContentDisposition)
 		mediaType, params, err := mime.ParseMediaType(contentDisposition)
 		if err != nil {
 			WriteTextResponse(bbm.resp, fmt.Sprintf("failed to parse Content-Disposition of part number %d: %s", partNum, contentDisposition), http.StatusBadRequest)
@@ -208,15 +211,15 @@ func blobWriteMessageHandlerMultipart(bbm blobBaseMessage, blobStorage iblobstor
 		}
 		contentType := part.Header.Get(coreutils.ContentType)
 		if len(contentType) == 0 {
-			contentType = "application/x-binary"
+			contentType = coreutils.ApplicationXBinary
 		}
 		part.Header[coreutils.Authorization] = bbm.header[coreutils.Authorization] // add auth header for c.sys.*BLOBHelper
-		blobID := writeBLOB(bbm.req.Context(), int64(bbm.wsid), bbm.appQName.String(), part.Header, bbm.resp, bbm.clusterAppBlobberID,
+		blobID := writeBLOB(bbm.req.Context(), int64(bbm.wsid), bbm.appQName.String(), part.Header, bbm.resp,
 			params["name"], contentType, blobStorage, part, int64(bbm.blobMaxSize), bus, busTimeout)
 		if blobID == 0 {
 			return // request handled
 		}
-		blobIDs = append(blobIDs, strconv.FormatInt(blobID, decimalBase))
+		blobIDs = append(blobIDs, utils.IntToString(blobID))
 		partNum++
 	}
 	WriteTextResponse(bbm.resp, strings.Join(blobIDs, ","), http.StatusOK)
@@ -226,16 +229,17 @@ func blobWriteMessageHandlerSingle(bbm blobBaseMessage, blobWriteDetails blobWri
 	bus ibus.IBus, busTimeout time.Duration) {
 	defer close(bbm.doneChan)
 
-	blobID := writeBLOB(bbm.req.Context(), int64(bbm.wsid), bbm.appQName.String(), header, bbm.resp, bbm.clusterAppBlobberID, blobWriteDetails.name,
+	blobID := writeBLOB(bbm.req.Context(), int64(bbm.wsid), bbm.appQName.String(), header, bbm.resp, blobWriteDetails.name,
 		blobWriteDetails.mimeType, blobStorage, bbm.req.Body, int64(bbm.blobMaxSize), bus, busTimeout)
 	if blobID > 0 {
-		WriteTextResponse(bbm.resp, strconv.FormatInt(blobID, decimalBase), http.StatusOK)
+		utils.IntToString(blobID)
+		WriteTextResponse(bbm.resp, utils.IntToString(blobID), http.StatusOK)
 	}
 }
 
-// ctx here is HVM context. It used to track HVM shutdown. Blobber will use the request's context
-func blobMessageHandler(hvmCtx context.Context, sc iprocbus.ServiceChannel, blobStorage iblobstorage.IBLOBStorage, bus ibus.IBus, busTimeout time.Duration) {
-	for hvmCtx.Err() == nil {
+// ctx here is VVM context. It used to track VVM shutdown. Blobber will use the request's context
+func blobMessageHandler(vvmCtx context.Context, sc iprocbus.ServiceChannel, blobStorage iblobstorage.IBLOBStorage, bus ibus.IBus, busTimeout time.Duration) {
+	for vvmCtx.Err() == nil {
 		select {
 		case mesIntf := <-sc:
 			blobMessage := mesIntf.(blobMessage)
@@ -247,7 +251,7 @@ func blobMessageHandler(hvmCtx context.Context, sc iprocbus.ServiceChannel, blob
 			case blobWriteDetailsMultipart:
 				blobWriteMessageHandlerMultipart(blobMessage.blobBaseMessage, blobStorage, blobDetails.boundary, bus, busTimeout)
 			}
-		case <-hvmCtx.Done():
+		case <-vvmCtx.Done():
 			return
 		}
 	}
@@ -257,40 +261,41 @@ func (s *httpService) blobRequestHandler(resp http.ResponseWriter, req *http.Req
 	vars := mux.Vars(req)
 	wsid, err := strconv.ParseInt(vars[WSID], parseInt64Base, parseInt64Bits)
 	if err != nil {
-		// impossible, checked by router url rule
-		// notest
+		// notest: checked by router url rule
 		panic(err)
 	}
 	mes := blobMessage{
 		blobBaseMessage: blobBaseMessage{
-			req:                 req,
-			resp:                resp,
-			wsid:                istructs.WSID(wsid),
-			doneChan:            make(chan struct{}),
-			appQName:            istructs.NewAppQName(vars[AppOwner], vars[AppName]),
-			header:              req.Header,
-			clusterAppBlobberID: s.ClusterAppBlobberID,
-			blobMaxSize:         s.BLOBMaxSize,
+			req:         req,
+			resp:        resp,
+			wsid:        istructs.WSID(wsid),
+			doneChan:    make(chan struct{}),
+			appQName:    appdef.NewAppQName(vars[AppOwner], vars[AppName]),
+			header:      req.Header,
+			blobMaxSize: s.BLOBMaxSize,
 		},
 		blobDetails: details,
 	}
 	if _, ok := mes.blobBaseMessage.header[coreutils.Authorization]; !ok {
-		if cookie, err := req.Cookie(coreutils.Authorization); err == nil {
-			if val, err := url.QueryUnescape(cookie.Value); err == nil {
-				// authorization token in cookies -> c.sys.DownloadBLOBHelper requires it in headers
-				mes.blobBaseMessage.header[coreutils.Authorization] = []string{val}
-			}
+		cookie, err := req.Cookie(coreutils.Authorization)
+		if err != nil && !errors.Is(err, http.ErrNoCookie) {
+			// notest
+			panic(err)
 		}
+		val, err := url.QueryUnescape(cookie.Value)
+		if err != nil {
+			// notest
+			panic(err)
+		}
+		// authorization token in cookies -> q.sys.DownloadBLOBAuthnz requires it in headers
+		mes.blobBaseMessage.header[coreutils.Authorization] = []string{val}
 	}
 	if !s.BlobberParams.procBus.Submit(0, 0, mes) {
 		resp.WriteHeader(http.StatusServiceUnavailable)
 		resp.Header().Add("Retry-After", strconv.Itoa(s.BlobberParams.RetryAfterSecondsOn503))
 		return
 	}
-	select {
-	case <-mes.doneChan:
-	case <-req.Context().Done():
-	}
+	<-mes.doneChan
 }
 
 func (s *httpService) blobReadRequestHandler() http.HandlerFunc {
@@ -298,8 +303,7 @@ func (s *httpService) blobReadRequestHandler() http.HandlerFunc {
 		vars := mux.Vars(req)
 		blobID, err := strconv.ParseInt(vars[blobID], parseInt64Base, parseInt64Bits)
 		if err != nil {
-			// impossible, checked by router url rule
-			// notest
+			// notest: checked by router url rule
 			panic(err)
 		}
 		principalToken := headerOrCookieAuth(resp, req)

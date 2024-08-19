@@ -11,13 +11,15 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+
+	"github.com/voedger/voedger/pkg/utils/utils"
 )
 
 // # Implements:
 //   - IField
 type field struct {
 	comment
-	name        string
+	name        FieldName
 	data        IData
 	required    bool
 	verifiable  bool
@@ -25,7 +27,7 @@ type field struct {
 	constraints map[ConstraintKind]IConstraint
 }
 
-func makeField(name string, data IData, required bool, comments ...string) field {
+func makeField(name FieldName, data IData, required bool, comments ...string) field {
 	f := field{
 		comment:     makeComment(comments...),
 		name:        name,
@@ -37,7 +39,7 @@ func makeField(name string, data IData, required bool, comments ...string) field
 	return f
 }
 
-func newField(name string, data IData, required bool, comments ...string) *field {
+func newField(name FieldName, data IData, required bool, comments ...string) *field {
 	f := makeField(name, data, required, comments...)
 	return &f
 }
@@ -58,7 +60,7 @@ func (fld *field) IsSys() bool {
 	return IsSysField(fld.Name())
 }
 
-func (fld *field) Name() string { return fld.name }
+func (fld *field) Name() FieldName { return fld.name }
 
 func (fld *field) Required() bool { return fld.required }
 
@@ -81,7 +83,7 @@ func (fld *field) setVerify(k ...VerificationKind) {
 }
 
 // Returns is field system
-func IsSysField(n string) bool {
+func IsSysField(n FieldName) bool {
 	return strings.HasPrefix(n, SystemPackagePrefix) && // fast check
 		// then more accuracy
 		((n == SystemField_QName) ||
@@ -96,7 +98,7 @@ func IsSysField(n string) bool {
 type fields struct {
 	app           *appDef
 	typeKind      TypeKind
-	fields        map[string]interface{}
+	fields        map[FieldName]interface{}
 	fieldsOrdered []IField
 	refFields     []IRefField
 }
@@ -106,13 +108,13 @@ func makeFields(app *appDef, typeKind TypeKind) fields {
 	ff := fields{
 		app:           app,
 		typeKind:      typeKind,
-		fields:        make(map[string]interface{}),
+		fields:        make(map[FieldName]interface{}),
 		fieldsOrdered: make([]IField, 0),
 		refFields:     make([]IRefField, 0)}
 	return ff
 }
 
-func (ff *fields) Field(name string) IField {
+func (ff *fields) Field(name FieldName) IField {
 	if ff, ok := ff.fields[name]; ok {
 		return ff.(IField)
 	}
@@ -127,7 +129,7 @@ func (ff *fields) Fields() []IField {
 	return ff.fieldsOrdered
 }
 
-func (ff *fields) RefField(name string) (rf IRefField) {
+func (ff *fields) RefField(name FieldName) (rf IRefField) {
 	if fld := ff.Field(name); fld != nil {
 		if fld.DataKind() == DataKind_RecordID {
 			if fld, ok := fld.(IRefField); ok {
@@ -152,10 +154,10 @@ func (ff *fields) UserFieldCount() int {
 	return cnt
 }
 
-func (ff *fields) addDataField(name string, data QName, required bool, constraints ...IConstraint) {
+func (ff *fields) addDataField(name FieldName, data QName, required bool, constraints ...IConstraint) {
 	d := ff.app.Data(data)
 	if d == nil {
-		panic(fmt.Errorf("data type «%v» not found: %w", data, ErrNameNotFound))
+		panic(ErrTypeNotFound(data))
 	}
 	if len(constraints) > 0 {
 		d = newAnonymousData(ff.app, d.DataKind(), data, constraints...)
@@ -164,10 +166,10 @@ func (ff *fields) addDataField(name string, data QName, required bool, constrain
 	ff.appendField(name, f)
 }
 
-func (ff *fields) addField(name string, kind DataKind, required bool, constraints ...IConstraint) {
+func (ff *fields) addField(name FieldName, kind DataKind, required bool, constraints ...IConstraint) {
 	d := ff.app.SysData(kind)
 	if d == nil {
-		panic(fmt.Errorf("system data type for data kind «%s» is not exists: %w", kind.TrimString(), ErrInvalidTypeKind))
+		panic(ErrNotFound("system data type for data kind «%s»", kind.TrimString()))
 	}
 	if len(constraints) > 0 {
 		d = newAnonymousData(ff.app, d.DataKind(), d.QName(), constraints...)
@@ -176,7 +178,7 @@ func (ff *fields) addField(name string, kind DataKind, required bool, constraint
 	ff.appendField(name, f)
 }
 
-func (ff *fields) addRefField(name string, required bool, ref ...QName) {
+func (ff *fields) addRefField(name FieldName, required bool, ref ...QName) {
 	d := ff.app.SysData(DataKind_RecordID)
 	f := newRefField(name, d, required, ref...)
 	ff.appendField(name, f)
@@ -189,24 +191,24 @@ func (ff *fields) addRefField(name string, required bool, ref ...QName) {
 //   - if field with specified name is already exists
 //   - if user field name is invalid
 //   - if user field data kind is not allowed by structured type kind
-func (ff *fields) appendField(name string, fld interface{}) {
+func (ff *fields) appendField(name FieldName, fld interface{}) {
 	if name == NullName {
-		panic(fmt.Errorf("empty field name: %w", ErrNameMissed))
+		panic(ErrMissed("field name"))
 	}
 	if ff.Field(name) != nil {
-		panic(fmt.Errorf("field «%s» is already exists: %w", name, ErrNameUniqueViolation))
+		panic(ErrAlreadyExists("field «%v»", name))
 	}
 	if len(ff.fields) >= MaxTypeFieldCount {
-		panic(fmt.Errorf("maximum field count (%d) exceeds: %w", MaxTypeFieldCount, ErrTooManyFields))
+		panic(ErrTooMany("fields, maximum is %d", MaxTypeFieldCount))
 	}
 
 	if !IsSysField(name) {
-		if ok, err := ValidIdent(name); !ok {
+		if ok, err := ValidFieldName(name); !ok {
 			panic(fmt.Errorf("field name «%v» is invalid: %w", name, err))
 		}
 		dk := fld.(IField).DataKind()
-		if (ff.typeKind != TypeKind_null) && !ff.typeKind.DataKindAvailable(dk) {
-			panic(fmt.Errorf("%v type does not support %s-data fields: %w", ff.typeKind.TrimString(), dk.TrimString(), ErrInvalidDataKind))
+		if (ff.typeKind != TypeKind_null) && !ff.typeKind.FieldKindAvailable(dk) {
+			panic(ErrIncompatible("data kind «%s» with fields of «%v»", dk.TrimString(), ff.typeKind.TrimString()))
 		}
 	}
 
@@ -241,20 +243,20 @@ func (ff *fields) makeSysFields() {
 	}
 }
 
-func (ff *fields) setFieldComment(name string, comment ...string) {
+func (ff *fields) setFieldComment(name FieldName, comment ...string) {
 	fld := ff.fields[name]
 	if fld == nil {
-		panic(fmt.Errorf("field «%s» not found: %w", name, ErrNameNotFound))
+		panic(ErrFieldNotFound(name))
 	}
 	if fld, ok := fld.(interface{ setComment(comment ...string) }); ok {
 		fld.setComment(comment...)
 	}
 }
 
-func (ff *fields) setFieldVerify(name string, vk ...VerificationKind) {
+func (ff *fields) setFieldVerify(name FieldName, vk ...VerificationKind) {
 	fld := ff.fields[name]
 	if fld == nil {
-		panic(fmt.Errorf("field «%s» not found: %w", name, ErrNameNotFound))
+		panic(ErrFieldNotFound(name))
 	}
 	vf := fld.(interface{ setVerify(k ...VerificationKind) })
 	vf.setVerify(vk...)
@@ -272,27 +274,27 @@ func makeFieldsBuilder(fields *fields) fieldsBuilder {
 	}
 }
 
-func (fb *fieldsBuilder) AddDataField(name string, data QName, required bool, constraints ...IConstraint) IFieldsBuilder {
+func (fb *fieldsBuilder) AddDataField(name FieldName, data QName, required bool, constraints ...IConstraint) IFieldsBuilder {
 	fb.fields.addDataField(name, data, required, constraints...)
 	return fb
 }
 
-func (fb *fieldsBuilder) AddField(name string, kind DataKind, required bool, constraints ...IConstraint) IFieldsBuilder {
+func (fb *fieldsBuilder) AddField(name FieldName, kind DataKind, required bool, constraints ...IConstraint) IFieldsBuilder {
 	fb.fields.addField(name, kind, required, constraints...)
 	return fb
 }
 
-func (fb *fieldsBuilder) AddRefField(name string, required bool, ref ...QName) IFieldsBuilder {
+func (fb *fieldsBuilder) AddRefField(name FieldName, required bool, ref ...QName) IFieldsBuilder {
 	fb.fields.addRefField(name, required, ref...)
 	return fb
 }
 
-func (fb *fieldsBuilder) SetFieldComment(name string, comment ...string) IFieldsBuilder {
+func (fb *fieldsBuilder) SetFieldComment(name FieldName, comment ...string) IFieldsBuilder {
 	fb.fields.setFieldComment(name, comment...)
 	return fb
 }
 
-func (fb *fieldsBuilder) SetFieldVerify(name string, vk ...VerificationKind) IFieldsBuilder {
+func (fb *fieldsBuilder) SetFieldVerify(name FieldName, vk ...VerificationKind) IFieldsBuilder {
 	fb.fields.setFieldVerify(name, vk...)
 	return fb
 }
@@ -304,7 +306,7 @@ type refField struct {
 	refs QNames
 }
 
-func newRefField(name string, data IData, required bool, ref ...QName) *refField {
+func newRefField(name FieldName, data IData, required bool, ref ...QName) *refField {
 	f := &refField{
 		field: makeField(name, data, required),
 		refs:  QNames{},
@@ -335,11 +337,13 @@ func validateTypeFields(t IType) (err error) {
 			for _, n := range rf.Refs() {
 				refType := t.App().TypeByName(n)
 				if refType == nil {
-					err = errors.Join(err, fmt.Errorf("%v: reference field «%s» refs to unknown type «%v»: %w", t, rf.Name(), n, ErrNameNotFound))
+					err = errors.Join(err,
+						ErrNotFound("%v reference field «%s» type «%v»", t, rf.Name(), n))
 					continue
 				}
 				if _, ok := refType.(IRecord); !ok {
-					err = errors.Join(err, fmt.Errorf("%v: reference field «%s» refs to not a record type %v: %w", t, n, refType, ErrInvalidTypeKind))
+					err = errors.Join(err,
+						ErrInvalid("%v reference field «%s» type «%v» is not a record type", t, n, refType))
 					continue
 				}
 			}
@@ -350,20 +354,19 @@ func validateTypeFields(t IType) (err error) {
 
 type nullFields struct{}
 
-func (f *nullFields) Field(name string) IField       { return nil }
-func (f *nullFields) FieldCount() int                { return 0 }
-func (f *nullFields) Fields() []IField               { return []IField{} }
-func (f *nullFields) RefField(name string) IRefField { return nil }
-func (f *nullFields) RefFields() []IRefField         { return []IRefField{} }
-func (f *nullFields) UserFieldCount() int            { return 0 }
+func (f *nullFields) Field(FieldName) IField       { return nil }
+func (f *nullFields) FieldCount() int              { return 0 }
+func (f *nullFields) Fields() []IField             { return []IField{} }
+func (f *nullFields) RefField(FieldName) IRefField { return nil }
+func (f *nullFields) RefFields() []IRefField       { return []IRefField{} }
+func (f *nullFields) UserFieldCount() int          { return 0 }
 
 func (k VerificationKind) MarshalJSON() ([]byte, error) {
 	var s string
 	if k < VerificationKind_FakeLast {
 		s = strconv.Quote(k.String())
 	} else {
-		const base = 10
-		s = strconv.FormatUint(uint64(k), base)
+		s = utils.UintToString(k)
 	}
 	return []byte(s), nil
 }

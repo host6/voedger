@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2021-present Sigma-Soft, Ltd.
+ * @author: Nikolay Nikitin
  */
 
 package appdef_test
@@ -17,33 +18,40 @@ func ExampleIWorkspace() {
 
 	// how to build AppDef with workspace
 	{
-		appDef := appdef.New()
+		adb := appdef.New()
+		adb.AddPackage("test", "test.com/test")
 
-		appDef.AddCDoc(descName).
+		adb.AddCDoc(descName).
 			AddField("f1", appdef.DataKind_int64, true).
 			AddField("f2", appdef.DataKind_string, false)
 
-		appDef.AddCRecord(recName).
+		adb.AddCRecord(recName).
 			AddField("r1", appdef.DataKind_int64, true).
 			AddField("r2", appdef.DataKind_string, false)
 
-		cDoc := appDef.AddCDoc(docName)
+		cDoc := adb.AddCDoc(docName)
 		cDoc.
 			AddField("d1", appdef.DataKind_int64, true).
 			AddField("d2", appdef.DataKind_string, false)
 		cDoc.
 			AddContainer("rec", recName, 0, 100)
 
-		appDef.AddWorkspace(wsName).
+		adb.AddWorkspace(wsName).
 			SetDescriptor(descName).
 			AddType(recName).
 			AddType(docName)
 
-		if a, err := appDef.Build(); err == nil {
-			app = a
-		} else {
-			panic(err)
-		}
+		app = adb.MustBuild()
+	}
+
+	// how to enum workspaces
+	{
+		cnt := 0
+		app.Workspaces(func(ws appdef.IWorkspace) {
+			cnt++
+			fmt.Println(cnt, ws)
+		})
+		fmt.Println("overall:", cnt)
 	}
 
 	// how to inspect workspace
@@ -70,6 +78,8 @@ func ExampleIWorkspace() {
 	}
 
 	// Output:
+	// 1 Workspace «test.ws»
+	// overall: 1
 	// workspace "test.ws": TypeKind_Workspace
 	// workspace "test.ws" descriptor is "test.desc"
 	// - Type: "test.doc", kind: TypeKind_CDoc

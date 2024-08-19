@@ -7,22 +7,21 @@
 
 package istructs
 
-import "github.com/voedger/voedger/pkg/appdef"
+import (
+	"github.com/voedger/voedger/pkg/appdef"
+)
 
 // *********************************************************************************************************
 //
 //				QName- & Names- related constants
 //
 
-// AppQNameQualifierChar: char to separate application owner (provider) from application name
-const AppQNameQualifierChar = "/"
-
-// NullAppQName is undefined (or empty) application name
-var NullAppQName = NewAppQName(appdef.NullName, appdef.NullName)
-
 var (
 	// QNameForError is a marker of error in log
 	QNameForError = appdef.NewQName(appdef.SysPackage, "Error")
+
+	// QNameForCorruptedData is marker of corrupted event records in log
+	QNameForCorruptedData = appdef.NewQName(appdef.SysPackage, "Corrupted")
 
 	// QNameCommand is used in core-irates
 	QNameCommand = appdef.NewQName(appdef.SysPackage, "Command")
@@ -104,11 +103,24 @@ const NonExistingRecordID = MaxSingletonID + 1
 const FirstBaseRecordID = MaxReservedBaseRecordID + 1
 
 // Pseudo Workspaces
+
 const FirstPseudoBaseWSID = NullWSID
 const MaxPseudoBaseWSID = WSID(0xffff)
 
 // Application Workspaces
+
 const FirstBaseAppWSID = MaxPseudoBaseWSID + 1
+const MaxNumAppWorkspaces = 0x8000 // 32768
+
+// Reserved WSIDs
+
+const FirtReservedWSID = FirstBaseAppWSID + MaxNumAppWorkspaces // 0x18000, 98304
+const NumReservedWSID = 0x7fff                                  // 32767
+
+const (
+	GuestWSID               = FirtReservedWSID + iota // 0x18000, 98304
+	LastCurrentReservedWSID                           // Can be changed in the future
+)
 
 // User Workspaces
 const FirstBaseUserWSID = FirstBaseAppWSID + 0xffff
@@ -137,6 +149,7 @@ const (
 	ClusterAppID_sys_blobber
 	ClusterAppID_sys_router
 	ClusterAppID_untill_resellerportal
+	ClusterAppID_sys_cluster
 	ClusterAppID_FakeLast
 )
 
@@ -144,23 +157,23 @@ const NullClusterAppID = ClusterAppID_null
 const FirstGeneratedAppID = ClusterAppID(0x100)
 
 // Cluster application qnames
-
 const SysOwner = "sys"
 
-var AppQName_null = NullAppQName
-var AppQName_sys_registry = NewAppQName(SysOwner, "registry")
-var AppQName_untill_airs_bp = NewAppQName("untill", "airs-bp")
-var AppQName_test1_app1 = NewAppQName("test1", "app1")
-var AppQName_test1_app2 = NewAppQName("test1", "app2")
-var AppQName_test2_app1 = NewAppQName("test2", "app1")
-var AppQName_test2_app2 = NewAppQName("test2", "app2")
-var AppQName_sys_blobber = NewAppQName(SysOwner, "blobber")
-var AppQName_sys_router = NewAppQName(SysOwner, "router") // For ACME certificates
-var AppQName_untill_resellerportal = NewAppQName("untill", "resellerportal")
+var AppQName_null = appdef.NullAppQName
+var AppQName_sys_registry = appdef.NewAppQName(SysOwner, "registry")
+var AppQName_untill_airs_bp = appdef.NewAppQName("untill", "airs-bp")
+var AppQName_test1_app1 = appdef.NewAppQName("test1", "app1")
+var AppQName_test1_app2 = appdef.NewAppQName("test1", "app2")
+var AppQName_test2_app1 = appdef.NewAppQName("test2", "app1")
+var AppQName_test2_app2 = appdef.NewAppQName("test2", "app2")
+var AppQName_sys_blobber = appdef.NewAppQName(SysOwner, "blobber")
+var AppQName_sys_router = appdef.NewAppQName(SysOwner, "router") // For ACME certificates
+var AppQName_untill_resellerportal = appdef.NewAppQName("untill", "resellerportal")
+var AppQName_sys_cluster = appdef.NewAppQName(SysOwner, "cluster")
 
 // Cluster applications
 
-var ClusterApps = map[AppQName]ClusterAppID{
+var ClusterApps = map[appdef.AppQName]ClusterAppID{
 	AppQName_null:                  ClusterAppID_null,
 	AppQName_sys_registry:          ClusterAppID_sys_registry,
 	AppQName_test1_app1:            ClusterAppID_test1_app1,
@@ -171,6 +184,7 @@ var ClusterApps = map[AppQName]ClusterAppID{
 	AppQName_sys_blobber:           ClusterAppID_sys_blobber,
 	AppQName_sys_router:            ClusterAppID_sys_router,
 	AppQName_untill_resellerportal: ClusterAppID_untill_resellerportal,
+	AppQName_sys_cluster:           ClusterAppID_sys_cluster,
 }
 
 const (
@@ -181,4 +195,6 @@ const (
 	RateLimitKind_FakeLast
 )
 
-const DefaultAppWSAmount = 10
+const DefaultNumAppWorkspaces = NumAppWorkspaces(10)
+
+const SysGuestLogin = appdef.SysPackage + ".Guest"

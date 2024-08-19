@@ -14,14 +14,14 @@ import (
 	"io"
 	"reflect"
 
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/iblobstorage"
-	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istructs"
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
 type bStorageType struct {
-	appStorage istorage.IAppStorage
+	appStorage BlobAppStoragePtr
 	now        coreutils.TimeFunc
 }
 
@@ -99,7 +99,7 @@ func (b *bStorageType) writeChunk(pKeyBuf *bytes.Buffer, cCol uint64, bucketNumb
 	if cColBuf, err = createKey(cCol); err != nil {
 		return
 	}
-	err = b.appStorage.Put(pKeyBuf.Bytes(), cColBuf.Bytes(), *buf)
+	err = (*(b.appStorage)).Put(pKeyBuf.Bytes(), cColBuf.Bytes(), *buf)
 	return
 }
 
@@ -117,16 +117,12 @@ func (b *bStorageType) ReadBLOB(ctx context.Context, key iblobstorage.KeyType, s
 		pKeyBuf      *bytes.Buffer
 	)
 	if stateWriter != nil {
-		errState := b.readState(key, &state)
-		if errState != nil {
-			err = errState
-			return
+		if err := b.readState(key, &state); err != nil {
+			return err
 		}
 		isFound = true
-		errWriterState := stateWriter(state)
-		if errWriterState != nil {
-			err = errWriterState
-			return
+		if err := stateWriter(state); err != nil {
+			return err
 		}
 	}
 	if writer != nil {
@@ -135,16 +131,14 @@ func (b *bStorageType) ReadBLOB(ctx context.Context, key iblobstorage.KeyType, s
 				return err
 			}
 			var n int
-			err = b.appStorage.Read(ctx, pKeyBuf.Bytes(), nil, nil,
+			err = (*(b.appStorage)).Read(ctx, pKeyBuf.Bytes(), nil, nil,
 				func(ccols []byte, viewRecord []byte) (err error) {
 					isFound = true
 					n, err = writer.Write(viewRecord)
-					if err != nil {
-						return err
-					}
-					return nil
+					return err
 				})
 			if err != nil {
+				logger.Error(fmt.Sprintf("failed to send a BLOB chunk: id %d, appID %d, wsid %d: %s", key.ID, key.AppID, key.WSID, err.Error()))
 				break
 			}
 			if n > 0 {
@@ -157,7 +151,6 @@ func (b *bStorageType) ReadBLOB(ctx context.Context, key iblobstorage.KeyType, s
 
 	if !isFound && err == nil {
 		err = iblobstorage.ErrBLOBNotFound
-		return err
 	}
 	return err
 }
@@ -203,18 +196,17 @@ func (b *bStorageType) readState(key iblobstorage.KeyType, state *iblobstorage.B
 	if cColBuf, err = createKey(zeroCcCol); err != nil {
 		return
 	}
-	if ok, err = b.appStorage.Get(
+	ok, err = (*(b.appStorage)).Get(
 		pKeyBuf.Bytes(),
 		cColBuf.Bytes(),
-		&currentState); ok {
-		err = json.Unmarshal(currentState, &state)
-		return
+		&currentState)
+	if ok {
+		return json.Unmarshal(currentState, &state)
 	}
-	if err != nil {
-		return
+	if err == nil {
+		err = iblobstorage.ErrBLOBNotFound
 	}
-	err = iblobstorage.ErrBLOBNotFound
-	return
+	return err
 }
 
 func (b *bStorageType) writeState(key iblobstorage.KeyType, s interface{}) (err error) {
@@ -234,11 +226,8 @@ func (b *bStorageType) writeState(key iblobstorage.KeyType, s interface{}) (err 
 		return fmt.Errorf("error write meta information of blob appType: %d, wsid: %d, blobid: %d,  error: %w - marshal to JSON failed ",
 			key.AppID, key.WSID, key.ID, err)
 	}
-	if err = b.appStorage.Put(
+	return (*(b.appStorage)).Put(
 		pKeyBuf.Bytes(),
 		cColBuf.Bytes(),
-		value); err != nil {
-		return
-	}
-	return nil
+		value)
 }

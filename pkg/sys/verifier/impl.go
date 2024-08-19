@@ -19,29 +19,26 @@ import (
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
-	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/smtp"
 	coreutils "github.com/voedger/voedger/pkg/utils"
+	"github.com/voedger/voedger/pkg/utils/federation"
 )
 
 var translationsCatalog = coreutils.GetCatalogFromTranslations(translations)
 
 // called at targetApp/profileWSID
-func provideQryInitiateEmailVerification(cfg *istructsmem.AppConfigType, itokens itokens.ITokens,
-	asp istructs.IAppStructsProvider, federation coreutils.IFederation) {
-	cfg.Resources.Add(istructsmem.NewQueryFunction(
+func provideQryInitiateEmailVerification(sr istructsmem.IStatelessResources, itokens itokens.ITokens,
+	asp istructs.IAppStructsProvider, federation federation.IFederation) {
+	sr.AddQueries(appdef.SysPackagePath, istructsmem.NewQueryFunction(
 		QNameQueryInitiateEmailVerification,
-		provideIEVExec(cfg.Name, itokens, asp, federation),
+		provideIEVExec(itokens, federation, asp),
 	))
-	cfg.FunctionRateLimits.AddWorkspaceLimit(QNameQueryInitiateEmailVerification, istructs.RateLimit{
-		Period:                InitiateEmailVerification_Period,
-		MaxAllowedPerDuration: InitiateEmailVerification_MaxAllowed,
-	})
 }
 
 // q.sys.InitiateEmailVerification
 // called at targetApp/profileWSID
-func provideIEVExec(appQName istructs.AppQName, itokens itokens.ITokens, asp istructs.IAppStructsProvider, federation coreutils.IFederation) istructsmem.ExecQueryClosure {
+func provideIEVExec(itokens itokens.ITokens, federation federation.IFederation, asp istructs.IAppStructsProvider) istructsmem.ExecQueryClosure {
 	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 		entity := args.ArgumentObject.AsString(field_Entity)
 		targetWSID := istructs.WSID(args.ArgumentObject.AsInt64(field_TargetWSID))
@@ -50,14 +47,11 @@ func provideIEVExec(appQName istructs.AppQName, itokens itokens.ITokens, asp ist
 		forRegistry := args.ArgumentObject.AsBool(field_ForRegistry)
 		lng := args.ArgumentObject.AsString(field_Language)
 
-		as, err := asp.AppStructs(appQName)
-		if err != nil {
-			return err
-		}
+		as := args.State.AppStructs()
 		appTokens := as.AppTokens()
 		if forRegistry {
 			// issue token for sys/registry/pseduoWSID. That's for c.sys.ResetPassword only for now
-			asRegistry, err := asp.AppStructs(istructs.AppQName_sys_registry)
+			asRegistry, err := asp.BuiltIn(istructs.AppQName_sys_registry)
 			if err != nil {
 				// notest
 				return err
@@ -71,14 +65,14 @@ func provideIEVExec(appQName istructs.AppQName, itokens itokens.ITokens, asp ist
 			return err
 		}
 
-		systemPrincipalToken, err := payloads.GetSystemPrincipalToken(itokens, appQName)
+		systemPrincipalToken, err := payloads.GetSystemPrincipalToken(itokens, as.AppQName())
 		if err != nil {
 			return err
 		}
 
 		// c.sys.SendEmailVerificationCode
 		body := fmt.Sprintf(`{"args":{"VerificationCode":"%s","Email":"%s","Reason":"%s","Language":"%s"}}`, verificationCode, email, verifyEmailReason, lng)
-		if _, err = coreutils.FederationFunc(federation.URL(), fmt.Sprintf("api/%s/%d/c.sys.SendEmailVerificationCode", appQName, args.WSID), body,
+		if _, err = federation.Func(fmt.Sprintf("api/%s/%d/c.sys.SendEmailVerificationCode", as.AppQName(), args.WSID), body,
 			coreutils.WithDiscardResponse(), coreutils.WithAuthorizeBy(systemPrincipalToken)); err != nil {
 			return fmt.Errorf("c.sys.SendEmailVerificationCode failed: %w", err)
 		}
@@ -87,7 +81,7 @@ func provideIEVExec(appQName istructs.AppQName, itokens itokens.ITokens, asp ist
 	}
 }
 
-func applySendEmailVerificationCode(federation coreutils.IFederation, smtpCfg smtp.Cfg, timeFunc coreutils.TimeFunc) func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
+func applySendEmailVerificationCode(federation federation.IFederation, smtpCfg smtp.Cfg, timeFunc coreutils.TimeFunc) func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
 	return func(event istructs.IPLogEvent, st istructs.IState, intents istructs.IIntents) (err error) {
 		eventTime := time.UnixMilli(int64(event.RegisteredAt()))
 		if eventTime.Add(threeDays).Before(timeFunc()) {
@@ -97,33 +91,33 @@ func applySendEmailVerificationCode(federation coreutils.IFederation, smtpCfg sm
 		}
 		lng := event.ArgumentObject().AsString(field_Language)
 
-		kb, err := st.KeyBuilder(state.SendMail, appdef.NullQName)
+		kb, err := st.KeyBuilder(sys.Storage_SendMail, appdef.NullQName)
 		if err != nil {
 			return
 		}
 		reason := event.ArgumentObject().AsString(field_Reason)
 		translatedEmailSubject := message.NewPrinter(language.Make(lng), message.Catalog(translationsCatalog)).Sprintf(EmailSubject)
-		kb.PutString(state.Field_Subject, translatedEmailSubject)
-		kb.PutString(state.Field_To, event.ArgumentObject().AsString(Field_Email))
-		kb.PutString(state.Field_Body, getVerificationEmailBody(federation, event.ArgumentObject().AsString(field_VerificationCode), reason, language.Make(lng), translationsCatalog))
-		kb.PutString(state.Field_From, smtpCfg.GetFrom())
-		kb.PutString(state.Field_Host, smtpCfg.Host)
-		kb.PutInt32(state.Field_Port, smtpCfg.Port)
-		kb.PutString(state.Field_Username, smtpCfg.Username)
+		kb.PutString(sys.Storage_SendMail_Field_Subject, translatedEmailSubject)
+		kb.PutString(sys.Storage_SendMail_Field_To, event.ArgumentObject().AsString(Field_Email))
+		kb.PutString(sys.Storage_SendMail_Field_Body, getVerificationEmailBody(federation, event.ArgumentObject().AsString(field_VerificationCode), reason, language.Make(lng), translationsCatalog))
+		kb.PutString(sys.Storage_SendMail_Field_From, smtpCfg.GetFrom())
+		kb.PutString(sys.Storage_SendMail_Field_Host, smtpCfg.Host)
+		kb.PutInt32(sys.Storage_SendMail_Field_Port, smtpCfg.Port)
+		kb.PutString(sys.Storage_SendMail_Field_Username, smtpCfg.Username)
 		pwd := ""
 		if !coreutils.IsTest() {
-			kbSecret, err := st.KeyBuilder(state.AppSecret, appdef.NullQName)
+			kbSecret, err := st.KeyBuilder(sys.Storage_AppSecret, appdef.NullQName)
 			if err != nil {
 				return err
 			}
-			kbSecret.PutString(state.Field_Secret, smtpCfg.PwdSecret)
+			kbSecret.PutString(sys.Storage_AppSecretField_Secret, smtpCfg.PwdSecret)
 			sv, err := st.MustExist(kbSecret)
 			if err != nil {
 				return err
 			}
 			pwd = sv.AsString("")
 		}
-		kb.PutString(state.Field_Password, pwd)
+		kb.PutString(sys.Storage_SendMail_Field_Password, pwd)
 
 		_, err = intents.NewValue(kb)
 
@@ -140,33 +134,27 @@ func (r ivvtResult) AsString(string) string {
 }
 
 // called at targetApp/targetWSID
-func provideQryIssueVerifiedValueToken(cfg *istructsmem.AppConfigType, itokens itokens.ITokens, asp istructs.IAppStructsProvider) {
-	cfg.Resources.Add(istructsmem.NewQueryFunction(
+func provideQryIssueVerifiedValueToken(sr istructsmem.IStatelessResources, itokens itokens.ITokens, asp istructs.IAppStructsProvider) {
+	sr.AddQueries(appdef.SysPackagePath, istructsmem.NewQueryFunction(
 		QNameQueryIssueVerifiedValueToken,
-		provideIVVTExec(itokens, cfg.Name, asp),
+		provideIVVTExec(itokens, asp),
 	))
-
-	// code ok -> buckets state will be reset
-	cfg.FunctionRateLimits.AddWorkspaceLimit(QNameQueryIssueVerifiedValueToken, RateLimit_IssueVerifiedValueToken)
 }
 
 // q.sys.IssueVerifiedValueToken
 // called at targetApp/profileWSID
 // a helper is used for ResetPassword that calls `q.sys.IssueVerifiedValueToken` at the profile
-func provideIVVTExec(itokens itokens.ITokens, appQName istructs.AppQName, asp istructs.IAppStructsProvider) istructsmem.ExecQueryClosure {
+func provideIVVTExec(itokens itokens.ITokens, asp istructs.IAppStructsProvider) istructsmem.ExecQueryClosure {
 	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 		verificationToken := args.ArgumentObject.AsString(field_VerificationToken)
 		verificationCode := args.ArgumentObject.AsString(field_VerificationCode)
 		forRegistry := args.ArgumentObject.AsBool(field_ForRegistry)
 
-		as, err := asp.AppStructs(appQName)
-		if err != nil {
-			return err
-		}
+		as := args.State.AppStructs()
 
 		appTokens := as.AppTokens()
 		if forRegistry {
-			asRegistry, err := asp.AppStructs(istructs.AppQName_sys_registry)
+			asRegistry, err := asp.BuiltIn(istructs.AppQName_sys_registry)
 			if err != nil {
 				// notest
 				return err
@@ -192,14 +180,14 @@ func provideIVVTExec(itokens itokens.ITokens, appQName istructs.AppQName, asp is
 	}
 }
 
-func provideCmdSendEmailVerificationCode(cfg *istructsmem.AppConfigType) {
-	cfg.Resources.Add(istructsmem.NewCommandFunction(
+func provideCmdSendEmailVerificationCode(sr istructsmem.IStatelessResources) {
+	sr.AddCommands(appdef.SysPackagePath, istructsmem.NewCommandFunction(
 		QNameCommandSendEmailVerificationCode,
 		istructsmem.NullCommandExec,
 	))
 }
 
-func getVerificationEmailBody(federation coreutils.IFederation, verificationCode string, reason string, lng language.Tag, ctlg catalog.Catalog) string {
+func getVerificationEmailBody(federation federation.IFederation, verificationCode string, reason string, lng language.Tag, ctlg catalog.Catalog) string {
 	text1 := message.NewPrinter(lng, message.Catalog(ctlg)).Sprintf(`Here is your verification code`)
 	text2 := message.NewPrinter(lng, message.Catalog(ctlg)).Sprintf(`Please, enter this code on`)
 	text3 := message.NewPrinter(lng, message.Catalog(ctlg)).Sprintf(reason)
@@ -221,5 +209,5 @@ func getVerificationEmailBody(federation coreutils.IFederation, verificationCode
 		%d &copy; unTill
 	</div>
 </div>
-`, text1, verificationCode, text2, federation.URL().String(), text3, time.Now().Year())
+`, text1, verificationCode, text2, federation.URLStr(), text3, time.Now().Year())
 }

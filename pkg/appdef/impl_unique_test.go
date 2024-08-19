@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/stretchr/testify/require"
+	"github.com/voedger/voedger/pkg/goutils/testingu/require"
 )
 
 func Test_def_AddUnique(t *testing.T) {
@@ -19,9 +19,10 @@ func Test_def_AddUnique(t *testing.T) {
 	un1 := UniqueQName(qName, "EMail")
 	un2 := UniqueQName(qName, "Full")
 
-	appDef := New()
+	adb := New()
+	adb.AddPackage("test", "test.com/test")
 
-	doc := appDef.AddCDoc(qName)
+	doc := adb.AddCDoc(qName)
 	require.NotNil(doc)
 
 	doc.
@@ -32,11 +33,11 @@ func Test_def_AddUnique(t *testing.T) {
 		AddField("sex", DataKind_bool, false).
 		AddField("eMail", DataKind_string, false)
 	doc.
-		AddUnique(un1, []string{"eMail"}).
-		AddUnique(un2, []string{"name", "surname", "lastName"})
+		AddUnique(un1, []FieldName{"eMail"}).
+		AddUnique(un2, []FieldName{"name", "surname", "lastName"})
 
 	t.Run("test is ok", func(t *testing.T) {
-		app, err := appDef.Build()
+		app, err := adb.Build()
 		require.NoError(err)
 
 		doc := app.CDoc(qName)
@@ -74,65 +75,71 @@ func Test_def_AddUnique(t *testing.T) {
 	t.Run("test panics", func(t *testing.T) {
 
 		require.Panics(func() {
-			doc.AddUnique(NullQName, []string{"sex"})
-		}, "panics if empty unique name")
+			doc.AddUnique(NullQName, []FieldName{"sex"})
+		}, require.Is(ErrMissedError))
 
 		require.Panics(func() {
-			doc.AddUnique(NewQName("naked", "🔫"), []string{"sex"})
-		}, "panics if invalid unique name")
+			doc.AddUnique(NewQName("naked", "🔫"), []FieldName{"sex"})
+		}, require.Is(ErrInvalidError), require.Has("naked.🔫"))
 
 		require.Panics(func() {
-			doc.AddUnique(un1, []string{"name", "surname", "lastName"})
-		}, "panics unique with name is already exists")
+			doc.AddUnique(un1, []FieldName{"name", "surname", "lastName"})
+		}, require.Is(ErrAlreadyExistsError), require.Has(un1))
 
 		require.Panics(func() {
-			doc.AddUnique(qName, []string{"name", "surname", "lastName"})
-		}, "panics if type with unique name is exists")
+			doc.AddUnique(qName, []FieldName{"name", "surname", "lastName"})
+		}, require.Is(ErrAlreadyExistsError), require.Has(qName))
 
 		require.Panics(func() {
-			doc.AddUnique(NewQName("test", "user$uniqueEmpty"), []string{})
-		}, "panics if fields set is empty")
+			doc.AddUnique(NewQName("test", "user$uniqueEmpty"), []FieldName{})
+		}, require.Is(ErrMissedError))
 
 		require.Panics(func() {
-			doc.AddUnique(NewQName("test", "user$uniqueFiledDup"), []string{"birthday", "birthday"})
-		}, "if fields has duplicates")
+			doc.AddUnique(NewQName("test", "user$uniqueFiledDup"), []FieldName{"birthday", "birthday"})
+		}, require.Is(ErrAlreadyExistsError), require.Has("birthday"))
 
 		t.Run("panics if too many fields", func(t *testing.T) {
-			rec := New().AddCRecord(NewQName("test", "rec"))
-			fldNames := []string{}
+			adb := New()
+			adb.AddPackage("test", "test.com/test")
+			rec := adb.AddCRecord(NewQName("test", "rec"))
+			fldNames := []FieldName{}
 			for i := 0; i <= MaxTypeUniqueFieldsCount; i++ {
 				n := fmt.Sprintf("f_%#x", i)
 				rec.AddField(n, DataKind_bool, false)
 				fldNames = append(fldNames, n)
 			}
-			require.Panics(func() { rec.AddUnique(NewQName("test", "user$uniqueTooLong"), fldNames) })
+			require.Panics(func() { rec.AddUnique(NewQName("test", "user$uniqueTooLong"), fldNames) },
+				require.Is(ErrTooManyError))
 		})
 
 		require.Panics(func() {
-			doc.AddUnique(NewQName("test", "user$uniqueFieldsSetDup"), []string{"name", "surname", "lastName"})
-		}, "if fields set is already exists")
+			doc.AddUnique(NewQName("test", "user$uniqueFieldsSetDup"), []FieldName{"name", "surname", "lastName"})
+		}, require.Is(ErrAlreadyExistsError), require.Has(un2))
 
 		require.Panics(func() {
-			doc.AddUnique(NewQName("test", "user$uniqueFieldsSetOverlaps"), []string{"surname"})
-		}, "if fields set overlaps exists")
+			doc.AddUnique(NewQName("test", "user$uniqueFieldsSetOverlaps"), []FieldName{"surname"})
+		}, require.Is(ErrAlreadyExistsError), require.Has(un2))
 
 		require.Panics(func() {
-			doc.AddUnique(NewQName("test", "user$uniqueFieldsSetOverlapped"), []string{"eMail", "birthday"})
-		}, "if fields set overlapped by exists")
+			doc.AddUnique(NewQName("test", "user$uniqueFieldsSetOverlapped"), []FieldName{"eMail", "birthday"})
+		}, require.Is(ErrAlreadyExistsError), require.Has(un1))
 
 		require.Panics(func() {
-			doc.AddUnique(NewQName("test", "user$uniqueFieldsUnknown"), []string{"unknown"})
-		}, "if fields not exists")
+			doc.AddUnique(NewQName("test", "user$uniqueFieldsUnknown"), []FieldName{"unknown"})
+		}, require.Is(ErrNotFoundError), require.Has("unknown"))
 
 		t.Run("panics if too many uniques", func(t *testing.T) {
-			rec := New().AddCRecord(NewQName("test", "rec"))
+			adb := New()
+			adb.AddPackage("test", "test.com/test")
+			rec := adb.AddCRecord(NewQName("test", "rec"))
 			for i := 0; i < MaxTypeUniqueCount; i++ {
 				n := fmt.Sprintf("f_%#x", i)
 				rec.AddField(n, DataKind_int32, false)
-				rec.AddUnique(NewQName("test", fmt.Sprintf("rec$uniques$%s", n)), []string{n})
+				rec.AddUnique(NewQName("test", fmt.Sprintf("rec$uniques$%s", n)), []FieldName{n})
 			}
 			rec.AddField("lastStraw", DataKind_int32, false)
-			require.Panics(func() { rec.AddUnique(NewQName("test", "rec$uniques$lastStraw"), []string{"lastStraw"}) })
+			require.Panics(func() { rec.AddUnique(NewQName("test", "rec$uniques$lastStraw"), []FieldName{"lastStraw"}) },
+				require.Is(ErrTooManyError))
 		})
 	})
 }
@@ -142,9 +149,11 @@ func Test_type_UniqueField(t *testing.T) {
 	require := require.New(t)
 
 	qName := NewQName("test", "user")
-	appDef := New()
 
-	doc := appDef.AddCDoc(qName)
+	adb := New()
+	adb.AddPackage("test", "test.com/test")
+
+	doc := adb.AddCDoc(qName)
 	require.NotNil(doc)
 
 	doc.
@@ -157,7 +166,7 @@ func Test_type_UniqueField(t *testing.T) {
 	doc.SetUniqueField("eMail")
 
 	t.Run("test is ok", func(t *testing.T) {
-		app, err := appDef.Build()
+		app, err := adb.Build()
 		require.NoError(err)
 
 		d := app.CDoc(qName)
@@ -171,7 +180,7 @@ func Test_type_UniqueField(t *testing.T) {
 	t.Run("must be ok to clear unique field", func(t *testing.T) {
 		doc.SetUniqueField("")
 
-		app, err := appDef.Build()
+		app, err := adb.Build()
 		require.NoError(err)
 
 		d := app.CDoc(qName)
@@ -183,11 +192,11 @@ func Test_type_UniqueField(t *testing.T) {
 	t.Run("test panics", func(t *testing.T) {
 		require.Panics(func() {
 			doc.SetUniqueField("naked-🔫")
-		}, "panics if invalid unique field name")
+		}, require.Is(ErrInvalidError), require.Has("naked-🔫"))
 
 		require.Panics(func() {
 			doc.SetUniqueField("unknownField")
-		}, "panics if unknown unique field name")
+		}, require.Is(ErrNotFoundError), require.Has("unknownField"))
 	})
 }
 

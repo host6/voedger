@@ -13,9 +13,9 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/spf13/cobra"
-	"github.com/untillpro/goutils/cobrau"
+	"github.com/voedger/voedger/pkg/goutils/cobrau"
 
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 )
 
 //go:embed version
@@ -66,6 +66,22 @@ func main() {
 	}
 }
 
+// adds to the сommand flag --ssh-key
+// If the environment variable VOEDGER_SSH_KEY is not established, then the flag is marked as a required
+func addSshKeyFlag(cmds ...*cobra.Command) bool {
+	for _, cmd := range cmds {
+		cmd.PersistentFlags().StringVar(&sshKey, "ssh-key", "", "Path to SSH key")
+		value, exists := os.LookupEnv(envVoedgerSshKey)
+		if !exists || value == "" {
+			if err := cmd.MarkPersistentFlagRequired("ssh-key"); err != nil {
+				loggerError(err.Error())
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // nolint
 func cursorOff() {
 	cmd := exec.Command("setterm", "--cursor", "off")
@@ -98,13 +114,17 @@ func execRootCmd(args []string, ver string) error {
 		newBackupCmd(),
 		newAcmeCmd(),
 		newRestoreCmd(),
-		newGrafanaCmd(),
+		newMonCmd(),
+		newAlertCmd(),
 	)
-	rootCmd.SilenceErrors = true
-	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Perform a dry run of the command without making any actual changes")
 
-	rootCmd.PersistentFlags().BoolVar(&skipNodeMemoryCheck, "skip-node-memory-check", false, "Skip checking nodes for the presence of the minimum allowable amount of RAM")
-	rootCmd.PersistentFlags().BoolVar(&devMode, "dev-mode", false, "Use development mode for DB stack")
+	rootCmd.PersistentFlags().BoolP("help", "h", false, "Display help for the command")
+
+	rootCmd.SilenceErrors = true
+	rootCmd.PersistentFlags().BoolVar(&dryRun, "dry-run", false, "Perform a dry run without making any changes")
+
+	rootCmd.PersistentFlags().BoolVar(&skipNodeMemoryCheck, "skip-node-memory-check", false, "Skip the minimum RAM check for nodes")
+	rootCmd.PersistentFlags().BoolVar(&devMode, "dev-mode", false, "Use development mode for the database stack")
 	logger.SetLogLevel(getLoggerLevel())
 
 	return cobrau.ExecCommandAndCatchInterrupt(rootCmd)

@@ -13,34 +13,34 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/untillpro/goutils/iterate"
+	"github.com/voedger/voedger/pkg/goutils/iterate"
+	"github.com/voedger/voedger/pkg/sys"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
-	"github.com/voedger/voedger/pkg/state"
+
 	coreutils "github.com/voedger/voedger/pkg/utils"
 )
 
-func provideApplyUniques(appDef appdef.IAppDef) func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
-	return func(event istructs.IPLogEvent, st istructs.IState, intents istructs.IIntents) (err error) {
-		return iterate.ForEachError(event.CUDs, func(rec istructs.ICUDRow) error {
-			iUniques, ok := appDef.Type(rec.QName()).(appdef.IUniques)
-			if !ok {
-				return nil
-			}
-			for _, unique := range iUniques.Uniques() {
-				if err := handleCUD(rec, st, intents, unique.Fields(), unique.Name()); err != nil {
-					return err
-				}
-			}
-			if iUniques.UniqueField() != nil {
-				uniqueQName := rec.QName()
-				return handleCUD(rec, st, intents, []appdef.IField{iUniques.UniqueField()}, uniqueQName)
-			}
+func applyUniques(event istructs.IPLogEvent, st istructs.IState, intents istructs.IIntents) (err error) {
+	return iterate.ForEachError(event.CUDs, func(rec istructs.ICUDRow) error {
+		appDef := st.AppStructs().AppDef()
+		iUniques, ok := appDef.Type(rec.QName()).(appdef.IUniques)
+		if !ok {
 			return nil
-		})
-	}
+		}
+		for _, unique := range iUniques.Uniques() {
+			if err := handleCUD(rec, st, intents, unique.Fields(), unique.Name()); err != nil {
+				return err
+			}
+		}
+		if iUniques.UniqueField() != nil {
+			uniqueQName := rec.QName()
+			return handleCUD(rec, st, intents, []appdef.IField{iUniques.UniqueField()}, uniqueQName)
+		}
+		return nil
+	})
 }
 
 func handleCUD(cud istructs.ICUDRow, st istructs.IState, intents istructs.IIntents, uniqueFields []appdef.IField, uniqueQName appdef.QName) error {
@@ -60,11 +60,11 @@ func update(st istructs.IState, rec istructs.ICUDRow, intents istructs.IIntents,
 	// so came here -> we're updating anything but unique fields
 	// let's check activation\deactivation
 
-	kb, err := st.KeyBuilder(state.Record, rec.QName())
+	kb, err := st.KeyBuilder(sys.Storage_Record, rec.QName())
 	if err != nil {
 		return err
 	}
-	kb.PutRecordID(state.Field_ID, rec.ID())
+	kb.PutRecordID(sys.Storage_Record_Field_ID, rec.ID())
 	currentRecord, err := st.MustExist(kb)
 	if err != nil {
 		return err
@@ -129,13 +129,13 @@ func insert(state istructs.IState, rec istructs.IRowReader, intents istructs.IIn
 }
 
 func getUniqueViewRecord(st istructs.IState, rec istructs.IRowReader, uniqueFields []appdef.IField, uniqueQName appdef.QName) (istructs.IStateValue, istructs.IStateKeyBuilder, bool, error) {
-	uniqueViewRecordBuilder, err := st.KeyBuilder(state.View, qNameViewUniques)
+	uniqueKeyValues, err := getUniqueKeyValuesFromRec(rec, uniqueFields, uniqueQName)
 	if err != nil {
-		// notest
 		return nil, nil, false, err
 	}
-	uniqueKeyValues, err := getUniqueKeyValues(rec, uniqueFields, uniqueQName)
+	uniqueViewRecordBuilder, err := st.KeyBuilder(sys.Storage_View, qNameViewUniques)
 	if err != nil {
+		// notest
 		return nil, nil, false, err
 	}
 	buildUniqueViewKeyByValues(uniqueViewRecordBuilder, uniqueQName, uniqueKeyValues)
@@ -150,32 +150,53 @@ func buildUniqueViewKeyByValues(kb istructs.IKeyBuilder, qName appdef.QName, uni
 	kb.PutBytes(field_Values, uniqueKeyValues)
 }
 
-func getUniqueKeyValues(rec istructs.IRowReader, uniqueFields []appdef.IField, uniqueQName appdef.QName) (res []byte, err error) {
+func getUniqueKeyValuesFromMap(values map[string]interface{}, uniqueFields []appdef.IField, uniqueQName appdef.QName) (res []byte, err error) {
+	buf := bytes.NewBuffer(nil)
+	for _, uniqueField := range uniqueFields {
+		val := values[uniqueField.Name()]
+		if err := coreutils.CheckValueByKind(val, uniqueField.DataKind()); err != nil {
+			return nil, err
+		}
+		writeUniqueKeyValue(uniqueField, val, buf, uniqueFields)
+	}
+	return buf.Bytes(), checkUniqueKeyLen(buf, uniqueQName)
+}
+
+// uniqueFields is provided just to determine if should handle backward compatibility
+func writeUniqueKeyValue(uniqueField appdef.IField, value interface{}, buf *bytes.Buffer, uniqueFields []appdef.IField) {
+	switch uniqueField.DataKind() {
+	case appdef.DataKind_string:
+		if len(uniqueFields) > 1 {
+			// backward compatibility
+			buf.WriteByte(zeroByte)
+		}
+		buf.WriteString(value.(string))
+	case appdef.DataKind_bytes:
+		if len(uniqueFields) > 1 {
+			// backward compatibility
+			buf.WriteByte(zeroByte)
+		}
+		buf.Write(value.([]byte))
+	default:
+		binary.Write(buf, binary.BigEndian, value) // nolint
+	}
+}
+
+func checkUniqueKeyLen(buf *bytes.Buffer, uniqueQName appdef.QName) error {
+	if buf.Len() > int(appdef.MaxFieldLength) {
+		return fmt.Errorf(`%w: resulting len of the unique combination "%s" is %d, max %d is allowed. Decrease len of values of unique fields`,
+			ErrUniqueValueTooLong, uniqueQName, buf.Len(), appdef.MaxFieldLength)
+	}
+	return nil
+}
+
+func getUniqueKeyValuesFromRec(rec istructs.IRowReader, uniqueFields []appdef.IField, uniqueQName appdef.QName) (res []byte, err error) {
 	buf := bytes.NewBuffer(nil)
 	for _, uniqueField := range uniqueFields {
 		val := coreutils.ReadByKind(uniqueField.Name(), uniqueField.DataKind(), rec)
-		switch uniqueField.DataKind() {
-		case appdef.DataKind_string:
-			if len(uniqueFields) > 1 {
-				// backward compatibility
-				buf.WriteByte(zeroByte)
-			}
-			buf.WriteString(val.(string))
-		case appdef.DataKind_bytes:
-			if len(uniqueFields) > 1 {
-				// backward compatibility
-				buf.WriteByte(zeroByte)
-			}
-			buf.Write(val.([]byte))
-		default:
-			binary.Write(buf, binary.BigEndian, val) // nolint
-		}
+		writeUniqueKeyValue(uniqueField, val, buf, uniqueFields)
 	}
-	if buf.Len() > int(appdef.MaxFieldLength) {
-		return nil, fmt.Errorf(`%w: resulting len of the unique combination "%s" is %d, max %d is allowed. Decrease len of values of unique fields`,
-			ErrUniqueValueTooLong, uniqueQName, buf.Len(), appdef.MaxFieldLength)
-	}
-	return buf.Bytes(), nil
+	return buf.Bytes(), checkUniqueKeyLen(buf, uniqueQName)
 }
 
 func getCurrentUniqueViewRecord(uniquesState map[appdef.QName]map[appdef.QName]map[string]*uniqueViewRecord,
@@ -239,7 +260,7 @@ func validateCUD(cudRec istructs.ICUDRow, appStructs istructs.IAppStructs, wsid 
 			return err
 		}
 	}
-	uniqueKeyValues, err = getUniqueKeyValues(rowSource, uniqueFields, uniqueQName)
+	uniqueKeyValues, err = getUniqueKeyValuesFromRec(rowSource, uniqueFields, uniqueQName)
 	if err != nil {
 		return err
 	}
@@ -261,7 +282,7 @@ func validateCUD(cudRec istructs.ICUDRow, appStructs istructs.IAppStructs, wsid 
 		// update
 		// unique view record exists because all unique fields are required.
 		// let's deny to update unique fields and handle IsActive state
-		err := iterate.ForEachError2Values(cudRec.ModifiedFields, func(cudModifiedFieldName string, newValue interface{}) error {
+		err := iterate.ForEachError2Values(cudRec.ModifiedFields, func(cudModifiedFieldName appdef.FieldName, newValue interface{}) error {
 			for _, uniqueField := range uniqueFields {
 				if uniqueField.Name() == cudModifiedFieldName {
 					return fmt.Errorf("%v: unique field «%s» can not be changed: %w", cudQName, uniqueField.Name(), ErrUniqueFieldUpdateDeny)

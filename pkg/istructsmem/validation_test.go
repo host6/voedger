@@ -22,7 +22,10 @@ import (
 func Test_ValidEventArgs(t *testing.T) {
 	require := require.New(t)
 
-	appDef := appdef.New()
+	appName := istructs.AppQName_test1_app1
+
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
 
 	docName := appdef.NewQName("test", "document")
 	rec1Name := appdef.NewQName("test", "record1")
@@ -31,7 +34,7 @@ func Test_ValidEventArgs(t *testing.T) {
 	objName := appdef.NewQName("test", "object")
 
 	t.Run("must be ok to build test application", func(t *testing.T) {
-		doc := appDef.AddODoc(docName)
+		doc := adb.AddODoc(docName)
 		doc.
 			AddField("RequiredField", appdef.DataKind_int32, true).
 			AddRefField("RefField", false, rec1Name)
@@ -39,21 +42,22 @@ func Test_ValidEventArgs(t *testing.T) {
 			AddContainer("child", rec1Name, 1, 1).
 			AddContainer("child2", rec2Name, 0, appdef.Occurs_Unbounded)
 
-		_ = appDef.AddORecord(rec1Name)
+		_ = adb.AddORecord(rec1Name)
 
-		rec2 := appDef.AddORecord(rec2Name)
+		rec2 := adb.AddORecord(rec2Name)
 		rec2.AddRefField("RequiredRefField", true, rec2Name)
 
-		obj := appDef.AddObject(objName)
+		obj := adb.AddObject(objName)
 		obj.AddContainer("objChild", objName, 0, appdef.Occurs_Unbounded)
 	})
 
 	cfgs := make(AppConfigsType, 1)
-	_ = cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+	cfg := cfgs.AddBuiltInAppConfig(appName, adb)
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 	provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
 
-	app, err := provider.AppStructs(istructs.AppQName_test1_app1)
+	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
 
 	t.Run("error if event name is not a command or odoc", func(t *testing.T) {
@@ -312,7 +316,10 @@ func Test_ValidEventArgs(t *testing.T) {
 func Test_ValidSysCudEvent(t *testing.T) {
 	require := require.New(t)
 
-	appDef := appdef.New()
+	appName := istructs.AppQName_test1_app1
+
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
 
 	docName := appdef.NewQName("test", "document")
 	rec1Name := appdef.NewQName("test", "record1")
@@ -321,7 +328,7 @@ func Test_ValidSysCudEvent(t *testing.T) {
 	objName := appdef.NewQName("test", "object")
 
 	t.Run("must be ok to build test application", func(t *testing.T) {
-		doc := appDef.AddCDoc(docName)
+		doc := adb.AddCDoc(docName)
 		doc.
 			AddField("RequiredField", appdef.DataKind_int32, true).
 			AddRefField("RefField", false, rec1Name)
@@ -329,19 +336,20 @@ func Test_ValidSysCudEvent(t *testing.T) {
 			AddContainer("child", rec1Name, 0, appdef.Occurs_Unbounded).
 			AddContainer("child2", rec2Name, 0, appdef.Occurs_Unbounded)
 
-		_ = appDef.AddCRecord(rec1Name)
-		_ = appDef.AddCRecord(rec2Name)
+		_ = adb.AddCRecord(rec1Name)
+		_ = adb.AddCRecord(rec2Name)
 
-		obj := appDef.AddObject(objName)
+		obj := adb.AddObject(objName)
 		obj.AddContainer("objChild", objName, 0, appdef.Occurs_Unbounded)
 	})
 
 	cfgs := make(AppConfigsType, 1)
-	cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+	cfg := cfgs.AddBuiltInAppConfig(appName, adb)
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 	provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
 
-	app, err := provider.AppStructs(istructs.AppQName_test1_app1)
+	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
 
 	cudRawEvent := func(sync bool) istructs.IRawEventBuilder {
@@ -537,7 +545,10 @@ func Test_ValidSysCudEvent(t *testing.T) {
 func Test_ValidCommandEvent(t *testing.T) {
 	require := require.New(t)
 
-	appDef := appdef.New()
+	appName := istructs.AppQName_test1_app1
+
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
 
 	cmdName := appdef.NewQName("test", "command")
 
@@ -546,22 +557,23 @@ func Test_ValidCommandEvent(t *testing.T) {
 	wDocName := appdef.NewQName("test", "WDocument")
 
 	t.Run("must be ok to build test application", func(t *testing.T) {
-		oDoc := appDef.AddODoc(oDocName)
+		oDoc := adb.AddODoc(oDocName)
 		oDoc.AddRefField("RefField", false)
 
-		wDoc := appDef.AddWDoc(wDocName)
+		wDoc := adb.AddWDoc(wDocName)
 		wDoc.AddRefField("RefField", false, oDocName)
 
-		appDef.AddCommand(cmdName).SetParam(oDocName).SetResult(wDocName)
+		adb.AddCommand(cmdName).SetParam(oDocName).SetResult(wDocName)
 	})
 
 	cfgs := make(AppConfigsType, 1)
-	cfg := cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+	cfg := cfgs.AddBuiltInAppConfig(appName, adb)
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 	cfg.Resources.Add(NewCommandFunction(cmdName, NullCommandExec))
 
 	provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
 
-	app, err := provider.AppStructs(istructs.AppQName_test1_app1)
+	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
 
 	eventBuilder := func(sync bool) istructs.IRawEventBuilder {
@@ -657,24 +669,28 @@ func Test_ValidCommandEvent(t *testing.T) {
 func Test_IObjectBuilderBuild(t *testing.T) {
 	require := require.New(t)
 
-	appDef := appdef.New()
+	appName := istructs.AppQName_test1_app1
+
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
 
 	docName := appdef.NewQName("test", "document")
 	recName := appdef.NewQName("test", "record")
 
 	t.Run("must be ok to build test application", func(t *testing.T) {
-		oDoc := appDef.AddODoc(docName)
+		oDoc := adb.AddODoc(docName)
 		oDoc.AddField("RequiredField", appdef.DataKind_string, true)
 		oDoc.AddContainer("child", recName, 0, appdef.Occurs_Unbounded)
-		_ = appDef.AddORecord(recName)
+		_ = adb.AddORecord(recName)
 	})
 
 	cfgs := make(AppConfigsType, 1)
-	_ = cfgs.AddConfig(istructs.AppQName_test1_app1, appDef)
+	cfg := cfgs.AddBuiltInAppConfig(appName, adb)
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 	provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
 
-	app, err := provider.AppStructs(istructs.AppQName_test1_app1)
+	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
 
 	eventBuilder := func() istructs.IRawEventBuilder {
@@ -738,9 +754,11 @@ func Test_VerifiedFields(t *testing.T) {
 
 	objName := appdef.NewQName("test", "obj")
 
-	appDef := appdef.New()
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
+
 	t.Run("must be ok to build application", func(t *testing.T) {
-		appDef.AddObject(objName).
+		adb.AddObject(objName).
 			AddField("int32", appdef.DataKind_int32, true).
 			AddField("email", appdef.DataKind_string, false).
 			SetFieldVerify("email", appdef.VerificationKind_EMail).
@@ -749,17 +767,14 @@ func Test_VerifiedFields(t *testing.T) {
 	})
 
 	cfgs := make(AppConfigsType, 1)
-	cfg := cfgs.AddConfig(test.appName, appDef)
+	cfg := cfgs.AddBuiltInAppConfig(test.appName, adb)
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
 	email := "test@test.io"
 
 	tokens := testTokensFactory().New(test.appName)
-	storage, err := simpleStorageProvider().AppStorage(istructs.AppQName_test1_app1)
-	require.NoError(err)
 	asp := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
-	err = cfg.prepare(iratesce.TestBucketsFactory(), storage)
-	require.NoError(err)
-	_, err = asp.AppStructs(test.appName) // need to set cfg.app because IAppTokens are taken from cfg.app
+	_, err := asp.BuiltIn(test.appName) // need to set cfg.app because IAppTokens are taken from cfg.app
 	require.NoError(err)
 
 	t.Run("test row verification", func(t *testing.T) {
@@ -912,35 +927,34 @@ func Test_CharsFieldRestricts(t *testing.T) {
 
 	objName := appdef.NewQName("test", "obj")
 
-	appDef := appdef.New()
+	adb := appdef.New()
+	adb.AddPackage("test", "test.com/test")
+
 	t.Run("must be ok to build application", func(t *testing.T) {
 		s100Data := appdef.NewQName("test", "s100")
 		emailData := appdef.NewQName("test", "email")
 		mimeData := appdef.NewQName("test", "mime")
 
-		appDef.AddData(s100Data, appdef.DataKind_string, appdef.NullQName,
+		adb.AddData(s100Data, appdef.DataKind_string, appdef.NullQName,
 			appdef.MinLen(1), appdef.MaxLen(100)).SetComment("string 1..100")
 
-		_ = appDef.AddData(emailData, appdef.DataKind_string, s100Data,
+		_ = adb.AddData(emailData, appdef.DataKind_string, s100Data,
 			appdef.MinLen(6), appdef.Pattern(`^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$`))
 
-		_ = appDef.AddData(mimeData, appdef.DataKind_bytes, appdef.NullQName,
+		_ = adb.AddData(mimeData, appdef.DataKind_bytes, appdef.NullQName,
 			appdef.MinLen(4), appdef.MaxLen(4), appdef.Pattern(`^\w+$`))
 
-		appDef.AddObject(objName).
+		adb.AddObject(objName).
 			AddDataField("email", emailData, true).
 			AddDataField("mime", mimeData, false)
 	})
 
 	cfgs := make(AppConfigsType, 1)
-	cfg := cfgs.AddConfig(test.appName, appDef)
+	cfg := cfgs.AddBuiltInAppConfig(test.appName, adb)
+	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-	storage, err := simpleStorageProvider().AppStorage(istructs.AppQName_test1_app1)
-	require.NoError(err)
 	asp := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
-	err = cfg.prepare(iratesce.TestBucketsFactory(), storage)
-	require.NoError(err)
-	_, err = asp.AppStructs(test.appName)
+	_, err := asp.BuiltIn(test.appName)
 	require.NoError(err)
 
 	t.Run("test constraints", func(t *testing.T) {

@@ -5,20 +5,20 @@
 package main
 
 import (
+	"bytes"
 	"embed"
 	"fmt"
+	"html/template"
 	"io"
-	"io/fs"
-	"io/ioutil"
 	"math/rand"
 	"os"
 	"path/filepath"
 	"strings"
-	"text/template"
 	"time"
 
-	"github.com/untillpro/goutils/exec"
-	"golang.org/x/crypto/ssh/terminal"
+	"github.com/voedger/voedger/pkg/goutils/exec"
+	coreutils "github.com/voedger/voedger/pkg/utils"
+	"golang.org/x/term"
 )
 
 //go:embed scripts/drafts/*
@@ -70,16 +70,22 @@ func verbose() bool {
 	if dryRun {
 		return true
 	}
-	b, err := rootCmd.Flags().GetBool("verbose")
-	return err == nil && b
+	if rootCmd != nil {
+		b, err := rootCmd.Flags().GetBool("verbose")
+		return err == nil && b
+	}
+	return false
 }
 
 func (se *scriptExecuterType) run(scriptName string, args ...string) error {
 
 	var pExec *exec.PipedExec
 
+	scriptDir := filepath.Dir(scriptName)
+	scriptName = filepath.Base(scriptName)
+
 	// nolint
-	os.Chdir(scriptsTempDir)
+	os.Chdir(filepath.Join(scriptsTempDir, scriptDir))
 
 	args = append([]string{scriptName}, args...)
 	pExec = new(exec.PipedExec).Command("bash", args...)
@@ -135,16 +141,18 @@ func getEnvValue1(key string) string {
 	return value
 }
 
-func scriptExists(scriptFileName string) bool {
-	if scriptsTempDir == "" {
-		return false
+func updateTemplateScripts(c *clusterType) error {
+
+	cluster := newCluster()
+	if err := cluster.updateTemplateFile(filepath.Join("alertmanager", "config.yml")); err != nil {
+		return err
 	}
 
-	if _, err := os.Stat(filepath.Join(scriptsTempDir, scriptFileName)); err == nil {
-		return true
+	if err := cluster.updateTemplateFile(filepath.Join("ce", "alertmanager", "config.yml")); err != nil {
+		return err
 	}
 
-	return false
+	return nil
 }
 
 func prepareScripts(scriptFileNames ...string) error {
@@ -158,85 +166,25 @@ func prepareScripts(scriptFileNames ...string) error {
 	}
 
 	// If scriptfilenames is empty, then we will copy all scripts from scriptsfs
-	if len(scriptFileNames) == 0 {
-		err = extractAllScripts()
-		if err != nil {
-			loggerError(err.Error())
-			return err
-		}
-		return nil
+	err = coreutils.CopyDirFS(scriptsFS, filepath.Join("scripts", "drafts"), scriptsTempDir, coreutils.WithFilterFilesWithRelativePaths(scriptFileNames),
+		coreutils.WithSkipExisting(), coreutils.WithFileMode(coreutils.FileMode_rwxrwxrwx))
+	if err != nil {
+		loggerError(err.Error())
+		return err
 	}
 
-	for _, fileName := range scriptFileNames {
-
-		if scriptExists(fileName) {
-			continue
-		}
-
-		file, err := scriptsFS.Open("./scripts/drafts/" + fileName)
-		if err != nil {
-			return err
-		}
-		defer file.Close()
-
-		destFileName := filepath.Join(scriptsTempDir, fileName)
-
-		dir := filepath.Dir(destFileName)
-
-		// nolint
-		err = os.MkdirAll(dir, rwxrwxrwx) // os.ModePerm)
-		if err != nil {
-			return err
-		}
-
-		newFile, err := os.Create(destFileName)
-		if err != nil {
-			return err
-		}
-
-		defer newFile.Close()
-		if err = os.Chmod(destFileName, rwxrwxrwx); err != nil {
-			return err
-		}
-
-		if _, err = io.Copy(newFile, file); err != nil {
-			return err
-		}
-
+	cluster := newCluster()
+	if err = updateTemplateScripts(cluster); err != nil {
+		return err
 	}
 
 	return nil
 }
 
-// save all the embedded scripts into the temporary folder
-func extractAllScripts() error {
-	return fs.WalkDir(scriptsFS, "scripts/drafts", func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if !d.IsDir() {
-			content, err := fs.ReadFile(scriptsFS, path)
-			if err != nil {
-				return err
-			}
-			destPath := filepath.Join(scriptsTempDir, strings.TrimPrefix(path, "scripts/drafts"))
-			err = os.MkdirAll(filepath.Dir(destPath), rwxrwxrwx)
-			if err != nil {
-				return err
-			}
-			err = ioutil.WriteFile(destPath, content, rwxrwxrwx)
-			if err != nil {
-				return err
-			}
-		}
-		return nil
-	})
-}
-
 // nolint
 func inputPassword(pass *string) error {
 
-	bytePassword, err := terminal.ReadPassword(int(os.Stdin.Fd()))
+	bytePassword, err := term.ReadPassword(int(os.Stdin.Fd()))
 	if err == nil {
 		*pass = string(bytePassword)
 		return nil
@@ -252,73 +200,46 @@ func prepareScriptFromTemplate(scriptFileName string, data interface{}) error {
 		return err
 	}
 
-	tmpl, err := template.ParseFS(scriptsFS, filepath.Join(embedScriptsDir, scriptFileName))
+	embedScriptFileName := strings.ReplaceAll(scriptFileName, "\\", "/")
+	fName := fmt.Sprintf("%s/%s/%s", embedScriptsDir, "drafts", embedScriptFileName)
+
+	content, err := scriptsFS.ReadFile(fName)
+	if err != nil {
+		return err
+	}
+
+	tmpl, err := template.New(scriptFileName).Delims("[[", "]]").Parse(string(content))
 	if err != nil {
 		return err
 	}
 
 	destFilename := filepath.Join(scriptsTempDir, scriptFileName)
+
+	if _, err := os.Stat(destFilename); err == nil {
+		if err := os.Remove(destFilename); err != nil {
+			return err
+		}
+	}
+
 	destFile, err := os.Create(destFilename)
 	if err != nil {
 		return err
 	}
 	defer destFile.Close()
 
-	err = destFile.Chmod(rw_rw_rw_)
+	err = destFile.Chmod(coreutils.FileMode_rw_rw_rw_)
 	if err != nil {
 		return err
 	}
 
-	err = tmpl.Execute(destFile, data)
-	if err != nil {
+	var output bytes.Buffer
+	if err := tmpl.Execute(&output, data); err != nil {
 		return err
 	}
 
-	return nil
-}
-
-// nolint
-func copyFile(src, dest string) error {
-	sourceFile, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer sourceFile.Close()
-
-	destFile, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer destFile.Close()
-
-	_, err = io.Copy(destFile, sourceFile)
-	if err != nil {
-		return err
-	}
-
-	err = destFile.Sync()
-	if err != nil {
-		return err
-	}
-
-	sourceInfo, err := os.Stat(src)
-	if err != nil {
-		return err
-	}
-
-	err = os.Chmod(dest, sourceInfo.Mode())
-	if err != nil {
+	if err = os.WriteFile(destFilename, output.Bytes(), coreutils.FileMode_rw_rw_rw_); err != nil {
 		return err
 	}
 
 	return nil
-}
-
-// nolint
-func fileExists(filename string) bool {
-	_, err := os.Stat(filename)
-	if os.IsNotExist(err) {
-		return false
-	}
-	return true
 }

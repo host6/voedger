@@ -11,10 +11,16 @@ import (
 	"net"
 	"net/http"
 
-	"github.com/untillpro/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/logger"
+	coreutils "github.com/voedger/voedger/pkg/utils"
 
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 )
+
+func (ms *metricsService) Prepare(interface{}) (err error) {
+	ms.listener, err = net.Listen("tcp", coreutils.ServerAddress(ms.port))
+	return err
+}
 
 func (ms *metricsService) Run(_ context.Context) {
 	logger.Info("Starting Metrics Service on", ms.listener.Addr().(*net.TCPAddr).String())

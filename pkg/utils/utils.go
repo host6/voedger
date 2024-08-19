@@ -6,13 +6,13 @@
 package coreutils
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
 	"strings"
+	"syscall"
 	"time"
-
-	"github.com/voedger/voedger/pkg/istructs"
 )
 
 func IsBlank(str string) bool {
@@ -55,10 +55,6 @@ func ServerAddress(port int) string {
 	return fmt.Sprintf("%s:%d", addr, port)
 }
 
-func PartitionID(wsid istructs.WSID, numCommandProcessors CommandProcessorsCount) istructs.PartitionID {
-	return istructs.PartitionID(int(wsid) % int(numCommandProcessors))
-}
-
 func SplitErrors(joinedError error) (errs []error) {
 	if joinedError != nil {
 		var pErr IErrUnwrapper
@@ -68,4 +64,30 @@ func SplitErrors(joinedError error) (errs []error) {
 		return []error{joinedError}
 	}
 	return
+}
+
+func IsWSAEError(err error, errno syscall.Errno) bool {
+	var sysCallErr *os.SyscallError
+	if errors.As(err, &sysCallErr) {
+		var syscallErrno syscall.Errno
+		if errors.As(sysCallErr.Err, &syscallErrno) {
+			return syscallErrno == errno
+		}
+	}
+	return false
+}
+
+func NilAdminPortGetter() int { panic("to be tested") }
+
+func ScanSSE(data []byte, atEOF bool) (advance int, token []byte, err error) {
+	if atEOF && len(data) == 0 {
+		return 0, nil, nil
+	}
+	if i := bytes.Index(data, []byte("\n\n")); i >= 0 {
+		return i + 2, data[0:i], nil
+	}
+	if atEOF {
+		return len(data), data, nil
+	}
+	return 0, nil, nil
 }

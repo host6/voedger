@@ -39,20 +39,24 @@ type IWithInsert interface {
 	IWithApplyBatch
 
 	// ProvideValueBuilder provides value builder. ExistingBuilder can be null
-	ProvideValueBuilder(key istructs.IStateKeyBuilder, existingBuilder istructs.IStateValueBuilder) istructs.IStateValueBuilder
+	ProvideValueBuilder(key istructs.IStateKeyBuilder, existingBuilder istructs.IStateValueBuilder) (istructs.IStateValueBuilder, error)
 }
 
 type IWithUpdate interface {
 	IWithApplyBatch
 
 	// ProvideValueBuilderForUpdate provides value builder to update the value. ExistingBuilder can be null
-	ProvideValueBuilderForUpdate(key istructs.IStateKeyBuilder, existingValue istructs.IStateValue, existingBuilder istructs.IStateValueBuilder) istructs.IStateValueBuilder
+	ProvideValueBuilderForUpdate(key istructs.IStateKeyBuilder, existingValue istructs.IStateValue, existingBuilder istructs.IStateValueBuilder) (istructs.IStateValueBuilder, error)
 }
 
-type IHostState interface {
+type IState interface {
 	istructs.IState
 	istructs.IIntents
 	istructs.IPkgNameResolver
+}
+
+type IHostState interface {
+	IState
 
 	// ValidateIntents validates intents
 	ValidateIntents() (err error)
@@ -65,9 +69,7 @@ type IHostState interface {
 // IBundledHostState buffers changes in "bundles" when ApplyIntents is called.
 // Further Read- and *Exist operations see these changes.
 type IBundledHostState interface {
-	istructs.IState
-	istructs.IIntents
-	istructs.IPkgNameResolver
+	IState
 
 	// ApplyIntents validates and stores intents to bundles
 	ApplyIntents() (readyToFlushBundle bool, err error)
