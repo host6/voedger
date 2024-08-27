@@ -72,6 +72,7 @@ var SysRoles = []appdef.QName{
 	QNameRoleWorkspaceAdmin,
 }
 
+// roleInPrincipals->roleImplicitlyAssummed
 var rolesInheritance = map[appdef.QName]appdef.QName{
 	QNameRoleProfileOwner:    QNameRoleWorkspaceOwner,
 	QNameRoleWorkspaceDevice: QNameRoleWorkspaceOwner,

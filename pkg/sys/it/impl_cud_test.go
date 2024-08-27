@@ -470,3 +470,42 @@ func TestDenyCreateNonRawIDs(t *testing.T) {
 	body := fmt.Sprintf(`{"cuds": [{"fields": {"sys.ID": %d,"sys.QName": "app1pkg.options"}}]}`, istructs.FirstBaseUserWSID)
 	vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect400())
 }
+
+func TestCDocWSKindSelect(t *testing.T) {
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+
+	body := `
+	{
+		"args":{
+			"Schema":"sys.UserProfile"
+		},
+		"elements":[
+			{
+				"fields": ["DisplayName"]
+			}
+		]
+	}`
+	prn := vit.GetPrincipal(istructs.AppQName_test1_app1, "login")
+	vit.PostProfile(prn, "q.sys.Collection", body).Println()
+}
+
+func TestInserWSKind(t *testing.T) {
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+
+	body := `
+			{
+				"cuds": [
+					{
+						"fields": {
+							"sys.ID": 1,
+							"sys.QName": "sys.UserProfile",
+							"DisplayName": "ysdsd"
+						}
+					}
+				]
+			}`
+	prn := vit.GetPrincipal(istructs.AppQName_test1_app1, "login")
+	vit.PostProfile(prn, "c.sys.CUD", body).Println()
+}

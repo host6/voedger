@@ -75,6 +75,7 @@ var defaultACL = ACL{
 				qNameCDocSubscriptionProfile, qNameCDocUnTillOrders, qNameCDocUnTillPBill,
 				qNameTestDeniedCmd, qNameTestDeniedCDoc, qNameCDocLogin, qNameCDocChildWorkspace, qNameTestDeniedQry,
 
+				// deny wsKinds
 				qNameCDocWorkspaceKindUser,
 				qNameCDocWorkspaceKindDevice,
 				qNameCDocWorkspaceKindRestaurant,

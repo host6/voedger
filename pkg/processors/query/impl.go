@@ -336,7 +336,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 		operator("authorize result", func(ctx context.Context, qw *queryWork) (err error) {
 			req := iauthnz.AuthzRequest{
 				OperationKind: iauthnz.OperationKind_SELECT,
-				Resource:      qw.msg.QName(),
+				Resource:      qw.resultType.QName(),
 			}
 			for _, elem := range qw.queryParams.Elements() {
 				for _, resultField := range elem.ResultFields() {
