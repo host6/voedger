@@ -14,6 +14,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/istructs"
 )
@@ -192,7 +193,9 @@ func (aps *apps) WaitForBorrow(ctx context.Context, name appdef.AppQName, id ist
 			return ap, nil
 		}
 		if errors.Is(err, ErrNotAvailableEngines) {
-			time.Sleep(AppPartitionBorrowRetryDelay)
+			// time.Sleep(AppPartitionBorrowRetryDelay)
+			time.Sleep(time.Second)
+			logger.Info("!!!!!!!!!!!!!!!!!!!! async failed to borrow")
 			continue
 		}
 		return nil, err

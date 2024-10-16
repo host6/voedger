@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync/atomic"
 	"time"
 
@@ -420,7 +421,42 @@ func (p *asyncProjector) DoAsync(ctx context.Context, work pipeline.IWorkpiece) 
 		p.aametrics.Set(aaCurrentOffset, p.partitionID, p.name, float64(w.pLogOffset))
 	}
 
-	if !isAcceptable(w.event, p.iProjector.WantErrors(), p.iProjector.Events().Map(), p.iProjector.App(), p.name) {
+	ia := isAcceptable(w.event, p.iProjector.WantErrors(), p.iProjector.Events().Map(), p.iProjector.App(), p.name)
+	if w.event.QName() == appdef.NewQName(appdef.SysPackage, "CreateWorkspace") {
+		log.Println()
+	}
+
+	if w.event.QName() == appdef.NewQName(appdef.SysPackage, "CreateWorkspace") && p.name == appdef.NewQName(appdef.SysPackage, "InitializeWorkspace") &&
+		w.event.ArgumentObject().AsString("WSName") == "FiscalContainer3" {
+		log.Println()
+	}
+
+	if w.event.QName() == appdef.NewQName(appdef.SysPackage, "CreateWorkspace") && p.name == appdef.NewQName(appdef.SysPackage, "InitializeWorkspace") &&
+		w.event.ArgumentObject().AsString("WSName") == "FiscalContainer4" {
+		log.Println()
+	}
+
+	if w.event.QName() == appdef.NewQName(appdef.SysPackage, "CreateWorkspace") && p.name == appdef.NewQName(appdef.SysPackage, "InitializeWorkspace") &&
+		w.event.ArgumentObject().AsString("WSName") == "FiscalContainer5" {
+		log.Println()
+	}
+
+	if w.event.QName() == appdef.NewQName(appdef.SysPackage, "CreateWorkspace") && p.name == appdef.NewQName(appdef.SysPackage, "InitializeWorkspace") &&
+		w.event.ArgumentObject().AsString("WSName") == "FiscalContainer6" {
+		log.Println()
+	}
+
+	if w.event.QName() == appdef.NewQName(appdef.SysPackage, "CreateWorkspace") && p.name == appdef.NewQName(appdef.SysPackage, "InitializeWorkspace") &&
+		w.event.ArgumentObject().AsString("WSName") == "FiscalContainer7" {
+		log.Println()
+	}
+
+	if w.event.QName() == appdef.NewQName(appdef.SysPackage, "CreateWorkspace") && p.name == appdef.NewQName(appdef.SysPackage, "InitializeWorkspace") &&
+		w.event.ArgumentObject().AsString("WSName") == "FiscalContainer8" {
+		log.Println()
+	}
+
+	if !ia {
 		return nil, nil
 	}
 
@@ -428,8 +464,14 @@ func (p *asyncProjector) DoAsync(ctx context.Context, work pipeline.IWorkpiece) 
 		return fmt.Errorf("wsid[%d] offset[%d]: %w", w.event.Workspace(), w.event.WLogOffset(), err)
 	}
 
+	if w.event.QName() == appdef.NewQName(appdef.SysPackage, "CreateWorkspace") && p.name == appdef.NewQName(appdef.SysPackage, "InitializeWorkspace") {
+		log.Println(">>>>>>>>>>>> borrow")
+	}
 	if err := p.borrowAppPart(ctx); err != nil {
 		return nil, wrapErr(err)
+	}
+	if w.event.QName() == appdef.NewQName(appdef.SysPackage, "CreateWorkspace") && p.name == appdef.NewQName(appdef.SysPackage, "InitializeWorkspace") {
+		log.Println(">>>>>>>>>>>> borrow success")
 	}
 
 	defer p.releaseAppPart()

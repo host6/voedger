@@ -88,6 +88,7 @@ func (c *cmdWorkpiece) GetAppStructs() istructs.IAppStructs {
 func (c *cmdWorkpiece) borrow() (err error) {
 	if c.appPart, err = c.appParts.Borrow(c.cmdMes.AppQName(), c.cmdMes.PartitionID(), appparts.ProcessorKind_Command); err != nil {
 		if errors.Is(err, appparts.ErrNotFound) || errors.Is(err, appparts.ErrNotAvailableEngines) { // partition is not deployed yet -> ErrNotFound
+			logger.Info("!!!!!!!!!!!!!!!!! cmd no appparts")
 			return coreutils.NewHTTPError(http.StatusServiceUnavailable, err)
 		}
 		// notest

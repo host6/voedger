@@ -10,10 +10,12 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"log"
 	"net/http"
 	"path/filepath"
 	"strconv"
 	"strings"
+	tm "time"
 
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/coreutils/utils"
@@ -226,6 +228,7 @@ func invokeCreateWorkspaceProjector(federation federation.IFederation, tokensAPI
 					return err
 				}
 			}
+			logger.Info("aproj.sys.InvokeCreateWorkspace: done request to " + createWSCmdURL)
 		}
 		return nil
 	}
@@ -261,6 +264,15 @@ func execCmdCreateWorkspace(time coreutils.ITime) istructsmem.ExecCommandClosure
 			}
 			return nil
 		}()
+
+		wsName := args.ArgumentObject.AsString(authnz.Field_WSName)
+		logger.Info("!!!!!!!!!!!!!!!!!!!! c.sys.createworkspace wsName", wsName)
+		if wsName == "FiscalContainer8" {
+			tm.Sleep(tm.Hour)
+		}
+		if wsName == "FiscalContainer7" {
+			log.Println()
+		}
 
 		// create CDoc<sys.WorkspaceDescriptor> (singleton)
 		kb, err := args.State.KeyBuilder(sys.Storage_Record, authnz.QNameCDocWorkspaceDescriptor)
