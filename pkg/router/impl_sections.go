@@ -60,7 +60,48 @@ func createRequest(reqMethod string, req *http.Request, rw http.ResponseWriter, 
 	return res, err == nil
 }
 
-func writeSectionedResponse(requestCtx context.Context, w http.ResponseWriter, sections <-chan ibus.ISection, secErr *error, onSendFailed func()) {
+func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, elements <-chan any, secErr *error, onSendFailed func()) {
+	sendFailed := false
+	defer func() {
+		if requestCtx.Err() != nil {
+			if onRequestCtxClosed != nil {
+				onRequestCtxClosed()
+			}
+			log.Println("client disconnected during sections sending")
+			return
+		}
+		if sendFailed {
+			onSendFailed()
+			for range elements {
+			}
+		}
+	}()
+	elemNum := 0
+	for elem := range elements {
+		// http client disconnected -> ErrNoConsumer on IMultiResponseSender.SendElement() -> QP will call Close()
+		if requestCtx.Err() != nil {
+			// possible: ctx is done but on select {sections<-section, <-ctx.Done()} write to sections channel is triggered.
+			// ctx.Done() must have the priority
+			return
+		}
+		if elemNum == 0 {
+			sendFailed = startSectionedResponse(w)
+			writeSectionHeader(w, )
+		} else {
+			sendFailed = writeResponse(w, ",")
+		}
+
+		if sendFailed {
+			return
+		}
+
+
+
+
+	}
+}
+
+func writeSectionedResponse(requestCtx context.Context, w http.ResponseWriter, elements <-chan ibus.ISection, secErr *error, onSendFailed func()) {
 	ok := true
 	var iSection ibus.ISection
 	defer func() {

@@ -699,7 +699,7 @@ func provideRouterAppStoragePtr(astp istorage.IAppStorageProvider) dbcertcache.R
 // port 80 -> [0] is http server, port 443 -> [0] is https server, [1] is acme server
 func provideRouterServices(rp router.RouterParams, busTimeout BusTimeout, broker in10n.IN10nBroker, quotas in10n.Quotas,
 	bsc router.BlobberServiceChannels, wLimiterFactory func() iblobstorage.WLimiterType, blobStorage BlobStorage,
-	autocertCache autocert.Cache, bus ibus.IBus, vvmPortSource *VVMPortSource, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) RouterServices {
+	autocertCache autocert.Cache, requestSender coreutils.IRequestSender, vvmPortSource *VVMPortSource, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) RouterServices {
 	bp := &router.BlobberParams{
 		ServiceChannels:        bsc,
 		BLOBStorage:            blobStorage,
@@ -707,7 +707,7 @@ func provideRouterServices(rp router.RouterParams, busTimeout BusTimeout, broker
 		RetryAfterSecondsOn503: DefaultRetryAfterSecondsOn503,
 		WLimiterFactory:        wLimiterFactory,
 	}
-	httpSrv, acmeSrv, adminSrv := router.Provide(rp, time.Duration(busTimeout), broker, bp, autocertCache, bus, numsAppsWorkspaces)
+	httpSrv, acmeSrv, adminSrv := router.Provide(rp, time.Duration(busTimeout), broker, bp, autocertCache, requestSender, numsAppsWorkspaces)
 	vvmPortSource.getter = func() VVMPortType {
 		return VVMPortType(httpSrv.GetPort())
 	}

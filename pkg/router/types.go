@@ -16,9 +16,8 @@ import (
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/acme/autocert"
 
-	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
-
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/iblobstorage"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/iprocbus"
@@ -48,7 +47,7 @@ type httpService struct {
 	listener           net.Listener
 	n10n               in10n.IN10nBroker
 	blobWG             sync.WaitGroup
-	bus                ibus.IBus
+	requestSender      coreutils.IRequestSender
 	busTimeout         time.Duration
 	numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces
 	name               string
