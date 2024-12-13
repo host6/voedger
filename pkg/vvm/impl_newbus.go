@@ -26,12 +26,12 @@ type IQryReplier interface {
 
 type ISingleResponder interface {
 	// ErrNoConsumer
-	Reply() error
+	Reply(ibus.Response) error
 }
 
 type IMultiResponder interface {
 	// ErrNoConsumer
-	SendElement() error
+	SendElement(any) error
 }
 
 type IMultiResponderCloseable interface {
@@ -73,7 +73,7 @@ func (r *implIReplier) Reply(resp ibus.Response) error {
 	}
 }
 
-func (r *implIReplier) SendElement(elem interface{}) error {
+func (r *implIReplier) SendElement(elem any) error {
 	if r.singleResponseSent {
 		panic("can not send a multi responce element after a single response is sent")
 	}
@@ -90,6 +90,11 @@ func (r *implIReplier) SendElement(elem interface{}) error {
 	case <-sendTimeoutTimerChan:
 		return ibus.ErrNoConsumer
 	}
+}
+
+func (r *implIReplier) Close(err error) {
+	*r.elemsErr = err
+	close(r.elems)
 }
 
 type IRequestSender interface {
@@ -128,4 +133,6 @@ func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Re
 		}
 	}()
 	rs.requestHandler(clientCtx, req, replier)
+	wg.Wait()
+	return resp, elements, elemsErr, err
 }
