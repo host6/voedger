@@ -8,7 +8,6 @@ package router
 import (
 	"log"
 	"net/http"
-	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
@@ -20,9 +19,9 @@ import (
 )
 
 // port == 443 -> httpsService + ACMEService, otherwise -> HTTPService only, ACMEService is nil
-func Provide(rp RouterParams, aBusTimeout time.Duration, broker in10n.IN10nBroker, bp *BlobberParams, autocertCache autocert.Cache,
+func Provide(rp RouterParams, broker in10n.IN10nBroker, bp *BlobberParams, autocertCache autocert.Cache,
 	requestSender coreutils.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) (httpSrv IHTTPService, acmeSrv IACMEService, adminSrv IAdminService) {
-	httpServ := getHttpService("HTTP server", coreutils.ServerAddress(rp.Port), rp, aBusTimeout, broker, bp, requestSender, numsAppsWorkspaces)
+	httpServ := getHttpService("HTTP server", coreutils.ServerAddress(rp.Port), rp, broker, bp, requestSender, numsAppsWorkspaces)
 
 	if coreutils.IsTest() {
 		adminEndpoint = "127.0.0.1:0"
@@ -31,7 +30,7 @@ func Provide(rp RouterParams, aBusTimeout time.Duration, broker in10n.IN10nBroke
 		WriteTimeout:     rp.WriteTimeout,
 		ReadTimeout:      rp.ReadTimeout,
 		ConnectionsLimit: rp.ConnectionsLimit,
-	}, aBusTimeout, broker, nil, requestSender, numsAppsWorkspaces)
+	}, broker, nil, requestSender, numsAppsWorkspaces)
 
 	if rp.Port != HTTPSPort {
 		return httpServ, nil, adminSrv
@@ -73,14 +72,13 @@ func Provide(rp RouterParams, aBusTimeout time.Duration, broker in10n.IN10nBroke
 	return httpsService, acmeService, adminSrv
 }
 
-func getHttpService(name string, listenAddress string, rp RouterParams, aBusTimeout time.Duration, broker in10n.IN10nBroker, bp *BlobberParams,
+func getHttpService(name string, listenAddress string, rp RouterParams, broker in10n.IN10nBroker, bp *BlobberParams,
 	requestSender coreutils.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) *httpService {
 	httpServ := &httpService{
 		RouterParams:       rp,
 		n10n:               broker,
 		BlobberParams:      bp,
 		requestSender:      requestSender,
-		busTimeout:         aBusTimeout,
 		numsAppsWorkspaces: numsAppsWorkspaces,
 		listenAddress:      listenAddress,
 		name:               name,

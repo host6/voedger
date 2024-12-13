@@ -11,7 +11,6 @@ import (
 	"net/url"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/gorilla/mux"
 	"golang.org/x/crypto/acme/autocert"
@@ -48,7 +47,6 @@ type httpService struct {
 	n10n               in10n.IN10nBroker
 	blobWG             sync.WaitGroup
 	requestSender      coreutils.IRequestSender
-	busTimeout         time.Duration
 	numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces
 	name               string
 	listeningPort      atomic.Uint32

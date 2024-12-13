@@ -7,7 +7,6 @@ package vvm
 import (
 	"context"
 	"net/url"
-	"time"
 
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 
@@ -73,7 +72,6 @@ type BuiltInAppsArtefacts struct {
 	builtInAppPackages []BuiltInAppPackages
 }
 
-type BusTimeout time.Duration
 type FederationURL func() *url.URL
 type VVMIdxType int
 type VVMPortType int
@@ -135,7 +133,7 @@ type VVMConfig struct {
 	Routes                     map[string]string
 	RoutesRewrite              map[string]string
 	RouteDomains               map[string]string
-	BusTimeout                 BusTimeout
+	SendTimeout                coreutils.SendTimeout
 	StorageFactory             func() (provider istorage.IAppStorageFactory, err error)
 	BlobberServiceChannels     router.BlobberServiceChannels
 	BLOBMaxSize                iblobstorage.BLOBMaxSizeType

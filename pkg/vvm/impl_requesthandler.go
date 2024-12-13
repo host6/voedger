@@ -21,17 +21,12 @@ import (
 	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
 	queryprocessor "github.com/voedger/voedger/pkg/processors/query"
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
-	"github.com/voedger/voedger/staging/src/github.com/untillpro/ibusmem"
 )
 
-func provideIBus(appParts appparts.IAppPartitions, procbus iprocbus.IProcBus,
+func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IProcBus,
 	cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx QueryProcessorsChannelGroupIdxType,
-	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps) ibus.IBus {
-	return ibusmem.Provide(func(requestCtx context.Context, replier coreutils.IReplier, request ibus.Request) {
-		// Handling Command/Query messages
-		// router -> SendRequest2(ctx, ...) -> requestHandler(ctx, ... ) - it is that context. If connection gracefully closed the that ctx is Done()
-		// so we need to forward that context
-
+	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps) coreutils.RequestHandler {
+	return func(requestCtx context.Context, request ibus.Request, replier coreutils.IReplier) {
 		if len(request.Resource) <= ShortestPossibleFunctionNameLen {
 			coreutils.ReplyBadRequest(replier, "wrong function name: "+request.Resource)
 			return
@@ -75,8 +70,62 @@ func provideIBus(appParts appparts.IAppPartitions, procbus iprocbus.IProcBus,
 		}
 
 		deliverToProcessors(request, requestCtx, appQName, replier, funcQName, procbus, token, cpchIdx, qpcgIdx, cpAmount, partitionID)
-	})
+	}
 }
+
+// func provideIBus(appParts appparts.IAppPartitions, procbus iprocbus.IProcBus,
+// 	cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx QueryProcessorsChannelGroupIdxType,
+// 	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps) ibus.IBus {
+// 	return ibusmem.Provide(func(requestCtx context.Context, replier coreutils.IReplier, request ibus.Request) {
+// 		// Handling Command/Query messages
+// 		// router -> SendRequest2(ctx, ...) -> requestHandler(ctx, ... ) - it is that context. If connection gracefully closed the that ctx is Done()
+// 		// so we need to forward that context
+
+// 		if len(request.Resource) <= ShortestPossibleFunctionNameLen {
+// 			coreutils.ReplyBadRequest(replier, "wrong function name: "+request.Resource)
+// 			return
+// 		}
+// 		funcQName, err := appdef.ParseQName(request.Resource[2:])
+// 		if err != nil {
+// 			coreutils.ReplyBadRequest(replier, "wrong function name: "+request.Resource)
+// 			return
+// 		}
+// 		if logger.IsVerbose() {
+// 			// FIXME: eliminate this. Unlogged params are logged
+// 			logger.Verbose("request body:\n", string(request.Body))
+// 		}
+
+// 		appQName, err := appdef.ParseAppQName(request.AppQName)
+// 		if err != nil {
+// 			// protected by router already
+// 			coreutils.ReplyBadRequest(replier, fmt.Sprintf("failed to parse app qualified name %s: %s", request.AppQName, err.Error()))
+// 			return
+// 		}
+// 		if !vvmApps.Exists(appQName) {
+// 			coreutils.ReplyBadRequest(replier, "unknown app "+request.AppQName)
+// 			return
+// 		}
+
+// 		token, err := getPrincipalToken(request)
+// 		if err != nil {
+// 			coreutils.ReplyAccessDeniedUnauthorized(replier, err.Error())
+// 			return
+// 		}
+
+// 		partitionID, err := appParts.AppWorkspacePartitionID(appQName, request.WSID)
+// 		if err != nil {
+// 			if errors.Is(err, appparts.ErrNotFound) {
+// 				coreutils.ReplyErrf(replier, http.StatusServiceUnavailable, fmt.Sprintf("app %s is not deployed", appQName))
+// 				return
+// 			}
+// 			// notest
+// 			coreutils.ReplyInternalServerError(replier, "failed to compute the partition number", err)
+// 			return
+// 		}
+
+// 		deliverToProcessors(request, requestCtx, appQName, replier, funcQName, procbus, token, cpchIdx, qpcgIdx, cpAmount, partitionID)
+// 	})
+// }
 
 func deliverToProcessors(request ibus.Request, requestCtx context.Context, appQName appdef.AppQName, replier coreutils.IReplier, funcQName appdef.QName,
 	procbus iprocbus.IProcBus, token string, cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx QueryProcessorsChannelGroupIdxType,

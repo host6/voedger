@@ -7,6 +7,7 @@ package coreutils
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -44,25 +45,27 @@ type IReplier interface {
 }
 
 type implIReplier struct {
-	singleResponseSent   bool
-	multiResponseStarted bool
-	elems                chan interface{}
-	tm                   ITime
-	sendTimeout          time.Duration
-	clientCtx            context.Context
-	elemsErr             *error
+	singleResponseSent    bool
+	marshaledElems        chan string
+	singleResponse        chan ibus.Response
+	multiResponseStarted  chan struct{}
+	bMultiResponseStarted bool
+	tm                    ITime
+	sendTimeout           SendTimeout
+	clientCtx             context.Context
+	elemsErr              *error
 }
 
 func (r *implIReplier) Reply(resp ibus.Response) error {
-	if r.multiResponseStarted {
-		panic("cannot send a single response if multiresponse was started already")
+	if r.bMultiResponseStarted {
+		panic("cannot send a single response if multi response was started already")
 	}
-	if r.multiResponseStarted {
+	if r.singleResponseSent {
 		panic("can not send a single response more than once")
 	}
-	sendTimeoutTimerChan := r.tm.NewTimerChan(r.sendTimeout)
+	sendTimeoutTimerChan := r.tm.NewTimerChan(time.Duration(r.sendTimeout))
 	select {
-	case r.elems <- resp:
+	case r.singleResponse <- resp:
 		r.singleResponseSent = true
 		return r.clientCtx.Err() // clientCtx.Done() has priority on simultaneous (s.ctx.Done() and r.elems<- success)
 	case <-r.clientCtx.Done():
@@ -79,10 +82,15 @@ func (r *implIReplier) SendElement(elem any) error {
 	if _, ok := elem.(ibus.Response); ok {
 		panic("instance of ibus.Response can not be sent as an element of multi response")
 	}
-	sendTimeoutTimerChan := r.tm.NewTimerChan(r.sendTimeout)
+	marshaledElem, err := json.Marshal(&elem)
+	if err != nil {
+		return err
+	}
+	sendTimeoutTimerChan := r.tm.NewTimerChan(time.Duration(r.sendTimeout))
 	select {
-	case r.elems <- elem:
-		r.multiResponseStarted = true
+	case r.marshaledElems <- string(marshaledElem):
+		r.bMultiResponseStarted = true
+		close(r.multiResponseStarted)
 		return r.clientCtx.Err() // clientCtx.Done() has priority on simultaneous (s.ctx.Done() and r.elems<- success)
 	case <-r.clientCtx.Done():
 		return r.clientCtx.Err()
@@ -93,17 +101,19 @@ func (r *implIReplier) SendElement(elem any) error {
 
 func (r *implIReplier) Close(err error) {
 	*r.elemsErr = err
-	close(r.elems)
+	close(r.marshaledElems)
 }
 
 type IRequestSender interface {
 	// called by router
-	SendRequest(reqCtx context.Context, req ibus.Request) (resp ibus.Response, elements <-chan interface{}, errElems *error, err error)
+	SendRequest(reqCtx context.Context, req ibus.Request) (resp ibus.Response, marshaledElems <-chan string, errElems *error, err error)
 }
 
 type RequestHandler func(requestCtx context.Context, request ibus.Request, replier IReplier)
 
-func NewIRequestSender(requestHandler RequestHandler, tm ITime, timeout time.Duration) IRequestSender {
+type SendTimeout time.Duration
+
+func NewIRequestSender(requestHandler RequestHandler, tm ITime, timeout SendTimeout) IRequestSender {
 	return &implIRequestSender{
 		timeout:        timeout,
 		tm:             tm,
@@ -113,20 +123,22 @@ func NewIRequestSender(requestHandler RequestHandler, tm ITime, timeout time.Dur
 }
 
 type implIRequestSender struct {
-	timeout        time.Duration
+	timeout        SendTimeout
 	tm             ITime
 	elems          chan any
 	requestHandler func(requestCtx context.Context, request ibus.Request, replier IReplier)
 }
 
-func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Request) (resp ibus.Response, elements <-chan interface{}, elemsErr *error, err error) {
-	timeoutChan := rs.tm.NewTimerChan(rs.timeout)
+func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Request) (resp ibus.Response, marshaledElems <-chan string, elemsErr *error, err error) {
+	timeoutChan := rs.tm.NewTimerChan(time.Duration(rs.timeout))
 	replier := &implIReplier{
-		elems:       make(chan interface{}),
-		tm:          rs.tm,
-		sendTimeout: rs.timeout,
-		clientCtx:   clientCtx,
-		elemsErr:    elemsErr,
+		marshaledElems:       make(chan string),
+		singleResponse:       make(chan ibus.Response),
+		tm:                   rs.tm,
+		sendTimeout:          rs.timeout,
+		clientCtx:            clientCtx,
+		elemsErr:             elemsErr,
+		multiResponseStarted: make(chan struct{}),
 	}
 	handlerPanicChan := make(chan interface{}, 1)
 	wg := sync.WaitGroup{}
@@ -134,18 +146,11 @@ func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Re
 	go func() {
 		defer wg.Done()
 		select {
-		case elemIntf, elemsOpened := <-replier.elems:
-			isSingleResponse := false
-			if resp, isSingleResponse = elemIntf.(ibus.Response); !isSingleResponse {
-				elements = replier.elems
-				elemsErr = replier.elemsErr
-			}
-			elemsClosed := !elemsOpened
-			if elemsClosed {
-				// happened if multi response is expected but an error happened before sending the first element
-				elements = replier.elems
-				elemsErr = replier.elemsErr
-			}
+		case resp = <-replier.singleResponse:
+			err = clientCtx.Err() // to make clientCtx.Done() take priority
+		case <-replier.multiResponseStarted:
+			marshaledElems = replier.marshaledElems
+			elemsErr = replier.elemsErr
 			err = clientCtx.Err() // to make clientCtx.Done() take priority
 		case <-clientCtx.Done():
 			// wrong to close(replier.elems) because possible that elems is being writting at the same time -> data race
@@ -157,5 +162,5 @@ func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Re
 	}()
 	rs.requestHandler(clientCtx, req, replier)
 	wg.Wait()
-	return resp, elements, elemsErr, err
+	return resp, marshaledElems, elemsErr, err
 }

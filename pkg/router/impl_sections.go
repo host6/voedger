@@ -60,8 +60,8 @@ func createRequest(reqMethod string, req *http.Request, rw http.ResponseWriter, 
 	return res, err == nil
 }
 
-func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, elements <-chan any, secErr *error, onSendFailed func()) {
-	sendFailed := false
+func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, marshaledElems <-chan string, secErr *error, onSendFailed func()) {
+	sendSuccess := false
 	defer func() {
 		if requestCtx.Err() != nil {
 			if onRequestCtxClosed != nil {
@@ -70,123 +70,146 @@ func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, 
 			log.Println("client disconnected during sections sending")
 			return
 		}
-		if sendFailed {
+		if !sendSuccess {
 			onSendFailed()
-			for range elements {
+			for range marshaledElems {
 			}
 		}
 	}()
-	elemNum := 0
-	for elem := range elements {
+	elemsCount := 0
+	if sendSuccess = writeResponse(w, "{"); !sendSuccess {
+		return
+	}
+	for marshaledElem := range marshaledElems {
 		// http client disconnected -> ErrNoConsumer on IMultiResponseSender.SendElement() -> QP will call Close()
 		if requestCtx.Err() != nil {
 			// possible: ctx is done but on select {sections<-section, <-ctx.Done()} write to sections channel is triggered.
 			// ctx.Done() must have the priority
 			return
 		}
-		if elemNum == 0 {
-			sendFailed = startSectionedResponse(w)
-			writeSectionHeader(w, )
+		if elemsCount == 0 {
+			sendSuccess = startSectionedResponse(w) &&
+				writeResponse(w, `"sections":[{"type":"","elements":[`)
 		} else {
-			sendFailed = writeResponse(w, ",")
+			sendSuccess = writeResponse(w, ",")
 		}
 
-		if sendFailed {
+		if !sendSuccess {
 			return
 		}
 
-
-
-
-	}
-}
-
-func writeSectionedResponse(requestCtx context.Context, w http.ResponseWriter, elements <-chan ibus.ISection, secErr *error, onSendFailed func()) {
-	ok := true
-	var iSection ibus.ISection
-	defer func() {
-		if !ok {
-			onSendFailed()
-			// consume all pending sections or elems to avoid hanging on ibusnats side
-			// normally should one pending elem or section because ibusnats implementation
-			// will terminate on next elem or section because `onSendFailed()` actually closes the context
-			discardSection(iSection, requestCtx)
-			for iSection := range sections {
-				discardSection(iSection, requestCtx)
-			}
+		if sendSuccess = writeResponse(w, marshaledElem); !sendSuccess {
+			return
 		}
-	}()
-
-	sectionsOpened := false
-	sectionedResponseStarted := false
-
-	closer := ""
-	readSections := func() bool {
-		for iSection = range sections {
-			// possible: ctx is done but on select {sections<-section, <-ctx.Done()} write to sections channel is triggered.
-			// ctx.Done() must have the priority
-			if requestCtx.Err() != nil {
-				ok = false
-				break
-			}
-			if !sectionedResponseStarted {
-				if ok = startSectionedResponse(w); !ok {
-					return false
-				}
-				sectionedResponseStarted = true
-			}
-
-			if !sectionsOpened {
-				if ok = writeResponse(w, `"sections":[`); !ok {
-					return false
-				}
-				closer = "]"
-				sectionsOpened = true
-			} else {
-				if ok = writeResponse(w, ","); !ok {
-					return false
-				}
-			}
-			if ok = writeSection(w, iSection, requestCtx); !ok {
-				return false
-			}
+		elemsCount++
+	}
+	if elemsCount > 0 {
+		if sendSuccess = writeResponse(w, "]}]}"); !sendSuccess {
+			return
 		}
-		return true
 	}
-	mustReturn := readSections()
-	if requestCtx.Err() != nil {
-		if onRequestCtxClosed != nil {
-			onRequestCtxClosed()
-		}
-		log.Println("client disconnected during sections sending")
-		return
-	}
-	if !mustReturn {
-		return
-	}
-
 	if *secErr != nil {
-		if !sectionedResponseStarted {
-			if !startSectionedResponse(w) {
-				return
-			}
-		}
-		if sectionsOpened {
-			closer = "],"
-		}
 		var jsonableErr interface{ ToJSON() string }
 		if errors.As(*secErr, &jsonableErr) {
 			jsonErr := jsonableErr.ToJSON()
 			jsonErr = strings.TrimPrefix(jsonErr, "{")
 			jsonErr = strings.TrimSuffix(jsonErr, "}")
-			writeResponse(w, fmt.Sprintf(`%s%s}`, closer, jsonErr))
+			sendSuccess = writeResponse(w, jsonErr)
 		} else {
-			writeResponse(w, fmt.Sprintf(`%s"status":%d,"errorDescription":"%s"}`, closer, http.StatusInternalServerError, *secErr))
+			sendSuccess = writeResponse(w, fmt.Sprintf(`"status":%d,"errorDescription":"%s"}`, http.StatusInternalServerError, *secErr))
 		}
-	} else if sectionedResponseStarted {
-		writeResponse(w, closer+"}")
+	}
+	if sendSuccess {
+		sendSuccess = writeResponse(w, "}")
 	}
 }
+
+// func writeSectionedResponse(requestCtx context.Context, w http.ResponseWriter, marshaledElems <-chan string, secErr *error, onSendFailed func()) {
+// 	ok := true
+// 	var iSection ibus.ISection
+// 	defer func() {
+// 		if !ok {
+// 			onSendFailed()
+// 			// consume all pending sections or elems to avoid hanging on ibusnats side
+// 			// normally should one pending elem or section because ibusnats implementation
+// 			// will terminate on next elem or section because `onSendFailed()` actually closes the context
+// 			discardSection(iSection, requestCtx)
+// 			for iSection := range sections {
+// 				discardSection(iSection, requestCtx)
+// 			}
+// 		}
+// 	}()
+
+// 	sectionsOpened := false
+// 	sectionedResponseStarted := false
+
+// 	closer := ""
+// 	readSections := func() bool {
+// 		for iSection = range sections {
+// 			// possible: ctx is done but on select {sections<-section, <-ctx.Done()} write to sections channel is triggered.
+// 			// ctx.Done() must have the priority
+// 			if requestCtx.Err() != nil {
+// 				ok = false
+// 				break
+// 			}
+// 			if !sectionedResponseStarted {
+// 				if ok = startSectionedResponse(w); !ok {
+// 					return false
+// 				}
+// 				sectionedResponseStarted = true
+// 			}
+
+// 			if !sectionsOpened {
+// 				if ok = writeResponse(w, `"sections":[`); !ok {
+// 					return false
+// 				}
+// 				closer = "]"
+// 				sectionsOpened = true
+// 			} else {
+// 				if ok = writeResponse(w, ","); !ok {
+// 					return false
+// 				}
+// 			}
+// 			if ok = writeSection(w, iSection, requestCtx); !ok {
+// 				return false
+// 			}
+// 		}
+// 		return true
+// 	}
+// 	mustReturn := readSections()
+// 	if requestCtx.Err() != nil {
+// 		if onRequestCtxClosed != nil {
+// 			onRequestCtxClosed()
+// 		}
+// 		log.Println("client disconnected during sections sending")
+// 		return
+// 	}
+// 	if !mustReturn {
+// 		return
+// 	}
+
+// 	if *secErr != nil {
+// 		if !sectionedResponseStarted {
+// 			if !startSectionedResponse(w) {
+// 				return
+// 			}
+// 		}
+// 		if sectionsOpened {
+// 			closer = "],"
+// 		}
+// 		var jsonableErr interface{ ToJSON() string }
+// 		if errors.As(*secErr, &jsonableErr) {
+// 			jsonErr := jsonableErr.ToJSON()
+// 			jsonErr = strings.TrimPrefix(jsonErr, "{")
+// 			jsonErr = strings.TrimSuffix(jsonErr, "}")
+// 			writeResponse(w, fmt.Sprintf(`%s%s}`, closer, jsonErr))
+// 		} else {
+// 			writeResponse(w, fmt.Sprintf(`%s"status":%d,"errorDescription":"%s"}`, closer, http.StatusInternalServerError, *secErr))
+// 		}
+// 	} else if sectionedResponseStarted {
+// 		writeResponse(w, closer+"}")
+// 	}
+// }
 
 func discardSection(iSection ibus.ISection, requestCtx context.Context) {
 	switch t := iSection.(type) {

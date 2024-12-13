@@ -90,7 +90,7 @@ func (s *httpService) preRun(ctx context.Context) {
 			s.blobWG.Add(1)
 			go func() {
 				defer s.blobWG.Done()
-				blobMessageHandler(ctx, s.procBus.ServiceChannel(0, 0), s.BLOBStorage, s.requestSender, s.busTimeout)
+				blobMessageHandler(ctx, s.procBus.ServiceChannel(0, 0), s.BLOBStorage, s.requestSender)
 			}()
 		}
 	}
@@ -182,7 +182,7 @@ func (s *httpService) registerHandlersV1() {
 			Name("blob read")
 	}
 	s.router.HandleFunc(fmt.Sprintf("/api/{%s}/{%s}/{%s:[0-9]+}/{%s:[a-zA-Z0-9_/.]+}", URLPlaceholder_appOwner, URLPlaceholder_appName,
-		URLPlaceholder_wsid, URLPlaceholder_resourceName), corsHandler(RequestHandler(s.requestSender, s.busTimeout, s.numsAppsWorkspaces))).
+		URLPlaceholder_wsid, URLPlaceholder_resourceName), corsHandler(RequestHandler(s.requestSender, s.numsAppsWorkspaces))).
 		Methods("POST", "PATCH", "OPTIONS").Name("api")
 
 	s.router.Handle("/n10n/channel", corsHandler(s.subscribeAndWatchHandler())).Methods("GET")
@@ -191,7 +191,7 @@ func (s *httpService) registerHandlersV1() {
 	s.router.Handle("/n10n/update/{offset:[0-9]{1,10}}", corsHandler(s.updateHandler()))
 }
 
-func RequestHandler(requestSender coreutils.IRequestSender, busTimeout time.Duration, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) http.HandlerFunc {
+func RequestHandler(requestSender coreutils.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) http.HandlerFunc {
 	return func(resp http.ResponseWriter, req *http.Request) {
 		vars := mux.Vars(req)
 		request, ok := createRequest(req.Method, req, resp, numsAppsWorkspaces)
@@ -225,7 +225,7 @@ func RequestHandler(requestSender coreutils.IRequestSender, busTimeout time.Dura
 			writeResponse(resp, string(res.Data))
 			return
 		}
-		writeSectionedResponse(requestCtx, resp, elements, secErr, cancel)
+		writeSectionedResponse_(requestCtx, resp, elements, secErr, cancel)
 	}
 }
 
