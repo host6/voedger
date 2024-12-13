@@ -103,7 +103,7 @@ type IBus interface {
 	SendParallelResponse2(sender interface{}) (rsender IResultSenderClosable)
 }
 
-type ISender interface {
-	SendResponse(resp Response)
-	SendParallelResponse() IResultSenderClosable
-}
+// type ISender interface {
+// 	SendResponse(resp Response)
+// 	SendParallelResponse() IResultSenderClosable
+// }

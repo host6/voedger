@@ -37,54 +37,54 @@ func NewHTTPError(httpStatus int, err error) SysError {
 	return NewHTTPErrorf(httpStatus, err.Error())
 }
 
-func ReplyErrf(sender ibus.ISender, status int, args ...interface{}) {
-	ReplyErrDef(sender, NewHTTPErrorf(status, args...), http.StatusInternalServerError)
+func ReplyErrf(responder ISingleResponder, status int, args ...interface{}) {
+	ReplyErrDef(responder, NewHTTPErrorf(status, args...), http.StatusInternalServerError)
 }
 
 //nolint:errorlint
-func ReplyErrDef(sender ibus.ISender, err error, defaultStatusCode int) {
+func ReplyErrDef(responder ISingleResponder, err error, defaultStatusCode int) {
 	res := WrapSysError(err, defaultStatusCode).(SysError)
-	ReplyJSON(sender, res.HTTPStatus, res.ToJSON())
+	ReplyJSON(responder, res.HTTPStatus, res.ToJSON())
 }
 
-func ReplyErr(sender ibus.ISender, err error) {
-	ReplyErrDef(sender, err, http.StatusInternalServerError)
+func ReplyErr(responder ISingleResponder, err error) {
+	ReplyErrDef(responder, err, http.StatusInternalServerError)
 }
 
-func ReplyJSON(sender ibus.ISender, httpCode int, body string) {
-	sender.SendResponse(ibus.Response{
+func ReplyJSON(responder ISingleResponder, httpCode int, body string) {
+	responder.Reply(ibus.Response{
 		ContentType: ApplicationJSON,
 		StatusCode:  httpCode,
 		Data:        []byte(body),
 	})
 }
 
-func ReplyBadRequest(sender ibus.ISender, message string) {
-	ReplyErrf(sender, http.StatusBadRequest, message)
+func ReplyBadRequest(responder ISingleResponder, message string) {
+	ReplyErrf(responder, http.StatusBadRequest, message)
 }
 
-func replyAccessDenied(sender ibus.ISender, code int, message string) {
+func replyAccessDenied(responder ISingleResponder, code int, message string) {
 	msg := "access denied"
 	if len(message) > 0 {
 		msg += ": " + message
 	}
-	ReplyErrf(sender, code, msg)
+	ReplyErrf(responder, code, msg)
 }
 
-func ReplyAccessDeniedUnauthorized(sender ibus.ISender, message string) {
-	replyAccessDenied(sender, http.StatusUnauthorized, message)
+func ReplyAccessDeniedUnauthorized(responder ISingleResponder, message string) {
+	replyAccessDenied(responder, http.StatusUnauthorized, message)
 }
 
-func ReplyAccessDeniedForbidden(sender ibus.ISender, message string) {
-	replyAccessDenied(sender, http.StatusForbidden, message)
+func ReplyAccessDeniedForbidden(responder ISingleResponder, message string) {
+	replyAccessDenied(responder, http.StatusForbidden, message)
 }
 
-func ReplyUnauthorized(sender ibus.ISender, message string) {
-	ReplyErrf(sender, http.StatusUnauthorized, message)
+func ReplyUnauthorized(responder ISingleResponder, message string) {
+	ReplyErrf(responder, http.StatusUnauthorized, message)
 }
 
-func ReplyInternalServerError(sender ibus.ISender, message string, err error) {
-	ReplyErrf(sender, http.StatusInternalServerError, message, ": ", err)
+func ReplyInternalServerError(responder ISingleResponder, message string, err error) {
+	ReplyErrf(responder, http.StatusInternalServerError, message, ": ", err)
 }
 
 // WithResponseHandler, WithLongPolling and WithDiscardResponse are mutual exclusive
