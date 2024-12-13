@@ -77,9 +77,6 @@ func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, 
 		}
 	}()
 	elemsCount := 0
-	if sendSuccess = writeResponse(w, "{"); !sendSuccess {
-		return
-	}
 	for marshaledElem := range marshaledElems {
 		// http client disconnected -> ErrNoConsumer on IMultiResponseSender.SendElement() -> QP will call Close()
 		if requestCtx.Err() != nil {
@@ -88,8 +85,7 @@ func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, 
 			return
 		}
 		if elemsCount == 0 {
-			sendSuccess = startSectionedResponse(w) &&
-				writeResponse(w, `"sections":[{"type":"","elements":[`)
+			sendSuccess = startSectionedResponse(w) && writeResponse(w, `"sections":[{"type":"","elements":[`)
 		} else {
 			sendSuccess = writeResponse(w, ",")
 		}
@@ -104,7 +100,7 @@ func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, 
 		elemsCount++
 	}
 	if elemsCount > 0 {
-		if sendSuccess = writeResponse(w, "]}]}"); !sendSuccess {
+		if sendSuccess = writeResponse(w, "]}]"); !sendSuccess {
 			return
 		}
 	}

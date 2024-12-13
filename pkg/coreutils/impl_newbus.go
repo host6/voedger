@@ -86,11 +86,13 @@ func (r *implIReplier) SendElement(elem any) error {
 	if err != nil {
 		return err
 	}
+	if !r.bMultiResponseStarted {
+		close(r.multiResponseStarted)
+		r.bMultiResponseStarted = true
+	}
 	sendTimeoutTimerChan := r.tm.NewTimerChan(time.Duration(r.sendTimeout))
 	select {
 	case r.marshaledElems <- string(marshaledElem):
-		r.bMultiResponseStarted = true
-		close(r.multiResponseStarted)
 		return r.clientCtx.Err() // clientCtx.Done() has priority on simultaneous (s.ctx.Done() and r.elems<- success)
 	case <-r.clientCtx.Done():
 		return r.clientCtx.Err()
@@ -101,6 +103,10 @@ func (r *implIReplier) SendElement(elem any) error {
 
 func (r *implIReplier) Close(err error) {
 	*r.elemsErr = err
+	if !r.bMultiResponseStarted {
+		r.bMultiResponseStarted = true
+		close(r.multiResponseStarted)
+	}
 	close(r.marshaledElems)
 }
 
@@ -131,6 +137,7 @@ type implIRequestSender struct {
 
 func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Request) (resp ibus.Response, marshaledElems <-chan string, elemsErr *error, err error) {
 	timeoutChan := rs.tm.NewTimerChan(time.Duration(rs.timeout))
+	elemsErr = new(error)
 	replier := &implIReplier{
 		marshaledElems:       make(chan string),
 		singleResponse:       make(chan ibus.Response),
