@@ -15,7 +15,7 @@ import (
 
 type SendToBusOperator struct {
 	pipeline.AsyncNOOP
-	elemsSender coreutils.IElementsSender
+	elemsSender coreutils.IStreamingResponder
 	metrics     IMetrics
 	errCh       chan<- error
 }

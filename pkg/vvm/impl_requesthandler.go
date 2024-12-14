@@ -26,7 +26,7 @@ import (
 func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IProcBus,
 	cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx QueryProcessorsChannelGroupIdxType,
 	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps) coreutils.RequestHandler {
-	return func(requestCtx context.Context, request ibus.Request, replier coreutils.IReplier) {
+	return func(requestCtx context.Context, request ibus.Request, replier coreutils.IResponder) {
 		if len(request.Resource) <= ShortestPossibleFunctionNameLen {
 			coreutils.ReplyBadRequest(replier, "wrong function name: "+request.Resource)
 			return
@@ -127,7 +127,7 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 // 	})
 // }
 
-func deliverToProcessors(request ibus.Request, requestCtx context.Context, appQName appdef.AppQName, replier coreutils.IReplier, funcQName appdef.QName,
+func deliverToProcessors(request ibus.Request, requestCtx context.Context, appQName appdef.AppQName, replier coreutils.IResponder, funcQName appdef.QName,
 	procbus iprocbus.IProcBus, token string, cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx QueryProcessorsChannelGroupIdxType,
 	cpCount istructs.NumCommandProcessors, partitionID istructs.PartitionID) {
 	switch request.Resource[:1] {

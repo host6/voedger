@@ -38,7 +38,7 @@ import (
 )
 
 func implRowsProcessorFactory(ctx context.Context, appDef appdef.IAppDef, state istructs.IState, params IQueryParams,
-	resultMeta appdef.IType, elemsSender coreutils.IElementsSender, metrics IMetrics, errCh chan<- error) pipeline.IAsyncPipeline {
+	resultMeta appdef.IType, elemsSender coreutils.IStreamingResponder, metrics IMetrics, errCh chan<- error) pipeline.IAsyncPipeline {
 	operators := make([]*pipeline.WiredOperator, 0)
 	if resultMeta == nil {
 		// happens when the query has no result, e.g. q.air.UpdateSubscriptionDetails
@@ -425,7 +425,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			defer func() {
 				qw.metrics.Increase(buildSeconds, time.Since(now).Seconds())
 			}()
-			elementsSender := qw.msg.ElementsSenderCloseable().(coreutils.IElementsSender)
+			elementsSender := qw.msg.ElementsSenderCloseable().(coreutils.IStreamingResponder)
 			qw.rowsProcessor = ProvideRowsProcessorFactory()(qw.msg.RequestCtx(), qw.appStructs.AppDef(),
 				qw.state, qw.queryParams, qw.resultType, elementsSender, qw.metrics, qw.rowsProcessorErrCh)
 			return nil
@@ -539,7 +539,7 @@ type queryMessage struct {
 	appQName    appdef.AppQName
 	wsid        istructs.WSID
 	partition   istructs.PartitionID
-	elemsSender coreutils.IMultiResponderCloseable
+	elemsSender coreutils.IStreamingResponderCloseable
 	body        []byte
 	qName       appdef.QName
 	host        string
@@ -548,7 +548,7 @@ type queryMessage struct {
 
 func (m queryMessage) AppQName() appdef.AppQName { return m.appQName }
 func (m queryMessage) WSID() istructs.WSID       { return m.wsid }
-func (m queryMessage) ElementsSenderCloseable() coreutils.IMultiResponderCloseable {
+func (m queryMessage) ElementsSenderCloseable() coreutils.IStreamingResponderCloseable {
 	return m.elemsSender
 }
 func (m queryMessage) RequestCtx() context.Context     { return m.requestCtx }
@@ -564,7 +564,7 @@ func (m queryMessage) Body() []byte {
 }
 
 func NewQueryMessage(requestCtx context.Context, appQName appdef.AppQName, partID istructs.PartitionID, wsid istructs.WSID,
-	elemsSender coreutils.IMultiResponderCloseable, body []byte, qName appdef.QName, host string, token string) IQueryMessage {
+	elemsSender coreutils.IStreamingResponderCloseable, body []byte, qName appdef.QName, host string, token string) IQueryMessage {
 	return queryMessage{
 		appQName:    appQName,
 		wsid:        wsid,

@@ -14,50 +14,40 @@ import (
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 )
 
-type ICmdResponseReplier interface {
-	// panics if called >1 times
-	Reply(ibus.Response)
-}
-
-type IQryReplier interface {
-	// ibus.ErrNoConsumer -> further communication senseless
-	SendElement(elem interface{}) error
-}
-
 type ISingleResponder interface {
 	// ErrNoConsumer
 	Reply(ibus.Response) error
 }
 
-type IElementsSender interface {
+type IStreamingResponder interface {
 	// ErrNoConsumer
 	SendElement(any) error
 }
 
-type IMultiResponderCloseable interface {
-	IElementsSender
+type IStreamingResponderCloseable interface {
+	IStreamingResponder
 	Close(error)
 }
 
-type IReplier interface {
+type IResponder interface {
 	ISingleResponder
-	IMultiResponderCloseable
+	IStreamingResponderCloseable
 }
 
-type implIReplier struct {
-	singleResponseSent    bool
-	marshaledElems        chan string
-	singleResponse        chan ibus.Response
-	multiResponseStarted  chan struct{}
-	bMultiResponseStarted bool
-	tm                    ITime
-	sendTimeout           SendTimeout
-	clientCtx             context.Context
-	elemsErr              *error
+type implIResponder struct {
+	singleResponseSent      bool
+	marshaledElems          chan string
+	singleResponse          chan ibus.Response
+	multiResponseStarted    chan struct{}
+	multiResponseInProgress bool
+	tm                      ITime
+	sendTimeout             SendTimeout
+	clientCtx               context.Context
+	elemsErr                *error
 }
 
-func (r *implIReplier) Reply(resp ibus.Response) error {
-	if r.bMultiResponseStarted {
+func (r *implIResponder) Reply(resp ibus.Response) error {
+	if r.multiResponseInProgress {
 		panic("cannot send a single response if multi response was started already")
 	}
 	if r.singleResponseSent {
@@ -75,7 +65,7 @@ func (r *implIReplier) Reply(resp ibus.Response) error {
 	}
 }
 
-func (r *implIReplier) SendElement(elem any) error {
+func (r *implIResponder) SendElement(elem any) error {
 	if r.singleResponseSent {
 		panic("can not send a multi response element after a single response is sent")
 	}
@@ -86,9 +76,9 @@ func (r *implIReplier) SendElement(elem any) error {
 	if err != nil {
 		return err
 	}
-	if !r.bMultiResponseStarted {
+	if !r.multiResponseInProgress {
 		close(r.multiResponseStarted)
-		r.bMultiResponseStarted = true
+		r.multiResponseInProgress = true
 	}
 	sendTimeoutTimerChan := r.tm.NewTimerChan(time.Duration(r.sendTimeout))
 	select {
@@ -101,10 +91,10 @@ func (r *implIReplier) SendElement(elem any) error {
 	}
 }
 
-func (r *implIReplier) Close(err error) {
+func (r *implIResponder) Close(err error) {
 	*r.elemsErr = err
-	if !r.bMultiResponseStarted {
-		r.bMultiResponseStarted = true
+	if !r.multiResponseInProgress {
+		r.multiResponseInProgress = true
 		close(r.multiResponseStarted)
 	}
 	close(r.marshaledElems)
@@ -115,7 +105,7 @@ type IRequestSender interface {
 	SendRequest(reqCtx context.Context, req ibus.Request) (resp ibus.Response, marshaledElems <-chan string, errElems *error, err error)
 }
 
-type RequestHandler func(requestCtx context.Context, request ibus.Request, replier IReplier)
+type RequestHandler func(requestCtx context.Context, request ibus.Request, replier IResponder)
 
 type SendTimeout time.Duration
 
@@ -132,13 +122,13 @@ type implIRequestSender struct {
 	timeout        SendTimeout
 	tm             ITime
 	elems          chan any
-	requestHandler func(requestCtx context.Context, request ibus.Request, replier IReplier)
+	requestHandler func(requestCtx context.Context, request ibus.Request, replier IResponder)
 }
 
 func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Request) (resp ibus.Response, marshaledElems <-chan string, elemsErr *error, err error) {
 	timeoutChan := rs.tm.NewTimerChan(time.Duration(rs.timeout))
 	elemsErr = new(error)
-	replier := &implIReplier{
+	replier := &implIResponder{
 		marshaledElems:       make(chan string),
 		singleResponse:       make(chan ibus.Response),
 		tm:                   rs.tm,
