@@ -72,6 +72,25 @@ func (bm *blobBaseMessage) Release() {
 	bm.req.Body.Close()
 }
 
+// use statusCode and errorMessage only if err == nil
+// statusCode == 200 -> errorMessage is empty
+func sendQueryRequest(ctx context.Context, req ibus.Request, requestSender coreutils.IRequestSender) (statusCode int, errorMessage string, err error) {
+	_, elems, elemsErr, err := requestSender.SendRequest(ctx, req)
+	if err != nil {
+		return 0, "", err
+	}
+	for range elems {
+	}
+	if *elemsErr != nil {
+		var sysErr coreutils.SysError
+		if errors.As(*elemsErr, &sysErr) {
+			return sysErr.HTTPStatus, sysErr.Data, nil
+		}
+		return http.StatusInternalServerError, (*elemsErr).Error(), nil
+	}
+	return http.StatusOK, "", nil
+}
+
 func blobReadMessageHandler(bbm blobBaseMessage, blobReadDetails interface{}, blobStorage iblobstorage.IBLOBStorage,
 	requestSender coreutils.IRequestSender) {
 	defer close(bbm.doneChan)
@@ -86,13 +105,13 @@ func blobReadMessageHandler(bbm blobBaseMessage, blobReadDetails interface{}, bl
 		Body:     []byte(`{}`),
 		Host:     localhost,
 	}
-	blobHelperResp, _, _, err := requestSender.SendRequest(bbm.req.Context(), req)
+	statusCode, errorMessage, err := sendQueryRequest(bbm.req.Context(), req, requestSender)
 	if err != nil {
 		WriteTextResponse(bbm.resp, "failed to exec q.sys.DownloadBLOBAuthnz: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if blobHelperResp.StatusCode != http.StatusOK {
-		WriteTextResponse(bbm.resp, "q.sys.DownloadBLOBAuthnz returned error: "+string(blobHelperResp.Data), blobHelperResp.StatusCode)
+	if statusCode != http.StatusOK {
+		WriteTextResponse(bbm.resp, "q.sys.DownloadBLOBAuthnz returned error: "+errorMessage, statusCode)
 		return
 	}
 

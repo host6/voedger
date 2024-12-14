@@ -112,9 +112,12 @@ func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, 
 			if errors.As(*secErr, &sysErr) {
 				headerStatusCode = sysErr.HTTPStatus
 			}
-			if !startReply(w, coreutils.ApplicationJSON, headerStatusCode) {
-				return
-			}
+			sendSuccess = startReply(w, coreutils.ApplicationJSON, headerStatusCode)
+		} else {
+			sendSuccess = writeResponse(w, ",")
+		}
+		if !sendSuccess {
+			return
 		}
 		var jsonableErr interface{ ToJSON() string }
 		if errors.As(*secErr, &jsonableErr) {
