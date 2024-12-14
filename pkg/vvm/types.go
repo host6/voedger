@@ -8,8 +8,6 @@ import (
 	"context"
 	"net/url"
 
-	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
-
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/apppartsctl"
@@ -161,12 +159,6 @@ type VVMConfig struct {
 	// normally is empty in VIT. coretuils.IsTest -> UUID is added to the keyspace name at istorage/provider/Provide()
 	// need to e.g. test VVM restart preserving storage
 	KeyspaceNameSuffix string
-}
-
-type resultSenderErrorFirst struct {
-	ctx            context.Context
-	elementsSender coreutils.IElementsSender
-	rs             ibus.IResultSenderClosable
 }
 
 type VoedgerVM struct {
