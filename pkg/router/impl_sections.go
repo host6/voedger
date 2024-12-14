@@ -85,7 +85,7 @@ func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, 
 			return
 		}
 		if elemsCount == 0 {
-			sendSuccess = startSectionedResponse(w) && writeResponse(w, `"sections":[{"type":"","elements":[`)
+			sendSuccess = startReply(w, coreutils.ApplicationJSON, http.StatusOK) && writeResponse(w, `"sections":[{"type":"","elements":[`)
 		} else {
 			sendSuccess = writeResponse(w, ",")
 		}
@@ -105,6 +105,17 @@ func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, 
 		}
 	}
 	if *secErr != nil {
+		if elemsCount == 0 {
+			// no elements -> let's see which status code to send
+			headerStatusCode := http.StatusInternalServerError
+			var sysErr coreutils.SysError
+			if errors.As(*secErr, &sysErr) {
+				headerStatusCode = sysErr.HTTPStatus
+			}
+			if !startReply(w, coreutils.ApplicationJSON, headerStatusCode) {
+				return
+			}
+		}
 		var jsonableErr interface{ ToJSON() string }
 		if errors.As(*secErr, &jsonableErr) {
 			jsonErr := jsonableErr.ToJSON()
@@ -221,10 +232,10 @@ func discardSection(iSection ibus.ISection, requestCtx context.Context) {
 	}
 }
 
-func startSectionedResponse(w http.ResponseWriter) bool {
-	w.Header().Set(coreutils.ContentType, coreutils.ApplicationJSON)
+func startReply(w http.ResponseWriter, contentType string, statusCode int) bool {
+	w.Header().Set(coreutils.ContentType, contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(http.StatusOK)
+	w.WriteHeader(statusCode)
 	return writeResponse(w, "{")
 }
 
