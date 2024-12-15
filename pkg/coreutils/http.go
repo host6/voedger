@@ -37,21 +37,33 @@ func NewHTTPError(httpStatus int, err error) SysError {
 	return NewHTTPErrorf(httpStatus, err.Error())
 }
 
-func ReplyErrf(responder ISingleResponder, status int, args ...interface{}) {
+func ReplyPlainText(responder IResponseSenderCloseable, text string) {
+	if err := responder.SendResponse(text); err != nil {
+		logger.Error(err.Error() +": failed to send response: " + text)
+	}
+	responder.Close(nil)
+}
+
+func ReplyBadRequest
+
+
+
+func ReplyErrf(responder IResponseSender, status int, args ...interface{}) {
 	ReplyErrDef(responder, NewHTTPErrorf(status, args...), http.StatusInternalServerError)
 }
 
 //nolint:errorlint
-func ReplyErrDef(responder ISingleResponder, err error, defaultStatusCode int) {
+func ReplyErrDef(responder IResponseSender, err error, defaultStatusCode int) {
 	res := WrapSysError(err, defaultStatusCode).(SysError)
 	ReplyJSON(responder, res.HTTPStatus, res.ToJSON())
 }
 
-func ReplyErr(responder ISingleResponder, err error) {
+func ReplyErr(responder IResponseSender, err error) {
 	ReplyErrDef(responder, err, http.StatusInternalServerError)
 }
 
-func ReplyJSON(responder ISingleResponder, httpCode int, body string) {
+func ReplyJSON(responder IResponseSender, httpCode int, body string) {
+	responder.SendResponse()
 	responder.Reply(ibus.Response{
 		ContentType: ApplicationJSON,
 		StatusCode:  httpCode,
@@ -59,11 +71,11 @@ func ReplyJSON(responder ISingleResponder, httpCode int, body string) {
 	})
 }
 
-func ReplyBadRequest(responder ISingleResponder, message string) {
+func ReplyBadRequest(responder IResponseSender, message string) {
 	ReplyErrf(responder, http.StatusBadRequest, message)
 }
 
-func replyAccessDenied(responder ISingleResponder, code int, message string) {
+func replyAccessDenied(responder IResponseSender, code int, message string) {
 	msg := "access denied"
 	if len(message) > 0 {
 		msg += ": " + message
@@ -71,19 +83,19 @@ func replyAccessDenied(responder ISingleResponder, code int, message string) {
 	ReplyErrf(responder, code, msg)
 }
 
-func ReplyAccessDeniedUnauthorized(responder ISingleResponder, message string) {
+func ReplyAccessDeniedUnauthorized(responder IResponseSender, message string) {
 	replyAccessDenied(responder, http.StatusUnauthorized, message)
 }
 
-func ReplyAccessDeniedForbidden(responder ISingleResponder, message string) {
+func ReplyAccessDeniedForbidden(responder IResponseSender, message string) {
 	replyAccessDenied(responder, http.StatusForbidden, message)
 }
 
-func ReplyUnauthorized(responder ISingleResponder, message string) {
+func ReplyUnauthorized(responder IResponseSender, message string) {
 	ReplyErrf(responder, http.StatusUnauthorized, message)
 }
 
-func ReplyInternalServerError(responder ISingleResponder, message string, err error) {
+func ReplyInternalServerError(responder IResponseSender, message string, err error) {
 	ReplyErrf(responder, http.StatusInternalServerError, message, ": ", err)
 }
 
