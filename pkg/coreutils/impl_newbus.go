@@ -14,9 +14,14 @@ import (
 	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 )
 
+type IResponder interface {
+	// panics if called >1 times
+	InitResponse(ResponseMeta) IResponseSenderCloseable
+}
+
 type IResponseSender interface {
 	// ErrNoConsumer
-	SendResponse(any) error
+	Send(any) error
 }
 
 type IResponseSenderCloseable interface {
@@ -24,15 +29,20 @@ type IResponseSenderCloseable interface {
 	Close(error)
 }
 
+type ResponseMeta struct {
+	ContentType string
+	StatusCode  int
+}
+
 type IRequestSender interface {
 	// err != nil -> nothing else matters
 	// resultsCh must be read out
-	// *resultErr must be checed only after reading out the resultCh
+	// *resultErr must be checked only after reading out the resultCh
 	// caller must eventaully close clientCtx
-	SendRequest(clientCtx context.Context, req ibus.Request) (resultsCh <-chan any, resultErr *error, err error)
+	SendRequest(clientCtx context.Context, req ibus.Request) (responseCh <-chan any, responseMeta ResponseMeta, responseErr *error, err error)
 }
 
-type RequestHandler func(requestCtx context.Context, request ibus.Request, responseSender IResponseSender)
+type RequestHandler func(requestCtx context.Context, request ibus.Request, responder IResponder)
 
 type implIRequestSender struct {
 	timeout        SendTimeout
@@ -43,25 +53,32 @@ type implIRequestSender struct {
 
 type SendTimeout time.Duration
 
-type implIResponseSender struct {
-	ch                 chan any
-	clientCtx          context.Context
-	responseStarted    chan struct{}
-	responseInProgress bool
-	sendTimeout        SendTimeout
-	tm                 ITime
-	resultErr          *error
+type implIResponseSenderCloseable struct {
+	ch          chan any
+	clientCtx   context.Context
+	sendTimeout SendTimeout
+	tm          ITime
+	resultErr   *error
 }
 
-func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Request) (resultsCh <-chan any, resultErr *error, err error) {
+type implIResponder struct {
+	respSender     IResponseSenderCloseable
+	inited         bool
+	responseMetaCh chan ResponseMeta
+}
+
+func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Request) (responseCh <-chan any, responseMeta ResponseMeta, responseErr *error, err error) {
 	timeoutChan := rs.tm.NewTimerChan(time.Duration(rs.timeout))
-	responseSender := &implIResponseSender{
-		ch:              make(chan any),
-		clientCtx:       clientCtx,
-		responseStarted: make(chan struct{}),
-		sendTimeout:     rs.timeout,
-		tm:              rs.tm,
-		resultErr:       new(error),
+	respSender := &implIResponseSenderCloseable{
+		ch:          make(chan any),
+		clientCtx:   clientCtx,
+		sendTimeout: rs.timeout,
+		tm:          rs.tm,
+		resultErr:   new(error),
+	}
+	responder := &implIResponder{
+		respSender:     respSender,
+		responseMetaCh: make(chan ResponseMeta, 1),
 	}
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -70,7 +87,7 @@ func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Re
 		select {
 		case <-timeoutChan:
 			err = ibus.ErrBusTimeoutExpired
-		case <-responseSender.responseStarted:
+		case responseMeta = <-responder.responseMetaCh:
 			err = clientCtx.Err() // to make clientCtx.Done() take priority
 		case <-clientCtx.Done():
 			// wrong to close(replier.elems) because possible that elems is being writting at the same time -> data race
@@ -79,16 +96,12 @@ func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Re
 			err = clientCtx.Err() // to make clientCtx.Done() take priority
 		}
 	}()
-	rs.requestHandler(clientCtx, req, responseSender)
+	rs.requestHandler(clientCtx, req, responder)
 	wg.Wait()
-	return responseSender.ch, responseSender.resultErr, err
+	return respSender.ch, responseMeta, respSender.resultErr, err
 }
 
-func (rs *implIResponseSender) SendResponse(obj any) error {
-	if !rs.responseInProgress {
-		close(rs.responseStarted)
-		rs.responseInProgress = true
-	}
+func (rs *implIResponseSenderCloseable) Send(obj any) error {
 	sendTimeoutTimerChan := rs.tm.NewTimerChan(time.Duration(rs.sendTimeout))
 	select {
 	case rs.ch <- obj:
@@ -102,11 +115,16 @@ func (rs *implIResponseSender) SendResponse(obj any) error {
 	return rs.clientCtx.Err()
 }
 
-func (rs *implIResponseSender) Close(err error) {
+func (rs *implIResponseSenderCloseable) Close(err error) {
 	*rs.resultErr = err
-	if !rs.responseInProgress {
-		rs.responseInProgress = true
-		close(rs.responseStarted)
-	}
 	close(rs.ch)
+}
+
+func (r *implIResponder) InitResponse(rm ResponseMeta) IResponseSenderCloseable {
+	select {
+	case r.responseMetaCh <- rm:
+	default:
+		panic(ibus.ErrNoConsumer)
+	}
+	return r.respSender
 }

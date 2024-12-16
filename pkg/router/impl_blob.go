@@ -6,7 +6,6 @@ package router
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -75,18 +74,18 @@ func (bm *blobBaseMessage) Release() {
 // use statusCode and errorMessage only if err == nil
 // statusCode == 200 -> errorMessage is empty
 func sendQueryRequest(ctx context.Context, req ibus.Request, requestSender coreutils.IRequestSender) (statusCode int, errorMessage string, err error) {
-	_, elems, elemsErr, err := requestSender.SendRequest(ctx, req)
+	responseCh, _, responseErr, err := requestSender.SendRequest(ctx, req)
 	if err != nil {
 		return 0, "", err
 	}
-	for range elems {
+	for range responseCh {
 	}
-	if *elemsErr != nil {
+	if *responseErr != nil {
 		var sysErr coreutils.SysError
-		if errors.As(*elemsErr, &sysErr) {
+		if errors.As(*responseErr, &sysErr) {
 			return sysErr.HTTPStatus, sysErr.Data, nil
 		}
-		return http.StatusInternalServerError, (*elemsErr).Error(), nil
+		return http.StatusInternalServerError, (*responseErr).Error(), nil
 	}
 	return http.StatusOK, "", nil
 }
@@ -168,27 +167,17 @@ func registerBLOB(ctx context.Context, wsid istructs.WSID, appQName string, regi
 		Header:   header,
 		Host:     localhost,
 	}
-	blobHelperResp, _, _, err := requestSender.SendRequest(ctx, req)
+
+	statusCode, cmdResp, err := coreutils.GetCommandResponse(ctx, requestSender, req)
 	if err != nil {
 		WriteTextResponse(resp, fmt.Sprintf("failed to exec %s: %s", registerFuncName, err.Error()), http.StatusInternalServerError)
 		return false, istructs.NullRecordID
 	}
-	if blobHelperResp.StatusCode != http.StatusOK {
-		WriteTextResponse(resp, fmt.Sprintf("%s returned error: %s", registerFuncName, string(blobHelperResp.Data)), blobHelperResp.StatusCode)
+	if statusCode != http.StatusOK {
+		WriteTextResponse(resp, fmt.Sprintf("%s returned error: %v", registerFuncName, cmdResp.SysError), statusCode)
 		return false, istructs.NullRecordID
 	}
-
-	cmdResp := map[string]interface{}{}
-	if err := json.Unmarshal(blobHelperResp.Data, &cmdResp); err != nil {
-		WriteTextResponse(resp, fmt.Sprintf("failed to json-unmarshal %s result: %s", registerFuncName, err), http.StatusInternalServerError)
-		return false, istructs.NullRecordID
-	}
-	newIDsIntf, ok := cmdResp["NewIDs"]
-	if ok {
-		newIDs := newIDsIntf.(map[string]interface{})
-		return true, istructs.RecordID(newIDs["1"].(float64))
-	}
-	return true, istructs.NullRecordID
+	return true, istructs.RecordID(cmdResp.NewIDs["1"])
 }
 
 func writeBLOB_temporary(ctx context.Context, wsid istructs.WSID, appQName string, header map[string][]string, resp http.ResponseWriter,
@@ -269,6 +258,7 @@ func writeBLOB_persistent(ctx context.Context, wsid istructs.WSID, appQName stri
 		Header:   header,
 		Host:     localhost,
 	}
+	coreutils.GetCommandResponse() тут вызывать
 	cudWDocBLOBUpdateResp, _, _, err := requestSender.SendRequest(ctx, req)
 	if err != nil {
 		WriteTextResponse(resp, "failed to exec c.sys.CUD: "+err.Error(), http.StatusInternalServerError)

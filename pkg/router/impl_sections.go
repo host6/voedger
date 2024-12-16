@@ -7,6 +7,7 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -60,6 +61,71 @@ func createRequest(reqMethod string, req *http.Request, rw http.ResponseWriter, 
 	return res, err == nil
 }
 
+func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan any, responseErr *error, onSendFailed func()) {
+	sendSuccess := false
+	defer func() {
+		if requestCtx.Err() != nil {
+			if onRequestCtxClosed != nil {
+				onRequestCtxClosed()
+			}
+			log.Println("client disconnected during sections sending")
+			return
+		}
+		if !sendSuccess {
+			onSendFailed()
+			for range responseCh {
+			}
+		}
+	}()
+	elemsCount := 0
+	for elem := range responseCh {
+		// http client disconnected -> ErrNoConsumer on IMultiResponseSender.SendElement() -> QP will call Close()
+		if requestCtx.Err() != nil {
+			// possible: ctx is done but on select {sections<-section, <-ctx.Done()} write to sections channel is triggered.
+			// ctx.Done() must have the priority
+			return
+		}
+		if elemsCount == 0 {
+			sendSuccess = writeResponse(w, `"sections":[{"type":"","elements":[`)
+		} else {
+			sendSuccess = writeResponse(w, ",")
+		}
+
+		if !sendSuccess {
+			return
+		}
+
+		elemBytes, err := json.Marshal(&elem)
+		if err != nil {
+			panic(err)
+		}
+
+		if sendSuccess = writeResponse(w, string(elemBytes)); !sendSuccess {
+			return
+		}
+		elemsCount++
+	}
+	if *responseErr != nil {
+		if elemsCount > 0 {
+			if sendSuccess = writeResponse(w, ","); !sendSuccess {
+				return
+			}
+		}
+		var jsonableErr interface{ ToJSON() string }
+		if errors.As(*responseErr, &jsonableErr) {
+			jsonErr := jsonableErr.ToJSON()
+			jsonErr = strings.TrimPrefix(jsonErr, "{")
+			jsonErr = strings.TrimSuffix(jsonErr, "}")
+			sendSuccess = writeResponse(w, jsonErr)
+		} else {
+			sendSuccess = writeResponse(w, fmt.Sprintf(`"status":%d,"errorDescription":"%s"}`, http.StatusInternalServerError, *responseErr))
+		}
+	}
+	if sendSuccess {
+		sendSuccess = writeResponse(w, "}")
+	}
+}
+
 func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, marshaledElems <-chan string, secErr *error, onSendFailed func()) {
 	sendSuccess := false
 	defer func() {
@@ -85,7 +151,7 @@ func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, 
 			return
 		}
 		if elemsCount == 0 {
-			sendSuccess = startReply(w, coreutils.ApplicationJSON, http.StatusOK) && writeResponse(w, `"sections":[{"type":"","elements":[`)
+			sendSuccess = initResponse(w, coreutils.ApplicationJSON, http.StatusOK) && writeResponse(w, `"sections":[{"type":"","elements":[`)
 		} else {
 			sendSuccess = writeResponse(w, ",")
 		}
@@ -112,7 +178,7 @@ func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, 
 			if errors.As(*secErr, &sysErr) {
 				headerStatusCode = sysErr.HTTPStatus
 			}
-			sendSuccess = startReply(w, coreutils.ApplicationJSON, headerStatusCode)
+			sendSuccess = initResponse(w, coreutils.ApplicationJSON, headerStatusCode)
 		} else {
 			sendSuccess = writeResponse(w, ",")
 		}
@@ -235,7 +301,7 @@ func discardSection(iSection ibus.ISection, requestCtx context.Context) {
 	}
 }
 
-func startReply(w http.ResponseWriter, contentType string, statusCode int) bool {
+func initResponse(w http.ResponseWriter, contentType string, statusCode int) bool {
 	w.Header().Set(coreutils.ContentType, contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(statusCode)

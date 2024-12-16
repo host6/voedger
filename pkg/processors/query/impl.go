@@ -38,7 +38,7 @@ import (
 )
 
 func implRowsProcessorFactory(ctx context.Context, appDef appdef.IAppDef, state istructs.IState, params IQueryParams,
-	resultMeta appdef.IType, elemsSender coreutils.IStreamingResponder, metrics IMetrics, errCh chan<- error) pipeline.IAsyncPipeline {
+	resultMeta appdef.IType, responder coreutils.IResponder, metrics IMetrics, errCh chan<- error) (rowsProcessor pipeline.IAsyncPipeline, iResponseSenderGetter func() coreutils.IResponseSender) {
 	operators := make([]*pipeline.WiredOperator, 0)
 	if resultMeta == nil {
 		// happens when the query has no result, e.g. q.air.UpdateSubscriptionDetails
@@ -82,12 +82,15 @@ func implRowsProcessorFactory(ctx context.Context, appDef appdef.IAppDef, state 
 				metrics)))
 		}
 	}
-	operators = append(operators, pipeline.WireAsyncOperator("Send to bus", &SendToBusOperator{
-		elemsSender: elemsSender,
-		metrics:     metrics,
-		errCh:       errCh,
-	}))
-	return pipeline.NewAsyncPipeline(ctx, "Rows processor", operators[0], operators[1:]...)
+	sendToBusOp := &SendToBusOperator{
+		responder: responder,
+		metrics:   metrics,
+		errCh:     errCh,
+	}
+	operators = append(operators, pipeline.WireAsyncOperator("Send to bus", sendToBusOp))
+	return pipeline.NewAsyncPipeline(ctx, "Rows processor", operators[0], operators[1:]...), func() coreutils.IResponseSender {
+		return sendToBusOp.sender
+	}
 }
 
 func implServiceFactory(serviceChannel iprocbus.ServiceChannel,
@@ -137,7 +140,16 @@ func implServiceFactory(serviceChannel iprocbus.ServiceChannel,
 					default:
 					}
 					err = coreutils.WrapSysError(err, http.StatusInternalServerError)
-					qwork.msg.ElementsSenderCloseable().Close(err)
+					sender := qwork.responseSenderGetter()
+					if err != nil && qwork.responseSenderGetter() == nil {
+						// have an error before 200ok is sent -> send the status from the actual error
+						sender = msg.Responder().InitResponse(coreutils.ResponseMeta{
+							ContentType: coreutils.ApplicationJSON,
+							StatusCode:  err.(coreutils.SysError).HTTPStatus,
+						})
+					}
+					senderCloseable := sender.(coreutils.IResponseSenderCloseable)
+					senderCloseable.Close(err)
 				}()
 				metrics.IncreaseApp(queriesSeconds, vvm, msg.AppQName(), time.Since(now).Seconds())
 			case <-ctx.Done():
@@ -420,14 +432,14 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			// }
 			return nil
 		}),
+
 		operator("build rows processor", func(ctx context.Context, qw *queryWork) error {
 			now := time.Now()
 			defer func() {
 				qw.metrics.Increase(buildSeconds, time.Since(now).Seconds())
 			}()
-			elementsSender := qw.msg.ElementsSenderCloseable().(coreutils.IStreamingResponder)
-			qw.rowsProcessor = ProvideRowsProcessorFactory()(qw.msg.RequestCtx(), qw.appStructs.AppDef(),
-				qw.state, qw.queryParams, qw.resultType, elementsSender, qw.metrics, qw.rowsProcessorErrCh)
+			qw.rowsProcessor, qw.responseSenderGetter = ProvideRowsProcessorFactory()(qw.msg.RequestCtx(), qw.appStructs.AppDef(),
+				qw.state, qw.queryParams, qw.resultType, qw.msg.Responder(), qw.metrics, qw.rowsProcessorErrCh)
 			return nil
 		}),
 	}
@@ -459,7 +471,8 @@ type queryWork struct {
 	iQuery             appdef.IQuery
 	wsDesc             istructs.IRecord
 	// queryExec         func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) error
-	callbackFunc istructs.ExecQueryCallback
+	callbackFunc         istructs.ExecQueryCallback
+	responseSenderGetter func() coreutils.IResponseSender
 }
 
 func roleNotFound(err error) bool {
@@ -535,21 +548,21 @@ func operator(name string, doSync func(ctx context.Context, qw *queryWork) (err 
 }
 
 type queryMessage struct {
-	requestCtx  context.Context
-	appQName    appdef.AppQName
-	wsid        istructs.WSID
-	partition   istructs.PartitionID
-	elemsSender coreutils.IStreamingResponderCloseable
-	body        []byte
-	qName       appdef.QName
-	host        string
-	token       string
+	requestCtx context.Context
+	appQName   appdef.AppQName
+	wsid       istructs.WSID
+	partition  istructs.PartitionID
+	responder  coreutils.IResponder
+	body       []byte
+	qName      appdef.QName
+	host       string
+	token      string
 }
 
 func (m queryMessage) AppQName() appdef.AppQName { return m.appQName }
 func (m queryMessage) WSID() istructs.WSID       { return m.wsid }
-func (m queryMessage) ElementsSenderCloseable() coreutils.IStreamingResponderCloseable {
-	return m.elemsSender
+func (m queryMessage) Responder() coreutils.IResponder {
+	return m.responder
 }
 func (m queryMessage) RequestCtx() context.Context     { return m.requestCtx }
 func (m queryMessage) QName() appdef.QName             { return m.qName }
@@ -564,17 +577,17 @@ func (m queryMessage) Body() []byte {
 }
 
 func NewQueryMessage(requestCtx context.Context, appQName appdef.AppQName, partID istructs.PartitionID, wsid istructs.WSID,
-	elemsSender coreutils.IStreamingResponderCloseable, body []byte, qName appdef.QName, host string, token string) IQueryMessage {
+	responder coreutils.IResponder, body []byte, qName appdef.QName, host string, token string) IQueryMessage {
 	return queryMessage{
-		appQName:    appQName,
-		wsid:        wsid,
-		partition:   partID,
-		elemsSender: elemsSender,
-		body:        body,
-		requestCtx:  requestCtx,
-		qName:       qName,
-		host:        host,
-		token:       token,
+		appQName:   appQName,
+		wsid:       wsid,
+		partition:  partID,
+		responder:  responder,
+		body:       body,
+		requestCtx: requestCtx,
+		qName:      qName,
+		host:       host,
+		token:      token,
 	}
 }
 

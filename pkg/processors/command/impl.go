@@ -34,23 +34,23 @@ import (
 	workspacemgmt "github.com/voedger/voedger/pkg/sys/workspace"
 )
 
-func (cm *implICommandMessage) Body() []byte                          { return cm.body }
-func (cm *implICommandMessage) AppQName() appdef.AppQName             { return cm.appQName }
-func (cm *implICommandMessage) WSID() istructs.WSID                   { return cm.wsid }
-func (cm *implICommandMessage) Responder() coreutils.ISingleResponder { return cm.responder }
-func (cm *implICommandMessage) PartitionID() istructs.PartitionID     { return cm.partitionID }
-func (cm *implICommandMessage) RequestCtx() context.Context           { return cm.requestCtx }
-func (cm *implICommandMessage) QName() appdef.QName                   { return cm.qName }
-func (cm *implICommandMessage) Token() string                         { return cm.token }
-func (cm *implICommandMessage) Host() string                          { return cm.host }
+func (cm *implICommandMessage) Body() []byte                      { return cm.body }
+func (cm *implICommandMessage) AppQName() appdef.AppQName         { return cm.appQName }
+func (cm *implICommandMessage) WSID() istructs.WSID               { return cm.wsid }
+func (cm *implICommandMessage) Responder() coreutils.IResponder   { return cm.responder }
+func (cm *implICommandMessage) PartitionID() istructs.PartitionID { return cm.partitionID }
+func (cm *implICommandMessage) RequestCtx() context.Context       { return cm.requestCtx }
+func (cm *implICommandMessage) QName() appdef.QName               { return cm.qName }
+func (cm *implICommandMessage) Token() string                     { return cm.token }
+func (cm *implICommandMessage) Host() string                      { return cm.host }
 
 func NewCommandMessage(requestCtx context.Context, body []byte, appQName appdef.AppQName, wsid istructs.WSID,
-	respnoder coreutils.ISingleResponder, partitionID istructs.PartitionID, qName appdef.QName, token string, host string) ICommandMessage {
+	responder coreutils.IResponder, partitionID istructs.PartitionID, qName appdef.QName, token string, host string) ICommandMessage {
 	return &implICommandMessage{
 		body:        body,
 		appQName:    appQName,
 		wsid:        wsid,
-		responder:   respnoder,
+		responder:   responder,
 		partitionID: partitionID,
 		requestCtx:  requestCtx,
 		qName:       qName,

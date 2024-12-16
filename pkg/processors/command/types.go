@@ -34,7 +34,7 @@ type ICommandMessage interface {
 	Body() []byte
 	AppQName() appdef.AppQName
 	WSID() istructs.WSID // url WSID
-	Responder() coreutils.ISingleResponder
+	Responder() coreutils.IResponder
 	PartitionID() istructs.PartitionID
 	RequestCtx() context.Context
 	QName() appdef.QName
@@ -104,7 +104,7 @@ type implICommandMessage struct {
 	body        []byte
 	appQName    appdef.AppQName // need to determine where to send c.sys.Init request on create a new workspace
 	wsid        istructs.WSID
-	responder   coreutils.ISingleResponder
+	responder   coreutils.IResponder
 	partitionID istructs.PartitionID
 	requestCtx  context.Context
 	qName       appdef.QName

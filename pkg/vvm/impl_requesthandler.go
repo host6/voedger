@@ -26,14 +26,14 @@ import (
 func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IProcBus,
 	cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx QueryProcessorsChannelGroupIdxType,
 	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps) coreutils.RequestHandler {
-	return func(requestCtx context.Context, request ibus.Request, replier coreutils.IResponder) {
+	return func(requestCtx context.Context, request ibus.Request, responder coreutils.IResponder) {
 		if len(request.Resource) <= ShortestPossibleFunctionNameLen {
-			coreutils.ReplyBadRequest(replier, "wrong function name: "+request.Resource)
+			coreutils.ReplyBadRequest(responder, "wrong function name: "+request.Resource)
 			return
 		}
 		funcQName, err := appdef.ParseQName(request.Resource[2:])
 		if err != nil {
-			coreutils.ReplyBadRequest(replier, "wrong function name: "+request.Resource)
+			coreutils.ReplyBadRequest(responder, "wrong function name: "+request.Resource)
 			return
 		}
 		if logger.IsVerbose() {
@@ -44,32 +44,32 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 		appQName, err := appdef.ParseAppQName(request.AppQName)
 		if err != nil {
 			// protected by router already
-			coreutils.ReplyBadRequest(replier, fmt.Sprintf("failed to parse app qualified name %s: %s", request.AppQName, err.Error()))
+			coreutils.ReplyBadRequest(responder, fmt.Sprintf("failed to parse app qualified name %s: %s", request.AppQName, err.Error()))
 			return
 		}
 		if !vvmApps.Exists(appQName) {
-			coreutils.ReplyBadRequest(replier, "unknown app "+request.AppQName)
+			coreutils.ReplyBadRequest(responder, "unknown app "+request.AppQName)
 			return
 		}
 
 		token, err := getPrincipalToken(request)
 		if err != nil {
-			coreutils.ReplyAccessDeniedUnauthorized(replier, err.Error())
+			coreutils.ReplyAccessDeniedUnauthorized(responder, err.Error())
 			return
 		}
 
 		partitionID, err := appParts.AppWorkspacePartitionID(appQName, request.WSID)
 		if err != nil {
 			if errors.Is(err, appparts.ErrNotFound) {
-				coreutils.ReplyErrf(replier, http.StatusServiceUnavailable, fmt.Sprintf("app %s is not deployed", appQName))
+				coreutils.ReplyErrf(responder, http.StatusServiceUnavailable, fmt.Sprintf("app %s is not deployed", appQName))
 				return
 			}
 			// notest
-			coreutils.ReplyInternalServerError(replier, "failed to compute the partition number", err)
+			coreutils.ReplyInternalServerError(responder, "failed to compute the partition number", err)
 			return
 		}
 
-		deliverToProcessors(request, requestCtx, appQName, replier, funcQName, procbus, token, cpchIdx, qpcgIdx, cpAmount, partitionID)
+		deliverToProcessors(request, requestCtx, appQName, responder, funcQName, procbus, token, cpchIdx, qpcgIdx, cpAmount, partitionID)
 	}
 }
 
@@ -127,24 +127,24 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 // 	})
 // }
 
-func deliverToProcessors(request ibus.Request, requestCtx context.Context, appQName appdef.AppQName, replier coreutils.IResponder, funcQName appdef.QName,
+func deliverToProcessors(request ibus.Request, requestCtx context.Context, appQName appdef.AppQName, responder coreutils.IResponder, funcQName appdef.QName,
 	procbus iprocbus.IProcBus, token string, cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx QueryProcessorsChannelGroupIdxType,
 	cpCount istructs.NumCommandProcessors, partitionID istructs.PartitionID) {
 	switch request.Resource[:1] {
 	case "q":
-		iqm := queryprocessor.NewQueryMessage(requestCtx, appQName, request.PartitionID, request.WSID, replier, request.Body, funcQName, request.Host, token)
+		iqm := queryprocessor.NewQueryMessage(requestCtx, appQName, request.PartitionID, request.WSID, responder, request.Body, funcQName, request.Host, token)
 		if !procbus.Submit(uint(qpcgIdx), 0, iqm) {
-			coreutils.ReplyErrf(replier, http.StatusServiceUnavailable, "no query processors available")
+			coreutils.ReplyErrf(responder, http.StatusServiceUnavailable, "no query processors available")
 		}
 	case "c":
 		// TODO: use appQName to calculate cmdProcessorIdx in solid range [0..cpCount)
 		cmdProcessorIdx := uint(partitionID) % uint(cpCount)
-		icm := commandprocessor.NewCommandMessage(requestCtx, request.Body, appQName, request.WSID, replier, partitionID, funcQName, token, request.Host)
+		icm := commandprocessor.NewCommandMessage(requestCtx, request.Body, appQName, request.WSID, responder, partitionID, funcQName, token, request.Host)
 		if !procbus.Submit(uint(cpchIdx), cmdProcessorIdx, icm) {
-			coreutils.ReplyErrf(replier, http.StatusServiceUnavailable, fmt.Sprintf("command processor of partition %d is busy", partitionID))
+			coreutils.ReplyErrf(responder, http.StatusServiceUnavailable, fmt.Sprintf("command processor of partition %d is busy", partitionID))
 		}
 	default:
-		coreutils.ReplyBadRequest(replier, fmt.Sprintf(`wrong function mark "%s" for function %s`, request.Resource[:1], funcQName))
+		coreutils.ReplyBadRequest(responder, fmt.Sprintf(`wrong function mark "%s" for function %s`, request.Resource[:1], funcQName))
 	}
 }
 

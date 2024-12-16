@@ -6,6 +6,7 @@ package queryprocessor
 
 import (
 	"context"
+	"net/http"
 	"time"
 
 	"github.com/voedger/voedger/pkg/coreutils"
@@ -15,9 +16,10 @@ import (
 
 type SendToBusOperator struct {
 	pipeline.AsyncNOOP
-	elemsSender coreutils.IStreamingResponder
-	metrics     IMetrics
-	errCh       chan<- error
+	sender    coreutils.IResponseSender
+	responder coreutils.IResponder
+	metrics   IMetrics
+	errCh     chan<- error
 }
 
 func (o *SendToBusOperator) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
@@ -25,7 +27,10 @@ func (o *SendToBusOperator) DoAsync(_ context.Context, work pipeline.IWorkpiece)
 	defer func() {
 		o.metrics.Increase(execSendSeconds, time.Since(begin).Seconds())
 	}()
-	return work, o.elemsSender.SendElement(work.(rowsWorkpiece).OutputRow().Values())
+	if o.sender == nil {
+		o.sender = o.responder.InitResponse(coreutils.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+	}
+	return work, o.sender.Send(work.(rowsWorkpiece).OutputRow().Values())
 }
 
 func (o *SendToBusOperator) OnError(_ context.Context, err error) {

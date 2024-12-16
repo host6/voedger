@@ -207,10 +207,10 @@ func RequestHandler(requestSender coreutils.IRequestSender, numsAppsWorkspaces m
 		// requestCtx.Done() -> SendRequest2 implementation will notify the handler that the consumer has left us
 		requestCtx, cancel := context.WithCancel(req.Context())
 		defer cancel() // to avoid context leak
-		res, elements, secErr, err := requestSender.SendRequest(requestCtx, request)
+		responseCh, responseMeta, responseErr, err := requestSender.SendRequest(requestCtx, request)
 		// res, sections, secErr, err := bus.SendRequest2(requestCtx, request, busTimeout)
 		if err != nil {
-			logger.Error("IBus.SendRequest2 failed on ", request.Resource, ":", err, ". Body:\n", string(request.Body))
+			logger.Error("sending request to VVM on", request.Resource, "is failed:", err, ". Body:\n", string(request.Body))
 			status := http.StatusInternalServerError
 			if errors.Is(err, ibus.ErrBusTimeoutExpired) {
 				status = http.StatusServiceUnavailable
@@ -219,13 +219,15 @@ func RequestHandler(requestSender coreutils.IRequestSender, numsAppsWorkspaces m
 			return
 		}
 
-		if elements == nil {
-			resp.Header().Set(coreutils.ContentType, res.ContentType)
-			resp.WriteHeader(res.StatusCode)
-			writeResponse(resp, string(res.Data))
-			return
+		// if elements == nil {
+		// 	resp.Header().Set(coreutils.ContentType, res.ContentType)
+		// 	resp.WriteHeader(res.StatusCode)
+		// 	writeResponse(resp, string(res.Data))
+		// 	return
+		// }
+		if initResponse(resp, responseMeta.ContentType, responseMeta.StatusCode) {
+			reply(requestCtx, resp, responseCh, responseErr, cancel)
 		}
-		writeSectionedResponse_(requestCtx, resp, elements, secErr, cancel)
 	}
 }
 

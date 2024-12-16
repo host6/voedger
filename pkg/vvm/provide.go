@@ -136,7 +136,6 @@ func ProvideCluster(vvmCtx context.Context, vvmConfig *VVMConfig, vvmIdx VVMIdxT
 		provideQueryChannel,
 		provideCommandChannelFactory,
 		provideRequestHandler,
-		coreutils.NewIRequestSender,
 		provideRouterParams,
 		provideRouterAppStoragePtr,
 		provideIFederation,

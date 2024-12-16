@@ -91,7 +91,7 @@ type IOutputRow interface {
 type IQueryMessage interface {
 	AppQName() appdef.AppQName
 	WSID() istructs.WSID
-	ElementsSenderCloseable() coreutils.IStreamingResponderCloseable
+	Responder() coreutils.IResponder
 	Body() []byte
 	RequestCtx() context.Context
 	QName() appdef.QName
