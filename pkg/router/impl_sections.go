@@ -86,6 +86,12 @@ func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan 
 			return
 		}
 		if elemsCount == 0 {
+			if cmdResponseStr, isCmdResp := elem.(string); isCmdResp {
+				cmdResponseStr = strings.TrimPrefix(cmdResponseStr, "{")
+				cmdResponseStr = strings.TrimSuffix(cmdResponseStr, "}")
+				sendSuccess = writeResponse(w, cmdResponseStr)
+			}
+
 			sendSuccess = writeResponse(w, `"sections":[{"type":"","elements":[`)
 		} else {
 			sendSuccess = writeResponse(w, ",")

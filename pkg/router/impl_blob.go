@@ -258,14 +258,13 @@ func writeBLOB_persistent(ctx context.Context, wsid istructs.WSID, appQName stri
 		Header:   header,
 		Host:     localhost,
 	}
-	coreutils.GetCommandResponse() тут вызывать
-	cudWDocBLOBUpdateResp, _, _, err := requestSender.SendRequest(ctx, req)
+	statusCode, cmdResp, err  := coreutils.GetCommandResponse(ctx, requestSender, req)
 	if err != nil {
 		WriteTextResponse(resp, "failed to exec c.sys.CUD: "+err.Error(), http.StatusInternalServerError)
 		return 0
 	}
-	if cudWDocBLOBUpdateResp.StatusCode != http.StatusOK {
-		WriteTextResponse(resp, "c.sys.CUD returned error: "+string(cudWDocBLOBUpdateResp.Data), cudWDocBLOBUpdateResp.StatusCode)
+	if statusCode != http.StatusOK {
+		WriteTextResponse(resp, "c.sys.CUD returned error: "+cmdResp.SysError.Message, statusCode)
 		return 0
 	}
 

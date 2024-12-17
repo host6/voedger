@@ -189,7 +189,7 @@ func ProvideCluster(vvmCtx context.Context, vvmConfig *VVMConfig, vvmIdx VVMIdxT
 	queryProcessorsChannelGroupIdxType := provideProcessorChannelGroupIdxQuery(vvmConfig)
 	vvmApps := provideVVMApps(v7)
 	requestHandler := provideRequestHandler(iAppPartitions, iProcBus, commandProcessorsChannelGroupIdxType, queryProcessorsChannelGroupIdxType, numCommandProcessors, vvmApps)
-	iRequestSender := coreutils.NewIRequestSender(requestHandler, iTime, sendTimeout)
+	iRequestSender := coreutils.NewIRequestSender(iTime, sendTimeout, requestHandler)
 	v9, err := provideNumsAppsWorkspaces(vvmApps, iAppStructsProvider, v5)
 	if err != nil {
 		cleanup4()

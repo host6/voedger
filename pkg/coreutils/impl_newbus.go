@@ -47,7 +47,6 @@ type RequestHandler func(requestCtx context.Context, request ibus.Request, respo
 type implIRequestSender struct {
 	timeout        SendTimeout
 	tm             ITime
-	ch             chan any
 	requestHandler RequestHandler
 }
 
@@ -65,6 +64,14 @@ type implIResponder struct {
 	respSender     IResponseSenderCloseable
 	inited         bool
 	responseMetaCh chan ResponseMeta
+}
+
+func NewIRequestSender(tm ITime, sendTimeout SendTimeout, requestHandler RequestHandler) IRequestSender {
+	return &implIRequestSender{
+		timeout:        sendTimeout,
+		tm:             tm,
+		requestHandler: requestHandler,
+	}
 }
 
 func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req ibus.Request) (responseCh <-chan any, responseMeta ResponseMeta, responseErr *error, err error) {
