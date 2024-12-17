@@ -30,7 +30,7 @@ func (acl ACL) IsAllowed(principals []iauthnz.Principal, req iauthnz.AuthzReques
 		logger.Verbose(fmt.Sprintf("%s for %s: %s -> deny", authNZToString(req), prnsToString(principals), lastDenyingACElem.desc))
 	}
 	return policy == ACPolicy_Allow
-}
+}f
 
 var defaultACL = ACL{
 	{
