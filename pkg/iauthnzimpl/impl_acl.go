@@ -31,7 +31,7 @@ func (acl ACL) IsAllowed(principals []iauthnz.Principal, req iauthnz.AuthzReques
 	}
 	return policy == ACPolicy_Allow
 }f
-
+cvcvc
 var defaultACL = ACL{
 	{
 		desc: "null auth policy",
