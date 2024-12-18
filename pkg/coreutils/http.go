@@ -40,8 +40,8 @@ func GetCommandResponse(ctx context.Context, requestSender IRequestSender, req i
 		body = elem.(string)
 	}
 	if *responseErr != nil {
-		// notest
-		panic("unexpected response error after elems: " + (*responseErr).Error())
+		cmdResp.SysError = (*responseErr).(SysError)
+		return cmdResp.SysError.HTTPStatus, cmdResp, nil
 	}
 	if err = json.Unmarshal([]byte(body), &cmdResp); err != nil {
 		// notest

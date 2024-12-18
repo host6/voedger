@@ -62,7 +62,7 @@ func createRequest(reqMethod string, req *http.Request, rw http.ResponseWriter, 
 }
 
 func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan any, responseErr *error, onSendFailed func()) {
-	sendSuccess := false
+	sendSuccess := true
 	defer func() {
 		if requestCtx.Err() != nil {
 			if onRequestCtxClosed != nil {
@@ -78,6 +78,7 @@ func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan 
 		}
 	}()
 	elemsCount := 0
+	closer := ""
 	for elem := range responseCh {
 		// http client disconnected -> ErrNoConsumer on IMultiResponseSender.SendElement() -> QP will call Close()
 		if requestCtx.Err() != nil {
@@ -90,9 +91,10 @@ func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan 
 				cmdResponseStr = strings.TrimPrefix(cmdResponseStr, "{")
 				cmdResponseStr = strings.TrimSuffix(cmdResponseStr, "}")
 				sendSuccess = writeResponse(w, cmdResponseStr)
+				continue
 			}
-
 			sendSuccess = writeResponse(w, `"sections":[{"type":"","elements":[`)
+			closer = "]}]"
 		} else {
 			sendSuccess = writeResponse(w, ",")
 		}
@@ -110,6 +112,11 @@ func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan 
 			return
 		}
 		elemsCount++
+	}
+	if len(closer) > 0 {
+		if sendSuccess = writeResponse(w, closer); !sendSuccess {
+			return
+		}
 	}
 	if *responseErr != nil {
 		if elemsCount > 0 {

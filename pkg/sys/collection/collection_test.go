@@ -38,7 +38,6 @@ import (
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/vvm/engines"
-	ibus "github.com/voedger/voedger/staging/src/github.com/untillpro/airs-ibus"
 )
 
 var cocaColaDocID istructs.RecordID
@@ -500,7 +499,6 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
 	queryProcessor := queryprocessor.ProvideServiceFactory()(
 		serviceChannel,
-		func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable { return out },
 		appParts,
 		maxPrepareQueries,
 		imetrics.Provide(), "vvm", authn, authz, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
@@ -616,9 +614,8 @@ func TestBasicUsage_QueryFunc_CDoc(t *testing.T) {
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.TestTokensJWT()
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
-	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable {
-		return out
-	}, appParts, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
+	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, appParts, maxPrepareQueries, imetrics.Provide(),
+		"vvm", authn, authz, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
 
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
@@ -735,9 +732,8 @@ func TestBasicUsage_State(t *testing.T) {
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.TestTokensJWT()
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
-	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable {
-		return out
-	}, appParts, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
+	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, appParts, maxPrepareQueries, imetrics.Provide(),
+		"vvm", authn, authz, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
 
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
@@ -904,13 +900,13 @@ func TestState_withAfterArgument(t *testing.T) {
 	authz := iauthnzimpl.NewDefaultAuthorizer()
 	tokens := itokensjwt.TestTokensJWT()
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
-	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, func(ctx context.Context, sender ibus.ISender) queryprocessor.IResultSenderClosable {
-		return out
-	}, appParts, maxPrepareQueries, imetrics.Provide(), "vvm", authn, authz, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
+	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, appParts, maxPrepareQueries, imetrics.Provide(),
+		"vvm", authn, authz, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
 
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
+	coreutils.NewIRequestSender(coreutils.MockTime, coreutils.GetTestBusTimeout(), )
 	serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, nil, []byte(`{"args":{"After":5},"elements":[{"fields":["State"]}]}`),
 		qNameQueryState, "", sysToken)
 	<-out.done
