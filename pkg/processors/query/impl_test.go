@@ -141,6 +141,9 @@ func TestBasicUsage_RowsProcessorFactory(t *testing.T) {
 	}
 
 	result := ""
+	reponder := coreutils.NewIRequestSender(coreutils.MockTime, coreutils.SendTimeout(coreutils.GetTestBusTimeout()),
+		func(requestCtx context.Context, request ibus.Request, responder coreutils.IResponder) {})
+
 	rs := testResultSenderClosable{
 		startArraySection: func(sectionType string, path []string) {},
 		sendElement: func(name string, element interface{}) (err error) {
