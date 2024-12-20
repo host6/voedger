@@ -73,10 +73,10 @@ func TestBasicUsage_RowsProcessorFactory(t *testing.T) {
 	s := &mockState{}
 	s.
 		On("KeyBuilder", sys.Storage_Record, appdef.NullQName).Return(skb).
-		// On("MustExist", mock.Anything).Return(department("Soft drinks")).Once().
-		On("MustExist", mock.Anything).Return(department("Alcohol drinks")).Once()
-		// On("MustExist", mock.Anything).Return(department("Alcohol drinks")).Once().
-		// On("MustExist", mock.Anything).Return(department("Sweet")).Once()
+		On("MustExist", mock.Anything).Return(department("Soft drinks")).Once().
+		On("MustExist", mock.Anything).Return(department("Alcohol drinks")).Once().
+		On("MustExist", mock.Anything).Return(department("Alcohol drinks")).Once().
+		On("MustExist", mock.Anything).Return(department("Sweet")).Once()
 
 	var (
 		appDef     appdef.IAppDef
@@ -141,29 +141,24 @@ func TestBasicUsage_RowsProcessorFactory(t *testing.T) {
 	}
 
 	result := ""
-	canCloseRowsProcessor := make(chan interface{})
 
 	rowsProcessorErrCh := make(chan error, 1)
 	requestSender := coreutils.NewIRequestSender(coreutils.MockTime, coreutils.SendTimeout(coreutils.GetTestBusTimeout()), func(requestCtx context.Context, request ibus.Request, responder coreutils.IResponder) {
-		processor, senderGetter := ProvideRowsProcessorFactory()(context.Background(), appDef, s, params,
-			resultMeta, responder, &testMetrics{}, rowsProcessorErrCh)
+		go func() {
+			// SendToBus op will send to the respCh chan so let's handle in a separate goroutine
+			processor, senderGetter := ProvideRowsProcessorFactory()(context.Background(), appDef, s, params,
+				resultMeta, responder, &testMetrics{}, rowsProcessorErrCh)
 
-		// require.NoError(processor.SendAsync(work(1, "Cola", 10)))
-		require.NoError(processor.SendAsync(work(3, "White wine", 20)))
-		// require.NoError(processor.SendAsync(work(2, "Amaretto", 20)))
-		// require.NoError(processor.SendAsync(work(4, "Cake", 40)))
-		<-canCloseRowsProcessor
-		processor.Close()
-		select {
-		case err := <-rowsProcessorErrCh:
-			t.Fatal(err)
-		default:
-		}
-		senderGetter().(coreutils.IResponseSenderCloseable).Close(nil)
+			require.NoError(processor.SendAsync(work(1, "Cola", 10)))
+			require.NoError(processor.SendAsync(work(3, "White wine", 20)))
+			require.NoError(processor.SendAsync(work(2, "Amaretto", 20)))
+			require.NoError(processor.SendAsync(work(4, "Cake", 40)))
+			processor.Close()
+			senderGetter().(coreutils.IResponseSenderCloseable).Close(nil)
+		}()
 	})
 	responseCh, respMeta, responseErr, err := requestSender.SendRequest(context.Background(), ibus.Request{})
 	require.NoError(err)
-	close(canCloseRowsProcessor)
 	require.Equal(coreutils.ApplicationJSON, respMeta.ContentType)
 	require.Equal(http.StatusOK, respMeta.StatusCode)
 	for elem := range responseCh {
@@ -172,6 +167,11 @@ func TestBasicUsage_RowsProcessorFactory(t *testing.T) {
 		result = string(bb)
 	}
 	require.NoError(*responseErr)
+	select {
+	case err := <-rowsProcessorErrCh:
+		t.Fatal(err)
+	default:
+	}
 
 	require.Equal(`[[[3,"White wine","Alcohol drinks"]]]`, result)
 
@@ -362,7 +362,6 @@ func deployTestAppWithSecretToken(require *require.Assertions,
 
 func TestBasicUsage_ServiceFactory(t *testing.T) {
 	require := require.New(t)
-	// done := make(chan interface{})
 	result := ""
 	body := []byte(`{
 						"args":{"from":1257894000,"till":2257894000},
@@ -378,19 +377,6 @@ func TestBasicUsage_ServiceFactory(t *testing.T) {
 						"startFrom":1
 					}`)
 	serviceChannel := make(iprocbus.ServiceChannel)
-	// rs := testResultSenderClosable{
-	// 	startArraySection: func(sectionType string, path []string) {},
-	// 	sendElement: func(name string, element interface{}) (err error) {
-	// 		bb, err := json.Marshal(element)
-	// 		require.NoError(err)
-	// 		result = string(bb)
-	// 		return nil
-	// 	},
-	// 	close: func(err error) {
-	// 		require.NoError(err)
-	// 		close(done)
-	// 	},
-	// }
 
 	metrics := imetrics.Provide()
 	metricNames := make([]string, 0)
@@ -467,38 +453,27 @@ func TestRawMode(t *testing.T) {
 	})
 
 	result := ""
-	// rs := testResultSenderClosable{
-	// 	startArraySection: func(sectionType string, path []string) {},
-	// 	sendElement: func(name string, element interface{}) (err error) {
-	// 		bb, err := json.Marshal(element)
-	// 		result = string(bb)
-	// 		return err
-	// 	},
-	// 	close: func(err error) {},
-	// }
 	rowsProcessorErrCh := make(chan error, 1)
 	requestSender := coreutils.NewIRequestSender(coreutils.MockTime, coreutils.SendTimeout(coreutils.GetTestBusTimeout()), func(requestCtx context.Context, request ibus.Request, responder coreutils.IResponder) {
-		processor, senderGetter := ProvideRowsProcessorFactory()(context.Background(), appDef, &mockState{},
-			queryParams{}, resultMeta, responder, &testMetrics{}, rowsProcessorErrCh)
+		go func() {
+			// SendToBus op will send to the respCh chan so let's handle in a separate goroutine
+			processor, senderGetter := ProvideRowsProcessorFactory()(context.Background(), appDef, &mockState{},
+				queryParams{}, resultMeta, responder, &testMetrics{}, rowsProcessorErrCh)
 
-		require.NoError(processor.SendAsync(rowsWorkpiece{
-			object: &coreutils.TestObject{
-				Data: map[string]interface{}{
-					processors.Field_RawObject_Body: `[accepted]`,
+			require.NoError(processor.SendAsync(rowsWorkpiece{
+				object: &coreutils.TestObject{
+					Data: map[string]interface{}{
+						processors.Field_RawObject_Body: `[accepted]`,
+					},
 				},
-			},
-			outputRow: &outputRow{
-				keyToIdx: map[string]int{rootDocument: 0},
-				values:   make([]interface{}, 1),
-			},
-		}))
-		processor.Close()
-		select {
-		case err := <-rowsProcessorErrCh:
-			t.Fatal(err)
-		default:
-		}
-		senderGetter().(coreutils.IResponseSenderCloseable).Close(nil)
+				outputRow: &outputRow{
+					keyToIdx: map[string]int{rootDocument: 0},
+					values:   make([]interface{}, 1),
+				},
+			}))
+			processor.Close()
+			senderGetter().(coreutils.IResponseSenderCloseable).Close(nil)
+		}()
 	})
 
 	responseCh, respMeta, responseErr, err := requestSender.SendRequest(context.Background(), ibus.Request{})
@@ -511,6 +486,11 @@ func TestRawMode(t *testing.T) {
 		result = string(bb)
 	}
 	require.NoError(*responseErr)
+	select {
+	case err := <-rowsProcessorErrCh:
+		t.Fatal(err)
+	default:
+	}
 
 	require.Equal(`[[["[accepted]"]]]`, result)
 }
@@ -1153,15 +1133,7 @@ func Test_nearlyEqual(t *testing.T) {
 
 func TestRateLimiter(t *testing.T) {
 	require := require.New(t)
-	// errs := make(chan error)
 	serviceChannel := make(iprocbus.ServiceChannel)
-	// rs := testResultSenderClosable{
-	// 	startArraySection: func(sectionType string, path []string) {},
-	// 	sendElement:       func(name string, element interface{}) (err error) { return nil },
-	// 	close: func(err error) {
-	// 		errs <- err
-	// 	},
-	// }
 
 	qNameMyFuncParams := appdef.NewQName(appdef.SysPackage, "myFuncParams")
 	qNameMyFuncResults := appdef.NewQName(appdef.SysPackage, "results")
@@ -1213,45 +1185,25 @@ func TestRateLimiter(t *testing.T) {
 		respCh, respMeta, respErr, err := requestSender.SendRequest(context.Background(), ibus.Request{})
 		require.NoError(err)
 		require.Equal(coreutils.ApplicationJSON, respMeta.ContentType)
-		require.Equal(http.StatusOK, respMeta.StatusCode)
+
 		for range respCh {
 		}
 		if i != 2 {
 			// first 2 - ok
 			require.NoError(*respErr)
+			require.Equal(http.StatusOK, respMeta.StatusCode)
 		} else {
 			// 3rd exceeds the limit - not often than twice per minute
 			require.Error(*respErr)
+			require.Equal(http.StatusTooManyRequests, respMeta.StatusCode)
 		}
 	}
-
-	// execute query
-	// // first 2 - ok
-	// serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, nil, body, qName, "127.0.0.1", systemToken)
-	// require.NoError(<-errs)
-	// serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, nil, body, qName, "127.0.0.1", systemToken)
-	// require.NoError(<-errs)
-
-	// // 3rd exceeds the limit - not often than twice per minute
-	// serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, nil, body, qName, "127.0.0.1", systemToken)
-	// require.Error(<-errs)
 }
 
 func TestAuthnz(t *testing.T) {
 	require := require.New(t)
-	// errs := make(chan error)
 	body := []byte(`{}`)
 	serviceChannel := make(iprocbus.ServiceChannel)
-	// rs := testResultSenderClosable{
-	// 	startArraySection: func(sectionType string, path []string) {},
-	// 	sendElement: func(name string, element interface{}) (err error) {
-	// 		t.Fail()
-	// 		return nil
-	// 	},
-	// 	close: func(err error) {
-	// 		errs <- err
-	// 	},
-	// }
 
 	metrics := imetrics.Provide()
 
@@ -1271,12 +1223,11 @@ func TestAuthnz(t *testing.T) {
 		requestSender := coreutils.NewIRequestSender(coreutils.MockTime, coreutils.SendTimeout(coreutils.GetTestBusTimeout()), func(requestCtx context.Context, request ibus.Request, responder coreutils.IResponder) {
 			serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, responder, body, qNameFunction, "127.0.0.1", "")
 		})
-		// serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, nil, body, qNameFunction, "127.0.0.1", "")
 		respCh, respMeta, respErr, err := requestSender.SendRequest(context.Background(), ibus.Request{})
 
 		require.NoError(err)
 		require.Equal(coreutils.ApplicationJSON, respMeta.ContentType)
-		require.Equal(http.StatusOK, respMeta.StatusCode)
+		require.Equal(http.StatusForbidden, respMeta.StatusCode)
 		for range respCh {
 		}
 		var se coreutils.SysError
@@ -1291,11 +1242,10 @@ func TestAuthnz(t *testing.T) {
 		requestSender := coreutils.NewIRequestSender(coreutils.MockTime, coreutils.SendTimeout(coreutils.GetTestBusTimeout()), func(requestCtx context.Context, request ibus.Request, responder coreutils.IResponder) {
 			serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, responder, body, qNameFunction, "127.0.0.1", systemToken)
 		})
-		// serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, nil, body, qNameFunction, "127.0.0.1", "")
 		respCh, respMeta, respErr, err := requestSender.SendRequest(context.Background(), ibus.Request{})
 		require.NoError(err)
 		require.Equal(coreutils.ApplicationJSON, respMeta.ContentType)
-		require.Equal(http.StatusOK, respMeta.StatusCode)
+		require.Equal(http.StatusUnauthorized, respMeta.StatusCode)
 		for range respCh {
 		}
 		var se coreutils.SysError
@@ -1306,13 +1256,12 @@ func TestAuthnz(t *testing.T) {
 	t.Run("token provided, query a denied func -> 403 forbidden", func(t *testing.T) {
 		token := getTestToken(appTokens, wsID)
 		requestSender := coreutils.NewIRequestSender(coreutils.MockTime, coreutils.SendTimeout(coreutils.GetTestBusTimeout()), func(requestCtx context.Context, request ibus.Request, responder coreutils.IResponder) {
-			serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, nil, body, qNameQryDenied, "127.0.0.1", token)
+			serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, responder, body, qNameQryDenied, "127.0.0.1", token)
 		})
-		// serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, nil, body, qNameFunction, "127.0.0.1", "")
 		respCh, respMeta, respErr, err := requestSender.SendRequest(context.Background(), ibus.Request{})
 		require.NoError(err)
 		require.Equal(coreutils.ApplicationJSON, respMeta.ContentType)
-		require.Equal(http.StatusOK, respMeta.StatusCode)
+		require.Equal(http.StatusForbidden, respMeta.StatusCode)
 		for range respCh {
 		}
 		var se coreutils.SysError

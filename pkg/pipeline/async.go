@@ -5,7 +5,6 @@
 package pipeline
 
 import (
-	"log"
 	"time"
 )
 
@@ -18,8 +17,6 @@ func puller_async(wo *WiredOperator) {
 	for open {
 		select {
 		case work, open = <-wo.Stdin:
-
-			log.Println(wo.name)
 
 			if !open {
 				continue
