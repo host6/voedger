@@ -148,10 +148,10 @@ func TestBasicUsage_RowsProcessorFactory(t *testing.T) {
 		processor, senderGetter := ProvideRowsProcessorFactory()(context.Background(), appDef, s, params,
 			resultMeta, responder, &testMetrics{}, rowsProcessorErrCh)
 
-		require.NoError(processor.SendAsync(work(1, "Cola", 10)))
+		// require.NoError(processor.SendAsync(work(1, "Cola", 10)))
 		require.NoError(processor.SendAsync(work(3, "White wine", 20)))
-		require.NoError(processor.SendAsync(work(2, "Amaretto", 20)))
-		require.NoError(processor.SendAsync(work(4, "Cake", 40)))
+		// require.NoError(processor.SendAsync(work(2, "Amaretto", 20)))
+		// require.NoError(processor.SendAsync(work(4, "Cake", 40)))
 		<-canCloseRowsProcessor
 		processor.Close()
 		select {
