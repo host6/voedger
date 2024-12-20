@@ -1319,25 +1319,6 @@ func (w testWorkpiece) Release() {
 	}
 }
 
-type testResultSenderClosable struct {
-	startArraySection func(sectionType string, path []string)
-	objectSection     func(sectionType string, path []string, element interface{}) (err error)
-	sendElement       func(name string, element interface{}) (err error)
-	close             func(err error)
-}
-
-func (s testResultSenderClosable) StartArraySection(sectionType string, path []string) {
-	s.startArraySection(sectionType, path)
-}
-func (s testResultSenderClosable) StartMapSection(string, []string) { panic("implement me") }
-func (s testResultSenderClosable) ObjectSection(sectionType string, path []string, element interface{}) (err error) {
-	return s.objectSection(sectionType, path, element)
-}
-func (s testResultSenderClosable) SendElement(name string, element interface{}) (err error) {
-	return s.sendElement(name, element)
-}
-func (s testResultSenderClosable) Close(err error) { s.close(err) }
-
 type testMetrics struct{}
 
 func (m *testMetrics) Increase(string, float64) {}

@@ -22,16 +22,6 @@ import (
 func TestWrongTypes(t *testing.T) {
 	require := require.New(t)
 	serviceChannel := make(iprocbus.ServiceChannel)
-	// errs := make(chan error)
-	// resultSenderClosableFactory := func(ctx context.Context, sender ibus.ISender) IResultSenderClosable {
-	// 	return &testResultSenderClosable{
-	// 		startArraySection: func(sectionType string, path []string) { t.Fatal() },
-	// 		sendElement:       func(name string, element interface{}) (err error) { t.Fatal(); return nil },
-	// 		close: func(err error) {
-	// 			errs <- err
-	// 		},
-	// 	}
-	// }
 	done := make(chan struct{})
 	authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs)
 	authz := iauthnzimpl.NewDefaultAuthorizer()
@@ -280,15 +270,12 @@ func TestWrongTypes(t *testing.T) {
 			requestSender := coreutils.NewIRequestSender(coreutils.MockTime, coreutils.SendTimeout(coreutils.GetTestBusTimeout()), func(requestCtx context.Context, request ibus.Request, responder coreutils.IResponder) {
 				serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, responder, []byte(test.body), qNameFunction, "", sysToken)
 			})
-			// serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, nil, body, qNameFunction, "127.0.0.1", "")
 			respCh, respMeta, respErr, err := requestSender.SendRequest(context.Background(), ibus.Request{})
 			require.NoError(err)
 			require.Equal(coreutils.ApplicationJSON, respMeta.ContentType)
-			require.Equal(http.StatusOK, respMeta.StatusCode)
+			require.Equal(http.StatusBadRequest, respMeta.StatusCode)
 			for range respCh {
 			}
-			// qm := NewQueryMessage(context.Background(), appName, partID, wsID, nil, []byte(test.body), qNameFunction, "", sysToken)
-			// serviceChannel <- qm
 			err = *respErr
 			require.Contains(err.Error(), test.err, test.name)
 		})

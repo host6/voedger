@@ -19,29 +19,22 @@ func TestSendToBusOperator_DoAsync(t *testing.T) {
 	require := require.New(t)
 	errCh := make(chan error, 1)
 	requestSender := coreutils.NewIRequestSender(coreutils.MockTime, coreutils.SendTimeout(coreutils.GetTestBusTimeout()), func(requestCtx context.Context, request ibus.Request, responder coreutils.IResponder) {
-		operator := SendToBusOperator{
-			responder: responder,
-			// rs: testResultSenderClosable{
-			// 	sendElement: func(name string, element interface{}) (err error) {
-			// 		require.Equal("hello world", element.([]interface{})[0])
-			// 		return nil
-			// 	},
-			// 	startArraySection: func(sectionType string, path []string) {
-			// 		counter++
-			// 	},
-			// },
-			metrics: &testMetrics{},
-			errCh:   errCh,
-		}
-		work := rowsWorkpiece{outputRow: &testOutputRow{values: []interface{}{"hello world"}}}
+		go func() {
+			operator := SendToBusOperator{
+				responder: responder,
+				metrics:   &testMetrics{},
+				errCh:     errCh,
+			}
+			work := rowsWorkpiece{outputRow: &testOutputRow{values: []interface{}{"hello world"}}}
 
-		outWork, err := operator.DoAsync(context.Background(), work)
-		_, _ = operator.DoAsync(context.Background(), work)
+			outWork, err := operator.DoAsync(context.Background(), work)
+			_, _ = operator.DoAsync(context.Background(), work)
 
-		require.Equal(work, outWork)
-		require.NoError(err)
+			require.Equal(work, outWork)
+			require.NoError(err)
 
-		operator.sender.(coreutils.IResponseSenderCloseable).Close(nil)
+			operator.sender.(coreutils.IResponseSenderCloseable).Close(nil)
+		}()
 	})
 
 	respCh, respMeta, respErr, err := requestSender.SendRequest(context.Background(), ibus.Request{})
@@ -50,7 +43,7 @@ func TestSendToBusOperator_DoAsync(t *testing.T) {
 	require.Equal(http.StatusOK, respMeta.StatusCode)
 	result := []string{}
 	for elem := range respCh {
-		result = append(result, elem.(string))
+		result = append(result, elem.([]interface{})[0].(string))
 	}
 	require.NoError(*respErr)
 	require.EqualValues([]string{"hello world", "hello world"}, result)
