@@ -61,7 +61,7 @@ func createRequest(reqMethod string, req *http.Request, rw http.ResponseWriter, 
 	return res, err == nil
 }
 
-func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan any, responseErr *error, onSendFailed func()) {
+func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan any, responseErr *error, contentType string, onSendFailed func()) {
 	sendSuccess := true
 	defer func() {
 		if requestCtx.Err() != nil {
@@ -87,20 +87,22 @@ func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan 
 			return
 		}
 		if elemsCount == 0 {
-			if cmdResponseStr, isCmdResp := elem.(string); isCmdResp {
-				cmdResponseStr = strings.TrimPrefix(cmdResponseStr, "{")
-				cmdResponseStr = strings.TrimSuffix(cmdResponseStr, "}")
-				sendSuccess = writeResponse(w, cmdResponseStr)
-				continue
+			if contentType == coreutils.TextPlain {
+				sendSuccess = writeResponse(w, elem.(string))
+			} else {
+				sendSuccess = writeResponse(w, `{"sections":[{"type":"","elements":[`)
+				closer = "]}]"
 			}
-			sendSuccess = writeResponse(w, `"sections":[{"type":"","elements":[`)
-			closer = "]}]"
 		} else {
 			sendSuccess = writeResponse(w, ",")
 		}
 
 		if !sendSuccess {
 			return
+		}
+
+		if contentType == coreutils.TextPlain {
+			continue
 		}
 
 		elemBytes, err := json.Marshal(&elem)
@@ -120,98 +122,99 @@ func reply(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan 
 	}
 	if *responseErr != nil {
 		if elemsCount > 0 {
-			if sendSuccess = writeResponse(w, ","); !sendSuccess {
-				return
-			}
+			sendSuccess = writeResponse(w, ",")
+		} else {
+			sendSuccess = writeResponse(w, "{")
+		}
+		if !sendSuccess {
+			return
 		}
 		var jsonableErr interface{ ToJSON() string }
 		if errors.As(*responseErr, &jsonableErr) {
 			jsonErr := jsonableErr.ToJSON()
 			jsonErr = strings.TrimPrefix(jsonErr, "{")
-			jsonErr = strings.TrimSuffix(jsonErr, "}")
 			sendSuccess = writeResponse(w, jsonErr)
 		} else {
 			sendSuccess = writeResponse(w, fmt.Sprintf(`"status":%d,"errorDescription":"%s"}`, http.StatusInternalServerError, *responseErr))
 		}
-	}
-	if sendSuccess {
-		sendSuccess = writeResponse(w, "}")
-	}
-}
-
-func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, marshaledElems <-chan string, secErr *error, onSendFailed func()) {
-	sendSuccess := false
-	defer func() {
-		if requestCtx.Err() != nil {
-			if onRequestCtxClosed != nil {
-				onRequestCtxClosed()
-			}
-			log.Println("client disconnected during sections sending")
-			return
-		}
-		if !sendSuccess {
-			onSendFailed()
-			for range marshaledElems {
-			}
-		}
-	}()
-	elemsCount := 0
-	for marshaledElem := range marshaledElems {
-		// http client disconnected -> ErrNoConsumer on IMultiResponseSender.SendElement() -> QP will call Close()
-		if requestCtx.Err() != nil {
-			// possible: ctx is done but on select {sections<-section, <-ctx.Done()} write to sections channel is triggered.
-			// ctx.Done() must have the priority
-			return
-		}
-		if elemsCount == 0 {
-			sendSuccess = initResponse(w, coreutils.ApplicationJSON, http.StatusOK) && writeResponse(w, `"sections":[{"type":"","elements":[`)
-		} else {
-			sendSuccess = writeResponse(w, ",")
-		}
-
-		if !sendSuccess {
-			return
-		}
-
-		if sendSuccess = writeResponse(w, marshaledElem); !sendSuccess {
-			return
-		}
-		elemsCount++
-	}
-	if elemsCount > 0 {
-		if sendSuccess = writeResponse(w, "]}]"); !sendSuccess {
-			return
-		}
-	}
-	if *secErr != nil {
-		if elemsCount == 0 {
-			// no elements -> let's see which status code to send
-			headerStatusCode := http.StatusInternalServerError
-			var sysErr coreutils.SysError
-			if errors.As(*secErr, &sysErr) {
-				headerStatusCode = sysErr.HTTPStatus
-			}
-			sendSuccess = initResponse(w, coreutils.ApplicationJSON, headerStatusCode)
-		} else {
-			sendSuccess = writeResponse(w, ",")
-		}
-		if !sendSuccess {
-			return
-		}
-		var jsonableErr interface{ ToJSON() string }
-		if errors.As(*secErr, &jsonableErr) {
-			jsonErr := jsonableErr.ToJSON()
-			jsonErr = strings.TrimPrefix(jsonErr, "{")
-			jsonErr = strings.TrimSuffix(jsonErr, "}")
-			sendSuccess = writeResponse(w, jsonErr)
-		} else {
-			sendSuccess = writeResponse(w, fmt.Sprintf(`"status":%d,"errorDescription":"%s"}`, http.StatusInternalServerError, *secErr))
-		}
-	}
-	if sendSuccess {
-		sendSuccess = writeResponse(w, "}")
+	} else if sendSuccess && contentType == coreutils.ApplicationJSON && elemsCount == 0 {
+		sendSuccess = writeResponse(w, "{}")
 	}
 }
+
+// func writeSectionedResponse_(requestCtx context.Context, w http.ResponseWriter, marshaledElems <-chan string, secErr *error, onSendFailed func()) {
+// 	sendSuccess := false
+// 	defer func() {
+// 		if requestCtx.Err() != nil {
+// 			if onRequestCtxClosed != nil {
+// 				onRequestCtxClosed()
+// 			}
+// 			log.Println("client disconnected during sections sending")
+// 			return
+// 		}
+// 		if !sendSuccess {
+// 			onSendFailed()
+// 			for range marshaledElems {
+// 			}
+// 		}
+// 	}()
+// 	elemsCount := 0
+// 	for marshaledElem := range marshaledElems {
+// 		// http client disconnected -> ErrNoConsumer on IMultiResponseSender.SendElement() -> QP will call Close()
+// 		if requestCtx.Err() != nil {
+// 			// possible: ctx is done but on select {sections<-section, <-ctx.Done()} write to sections channel is triggered.
+// 			// ctx.Done() must have the priority
+// 			return
+// 		}
+// 		if elemsCount == 0 {
+// 			sendSuccess = initResponse(w, coreutils.ApplicationJSON, http.StatusOK) && writeResponse(w, `"sections":[{"type":"","elements":[`)
+// 		} else {
+// 			sendSuccess = writeResponse(w, ",")
+// 		}
+
+// 		if !sendSuccess {
+// 			return
+// 		}
+
+// 		if sendSuccess = writeResponse(w, marshaledElem); !sendSuccess {
+// 			return
+// 		}
+// 		elemsCount++
+// 	}
+// 	if elemsCount > 0 {
+// 		if sendSuccess = writeResponse(w, "]}]"); !sendSuccess {
+// 			return
+// 		}
+// 	}
+// 	if *secErr != nil {
+// 		if elemsCount == 0 {
+// 			// no elements -> let's see which status code to send
+// 			headerStatusCode := http.StatusInternalServerError
+// 			var sysErr coreutils.SysError
+// 			if errors.As(*secErr, &sysErr) {
+// 				headerStatusCode = sysErr.HTTPStatus
+// 			}
+// 			sendSuccess = initResponse(w, coreutils.ApplicationJSON, headerStatusCode)
+// 		} else {
+// 			sendSuccess = writeResponse(w, ",")
+// 		}
+// 		if !sendSuccess {
+// 			return
+// 		}
+// 		var jsonableErr interface{ ToJSON() string }
+// 		if errors.As(*secErr, &jsonableErr) {
+// 			jsonErr := jsonableErr.ToJSON()
+// 			// will not eliminate { and } because currently router will send not initial "{" and final "}" if the first element is string
+// 			// that is done for backward compatibility for handling text/plain responses
+// 			sendSuccess = writeResponse(w, jsonErr)
+// 		} else {
+// 			sendSuccess = writeResponse(w, fmt.Sprintf(`"status":%d,"errorDescription":"%s"}`, http.StatusInternalServerError, *secErr))
+// 		}
+// 	}
+// 	if sendSuccess {
+// 		sendSuccess = writeResponse(w, "}")
+// 	}
+// }
 
 // func writeSectionedResponse(requestCtx context.Context, w http.ResponseWriter, marshaledElems <-chan string, secErr *error, onSendFailed func()) {
 // 	ok := true
@@ -314,11 +317,10 @@ func discardSection(iSection ibus.ISection, requestCtx context.Context) {
 	}
 }
 
-func initResponse(w http.ResponseWriter, contentType string, statusCode int) bool {
+func initResponse(w http.ResponseWriter, contentType string, statusCode int) {
 	w.Header().Set(coreutils.ContentType, contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(statusCode)
-	return writeResponse(w, "{")
 }
 
 func writeSection(w http.ResponseWriter, isec ibus.ISection, requestCtx context.Context) bool {

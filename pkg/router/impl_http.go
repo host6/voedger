@@ -225,9 +225,8 @@ func RequestHandler(requestSender coreutils.IRequestSender, numsAppsWorkspaces m
 		// 	writeResponse(resp, string(res.Data))
 		// 	return
 		// }
-		if initResponse(resp, responseMeta.ContentType, responseMeta.StatusCode) {
-			reply(requestCtx, resp, responseCh, responseErr, cancel)
-		}
+		initResponse(resp, responseMeta.ContentType, responseMeta.StatusCode)
+		reply(requestCtx, resp, responseCh, responseErr, responseMeta.ContentType, cancel)
 	}
 }
 
