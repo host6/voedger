@@ -1,1 +1,3 @@
 Resolves issue 'roles from toke are not emitted on request in the user profile'
+
+Resolves #3100 roles from toke are not emitted on request in the user profile
