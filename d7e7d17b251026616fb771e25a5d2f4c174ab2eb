@@ -1,1 +1,3 @@
 Resolves issue 'CP: ACL rules for CUDs emmited by a command are not checked'
+
+Resolves #3146 CP: ACL rules for CUDs emmited by a command are not checked
