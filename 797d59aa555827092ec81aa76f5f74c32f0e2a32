@@ -1,1 +1,3 @@
 Resolves issue 'proc/cmd: IsOperationAllowed(Activate/Deactivate) for CUDs'
+
+Resolves #3129 proc/cmd: IsOperationAllowed(Activate/Deactivate) for CUDs
