@@ -1,1 +1,3 @@
 Resolves issue 'ACL: log principals on !IsOperationAllowed() in CP and QP'
+
+Resolves #3169 ACL: log principals on !IsOperationAllowed() in CP and QP
