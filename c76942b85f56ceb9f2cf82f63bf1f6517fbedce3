@@ -1,1 +1,3 @@
 Resolves issue 'CP: expose current user principal name in the command processor workpiece'
+
+Resolves #3163 CP: expose current user principal name in the command processor workpiece
