@@ -1,1 +1,3 @@
 Resolves issue 'IsOperationAllowed: deny -> additionally log wsid'
+
+Resolves #3191 IsOperationAllowed: deny -> additionally log wsid
