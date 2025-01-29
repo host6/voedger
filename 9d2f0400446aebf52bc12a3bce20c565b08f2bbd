@@ -1,1 +1,3 @@
 Resolves issue 'ACL: return back old IsOperationAllowed'
+
+Resolves #3199 ACL: return back old IsOperationAllowed
