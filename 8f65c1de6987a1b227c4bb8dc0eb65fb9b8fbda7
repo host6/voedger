@@ -1,1 +1,3 @@
 Resolves issue 'old ACL: skip OperationKind_Select checking'
+
+Resolves #3202 old ACL: skip OperationKind_Select checking
