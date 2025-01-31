@@ -1,1 +1,3 @@
 Resolves issue 'fix `sse message sent` verbose log'
+
+Resolves #3213 fix `sse message sent` verbose log
