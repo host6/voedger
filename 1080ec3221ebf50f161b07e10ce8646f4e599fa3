@@ -1,1 +1,3 @@
 Resolves issue 'pseudoWSID->appWSID conversion VVM -> back to router (rollback #3188)'
+
+Resolves #3232 pseudoWSID->appWSID conversion VVM -> back to router (rollback #3188)
