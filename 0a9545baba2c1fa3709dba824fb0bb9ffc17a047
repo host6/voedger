@@ -1,1 +1,3 @@
 Resolves issue 'implement result authz on q.sys.SqlQuery'
+
+Resolves #3150 implement result authz on q.sys.SqlQuery
