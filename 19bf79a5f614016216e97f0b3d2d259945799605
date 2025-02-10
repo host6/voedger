@@ -1,1 +1,3 @@
 Resolves issue 'CUDs: unexisting null value fields are dropped'
+
+Resolves #3246 CUDs: unexisting null value fields are dropped
