@@ -1,1 +1,3 @@
 Resolves issue 'VIT: expose `VITConfigOptFunc` type'
+
+Resolves #3248 VIT: expose `VITConfigOptFunc` type
