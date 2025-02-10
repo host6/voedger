@@ -5,6 +5,9 @@
 package vvm
 
 import (
+	"log"
+	"time"
+
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appdef/builder"
 	"github.com/voedger/voedger/pkg/appparts"
@@ -41,6 +44,7 @@ func (ab VVMAppsBuilder) BuildAppsArtefacts(apis builtinapps.APIs, emptyCfgs App
 	appsEPs map[appdef.AppQName]extensionpoints.IExtensionPoint) (builtinAppsArtefacts BuiltInAppsArtefacts, err error) {
 	builtinAppsArtefacts.AppConfigsType = istructsmem.AppConfigsType(emptyCfgs)
 	for appQName, appBuilder := range ab {
+		start := time.Now()
 		appEPs := appsEPs[appQName]
 		adb := builder.New()
 		cfg := builtinAppsArtefacts.AppConfigsType.AddBuiltInAppConfig(appQName, adb)
@@ -65,6 +69,7 @@ func (ab VVMAppsBuilder) BuildAppsArtefacts(apis builtinapps.APIs, emptyCfgs App
 			Packages: builtInAppDef.Packages,
 		}
 		builtinAppsArtefacts.builtInAppPackages = append(builtinAppsArtefacts.builtInAppPackages, builtInAppPackages)
+		log.Println("appdef", appQName, "parsed in", time.Since(start))
 	}
 	return builtinAppsArtefacts, nil
 }

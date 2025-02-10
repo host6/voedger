@@ -7,8 +7,11 @@ package btstrp
 
 import (
 	"fmt"
+	"log"
 	"net/url"
+	"time"
 
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/coreutils"
@@ -22,12 +25,12 @@ import (
 	dbcertcache "github.com/voedger/voedger/pkg/vvm/db_cert_cache"
 )
 
-func Bootstrap(federation federation.IFederation, asp istructs.IAppStructsProvider, time coreutils.ITime, appparts appparts.IAppPartitions,
+func Bootstrap(federation federation.IFederation, asp istructs.IAppStructsProvider, tm coreutils.ITime, appparts appparts.IAppPartitions,
 	clusterApp ClusterBuiltInApp, otherApps []appparts.BuiltInApp, sidecarApps []appparts.SidecarApp, itokens itokens.ITokens, storageProvider istorage.IAppStorageProvider,
 	blobberAppStoragePtr iblobstoragestg.BlobAppStoragePtr, routerAppStoragePtr dbcertcache.RouterAppStoragePtr) (err error) {
 
 	// initialize cluster app workspace, use app ws amount 0
-	if err := initClusterAppWS(asp, time); err != nil {
+	if err := initClusterAppWS(asp, tm); err != nil {
 		return err
 	}
 
@@ -60,11 +63,20 @@ func Bootstrap(federation federation.IFederation, asp istructs.IAppStructsProvid
 	}
 
 	// For each app builtInApps: deploy a builtin app
+	times := map[appdef.AppQName]time.Duration{}
 	for _, app := range otherApps {
+		start := time.Now()
 		deployAppPartitions(appparts, app, nil)
+		times[app.Name] = time.Since(start)
 	}
 	for _, app := range sidecarApps {
+		start := time.Now()
 		deployAppPartitions(appparts, app.BuiltInApp, app.ExtModuleURLs)
+		times[app.Name] = time.Since(start)
+	}
+
+	for app, dur := range times {
+		log.Println("app", app, "partitions deployed in", dur)
 	}
 
 	return nil
