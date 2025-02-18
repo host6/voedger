@@ -5,6 +5,7 @@
 package vvm
 
 import (
+	"fmt"
 	"sync"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -67,7 +68,7 @@ func (ab VVMAppsBuilder) BuildAppsArtefacts(apis builtinapps.APIs, emptyCfgs App
 		cfg.SetNumAppWorkspaces(builtInAppDef.NumAppWorkspaces)
 		cacheSchemas := builtInAppDef.CacheAppSchemASTInTests && coreutils.IsTest()
 		if err := buildAppFromPackagesFS(appQName, builtInAppDef.Packages, adb, cacheSchemas); err != nil {
-			return builtinAppsArtefacts, err
+			return builtinAppsArtefacts, fmt.Errorf("building %s from packages: %w", appQName, err)
 		}
 
 		// query IAppStructs to build IAppDef only once - on AppConfigType.prepare()

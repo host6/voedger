@@ -9,12 +9,17 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/extensionpoints"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/istructsmem"
+	"github.com/voedger/voedger/pkg/parser"
 	it "github.com/voedger/voedger/pkg/vit"
 	"github.com/voedger/voedger/pkg/vvm"
+	builtinapps "github.com/voedger/voedger/pkg/vvm/builtin"
 )
 
 func TestSidecarApps_BasicUsage(t *testing.T) {
@@ -25,7 +30,20 @@ func TestSidecarApps_BasicUsage(t *testing.T) {
 			// configure VVM to read sidecar apps from /testdata
 			cfg.DataPath = filepath.Join(wd, "testdata")
 		}),
-
+		it.WithApp(istructs.AppQName_test2_app1, func(apis builtinapps.APIs, cfg *istructsmem.AppConfigType, ep extensionpoints.IExtensionPoint) builtinapps.Def {
+			return builtinapps.Def{
+				AppDeploymentDescriptor: it.TestAppDeploymentDescriptor,
+				AppQName:                istructs.AppQName_test2_app1,
+				Packages: []parser.PackageFS{{
+					Path: "github.com/voedger/voedger/pkg/app1",
+					FS: fstest.MapFS{
+						"app.vsql": &fstest.MapFile{
+							Data: []byte(`APPLICATION app1();`),
+						},
+					},
+				}},
+			}
+		}),
 	)
 
 	vit := it.NewVIT(t, &cfg)
