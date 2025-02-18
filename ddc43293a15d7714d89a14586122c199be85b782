@@ -1,1 +1,3 @@
 Resolves issue 'panic on no apps defied in VVM cfg'
+
+Resolves #3308 panic on no apps defied in VVM cfg
