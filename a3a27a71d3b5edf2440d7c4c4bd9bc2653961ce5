@@ -1,1 +1,3 @@
 Resolves issue 'ITTLStorage must work on sysvvm keyspace'
+
+Resolves #3310 ITTLStorage must work on sysvvm keyspace
