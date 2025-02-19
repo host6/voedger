@@ -1,0 +1,1 @@
+Resolves issue 'Eliminate IRowReader.FieldNames and WithNonNilsOnly. Keep Fields() iterator only'
