@@ -1,1 +1,3 @@
 Resolves issue 'Eliminate IRowReader.FieldNames and WithNonNilsOnly. Keep Fields() iterator only'
+
+Resolves #3318 Eliminate IRowReader.FieldNames and WithNonNilsOnly. Keep Fields() iterator only
