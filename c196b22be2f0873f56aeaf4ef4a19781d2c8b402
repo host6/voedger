@@ -1,1 +1,3 @@
 Resolves issue 'fix IsOperationAllowed error on OpKind_Select for view'
+
+Resolves #3317 fix IsOperationAllowed error on OpKind_Select for view
