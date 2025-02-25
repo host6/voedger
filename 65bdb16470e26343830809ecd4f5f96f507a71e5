@@ -1,1 +1,3 @@
 Resolves issue 'do panic on VVM.Shutdown() if VVM.Launch() was not called'
+
+Resolves #3332 do panic on VVM.Shutdown() if VVM.Launch() was not called
