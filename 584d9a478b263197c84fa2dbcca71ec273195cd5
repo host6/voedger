@@ -1,1 +1,3 @@
 Resolves issue 'relocate `ITTLStorage` `vvm/storage` -> `elections`'
+
+Resolves #3362 relocate `ITTLStorage` `vvm/storage` -> `elections`
