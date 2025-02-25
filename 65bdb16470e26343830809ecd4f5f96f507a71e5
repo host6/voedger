@@ -1,0 +1,1 @@
+Resolves issue 'do panic on VVM.Shutdown() if VVM.Launch() was not called'
