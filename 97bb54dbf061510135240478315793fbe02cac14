@@ -1,1 +1,3 @@
 Resolves issue 'make TestAutomaticShutdownOnLeadershipLoss() be the single in the package'
+
+Resolves #3390 make TestAutomaticShutdownOnLeadershipLoss() be the single in the package
