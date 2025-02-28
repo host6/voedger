@@ -1,1 +1,3 @@
 Resolves issue 'respect `unused` linter'
+
+Resolves #3379 respect `unused` linter
