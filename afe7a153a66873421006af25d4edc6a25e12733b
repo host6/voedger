@@ -1,1 +1,3 @@
 Resolves issue 'Expose fields of coreutils.MockIField'
+
+Resolves #3400 Expose fields of coreutils.MockIField
