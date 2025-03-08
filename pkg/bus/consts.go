@@ -8,3 +8,8 @@ package bus
 import "time"
 
 const DefaultSendTimeout = SendTimeout(10 * time.Second)
+
+const (
+	ContentStructure_MultiRow ContentStructure = iota
+	ContentStructure_SingleObject
+)

@@ -29,7 +29,7 @@ func (o *SendToBusOperator) DoAsync(_ context.Context, work pipeline.IWorkpiece)
 		o.metrics.Increase(Metric_ExecSendSeconds, time.Since(begin).Seconds())
 	}()
 	if o.sender == nil {
-		o.sender = o.responder.InitResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+		o.sender = o.responder.InitMultiRowResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 	}
 	return work, o.sender.Send(work.(rowsWorkpiece).OutputRow().Values())
 }

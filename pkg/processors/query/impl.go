@@ -149,7 +149,7 @@ func implServiceFactory(serviceChannel iprocbus.ServiceChannel,
 					}
 					if qwork.responseSenderGetter == nil || qwork.responseSenderGetter() == nil {
 						// have an error before 200ok is sent -> send the status from the actual error
-						senderCloseable = msg.Responder().InitResponse(bus.ResponseMeta{
+						senderCloseable = msg.Responder().InitMultiRowResponse(bus.ResponseMeta{
 							ContentType: coreutils.ApplicationJSON,
 							StatusCode:  statusCode,
 						})

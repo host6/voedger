@@ -31,9 +31,12 @@ type Request struct {
 }
 
 type ResponseMeta struct {
-	ContentType string
-	StatusCode  int
+	ContentType      string
+	StatusCode       int
+	ContentStructure ContentStructure
 }
+
+type ContentStructure int
 
 type implIRequestSender struct {
 	timeout        SendTimeout
@@ -44,14 +47,16 @@ type implIRequestSender struct {
 type SendTimeout time.Duration
 
 type implIResponseSenderCloseable struct {
-	ch          chan any
-	clientCtx   context.Context
-	sendTimeout SendTimeout
-	tm          coreutils.ITime
-	resultErr   *error
+	ch             chan any
+	clientCtx      context.Context
+	sendTimeout    SendTimeout
+	tm             coreutils.ITime
+	resultErr      *error
+	isSingleObject bool
 }
 
 type implIResponder struct {
 	respSender     IResponseSenderCloseable
 	responseMetaCh chan ResponseMeta
+	isUsed         bool
 }

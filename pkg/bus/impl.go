@@ -64,6 +64,7 @@ func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req Request
 		rs.requestHandler(clientCtx, req, responder)
 	}()
 	wg.Wait()
+
 	return respSender.ch, responseMeta, respSender.resultErr, err
 }
 
@@ -104,12 +105,31 @@ func (rs *implIResponseSenderCloseable) Close(err error) {
 	close(rs.ch)
 }
 
-func (r *implIResponder) InitResponse(rm ResponseMeta) IResponseSenderCloseable {
+func (r *implIResponder) InitMultiRowResponse(rm ResponseMeta) IResponseSenderCloseable {
+	if r.isUsed {
+		panic("used already")
+	}
 	select {
 	case r.responseMetaCh <- rm:
 	default:
 		// do nothing if no consumer already.
 		// will get ErrNoConsumer on the next Send()
 	}
+	r.isUsed = true
 	return r.respSender
+}
+
+func (r *implIResponder) ReplySingleObject(rm ResponseMeta, obj any) (err error) {
+	if r.isUsed {
+		panic("used already")
+	}
+	select {
+	case r.responseMetaCh <- rm:
+		if err = r.respSender.Send(obj); err == nil {
+			r.respSender.Close(nil)
+		}
+	default:
+		return ErrNoConsumer
+	}
+	return err
 }

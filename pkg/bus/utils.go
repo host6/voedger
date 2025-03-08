@@ -42,7 +42,7 @@ func GetCommandResponse(ctx context.Context, requestSender IRequestSender, req R
 }
 
 func ReplyPlainText(responder IResponder, text string) {
-	sender := responder.InitResponse(ResponseMeta{ContentType: coreutils.TextPlain, StatusCode: http.StatusOK})
+	sender := responder.InitMultiRowResponse(ResponseMeta{ContentType: coreutils.TextPlain, StatusCode: http.StatusOK})
 	if err := sender.Send(text); err != nil {
 		logger.Error(err.Error() + ": failed to send response: " + text)
 	}
@@ -56,7 +56,7 @@ func ReplyErrf(responder IResponder, status int, args ...interface{}) {
 //nolint:errorlint
 func ReplyErrDef(responder IResponder, err error, defaultStatusCode int) {
 	res := coreutils.WrapSysError(err, defaultStatusCode).(coreutils.SysError)
-	sender := responder.InitResponse(ResponseMeta{coreutils.ApplicationJSON, res.HTTPStatus})
+	sender := responder.InitMultiRowResponse(ResponseMeta{coreutils.ApplicationJSON, res.HTTPStatus, ContentStructure_SingleObject})
 	sender.Close(res)
 }
 
@@ -65,7 +65,7 @@ func ReplyErr(responder IResponder, err error) {
 }
 
 func ReplyJSON(responder IResponder, httpCode int, obj any) {
-	sender := responder.InitResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: httpCode})
+	sender := responder.InitMultiRowResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: httpCode})
 	_ = sender.Send(obj)
 	sender.Close(nil)
 }

@@ -19,8 +19,11 @@ type IRequestSender interface {
 type RequestHandler func(requestCtx context.Context, request Request, responder IResponder)
 
 type IResponder interface {
-	// panics if called >1 times
-	InitResponse(ResponseMeta) IResponseSenderCloseable
+	// panics if called >1 times or after ReplySingleObject
+	InitMultiRowResponse(ResponseMeta) IResponseSenderCloseable
+
+	// panics if called >1 times or after InitMultiRowResponse()
+	ReplySingleObject(ResponseMeta, any) error
 }
 
 type IResponseSenderCloseable interface {

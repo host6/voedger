@@ -30,7 +30,7 @@ func TestRequestSender_BasicUsage(t *testing.T) {
 
 		//response must be made in a separate thread
 		go func() {
-			sender := responder.InitResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+			sender := responder.InitMultiRowResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 			result := map[string]interface{}{
 				"fld1": 42,
 				"fld2": "str",
@@ -77,7 +77,7 @@ func TestErrors(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 			// force response timeout
 			coreutils.MockTime.Add(time.Duration(DefaultSendTimeout))
-			sender := responder.InitResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+			sender := responder.InitMultiRowResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 			sender.Close(nil)
 		})
 
@@ -91,7 +91,7 @@ func TestErrors(t *testing.T) {
 		clientCtx, disconnectClient := context.WithCancel(context.Background())
 		requestSender := NewIRequestSender(coreutils.MockTime, DefaultSendTimeout, func(requestCtx context.Context, request Request, responder IResponder) {
 			go func() {
-				sender := responder.InitResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+				sender := responder.InitMultiRowResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 				<-maySendAfterDisconnect
 				sendErrCh <- sender.Send("test")
 				sender.Close(nil)
@@ -117,7 +117,7 @@ func TestErrors(t *testing.T) {
 			close(requestHandlerStarted)
 			go func() {
 				<-clientCtx.Done()
-				sender := responder.InitResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+				sender := responder.InitMultiRowResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 				sendErrCh <- sender.Send("test")
 				sender.Close(nil)
 			}()
@@ -142,7 +142,7 @@ func TestErrors(t *testing.T) {
 		maySend := make(chan interface{})
 		requestSender := NewIRequestSender(coreutils.MockTime, DefaultSendTimeout, func(requestCtx context.Context, request Request, responder IResponder) {
 			go func() {
-				sender := responder.InitResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+				sender := responder.InitMultiRowResponse(ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 				<-maySend
 				sendErrCh <- sender.Send("test")
 				sender.Close(nil)

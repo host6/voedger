@@ -93,7 +93,7 @@ func TestBasicUsage_MultiResponse(t *testing.T) {
 
 		// request is normally handled by processors in a separate goroutine so let's send response in a separate goroutine
 		go func() {
-			sender := responder.InitResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+			sender := responder.InitMultiRowResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 			err := sender.Send(testObject{
 				IntField: 42,
 				StrField: `哇"呀呀`,
@@ -129,7 +129,7 @@ func TestBasicUsage_MultiResponse(t *testing.T) {
 
 func TestEmptySectionedResponse(t *testing.T) {
 	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
-		sender := responder.InitResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+		sender := responder.InitMultiRowResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 		sender.Close(nil)
 
 	}, bus.DefaultSendTimeout)
@@ -146,7 +146,7 @@ func TestEmptySectionedResponse(t *testing.T) {
 
 func TestSimpleErrorSectionedResponse(t *testing.T) {
 	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
-		sender := responder.InitResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+		sender := responder.InitMultiRowResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 		sender.Close(errors.New("test error SimpleErrorSectionedResponse"))
 	}, bus.DefaultSendTimeout)
 	defer tearDown(router)
@@ -187,7 +187,7 @@ func TestClientDisconnect_CtxCanceledOnElemSend(t *testing.T) {
 	expectedErrCh := make(chan error)
 	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		go func() {
-			sender := responder.InitResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+			sender := responder.InitMultiRowResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 			defer sender.Close(nil)
 			firstElemSendErrCh <- sender.Send(testObject{
 				IntField: 42,
@@ -271,7 +271,7 @@ func TestClientDisconnect_FailedToWriteResponse(t *testing.T) {
 	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		go func() {
 			// handler, on server side
-			sender := responder.InitResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+			sender := responder.InitMultiRowResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 			defer sender.Close(nil)
 			firstElemSendErrCh <- sender.Send(testObject{
 				IntField: 42,

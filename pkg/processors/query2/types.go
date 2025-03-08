@@ -299,7 +299,7 @@ type sender struct {
 
 func (s *sender) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
 	if s.sender == nil {
-		s.sender = s.responder.InitResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
+		s.sender = s.responder.InitMultiRowResponse(bus.ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: http.StatusOK})
 	}
 	return work, s.sender.Send(work.(objectBackedByMap).data)
 }
