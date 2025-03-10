@@ -1,1 +1,3 @@
 Resolves issue 'router: handle `/schemas` paths'
+
+Resolves #3421 router: handle `/schemas` paths
