@@ -1,1 +1,3 @@
 Resolves issue 'router: fix `{}` rendering on empty response'
+
+Resolves #3450 router: fix `{}` rendering on empty response
