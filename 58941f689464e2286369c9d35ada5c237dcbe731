@@ -1,1 +1,3 @@
 Resolves issue 'Provide response meta to `IResponder.Respond()`'
+
+Resolves #3445 Provide response meta to `IResponder.Respond()`
