@@ -224,27 +224,25 @@ func (s *appStorage) Put(pKey []byte, cCols []byte, value []byte) (err error) {
 }
 
 func (s *appStorage) PutBatch(items []istorage.BatchItem) (err error) {
-	s.lock.Lock()
-	if s.testDelayPut > 0 {
-		time.Sleep(s.testDelayPut)
-		tmpDelayPut := s.testDelayPut
-		s.testDelayPut = 0
+    s.lock.Lock()
+    defer s.lock.Unlock()
 
-		defer func() {
-			s.lock.Lock()
-			s.testDelayPut = tmpDelayPut
-			s.lock.Unlock()
-		}()
-	}
-	s.lock.Unlock()
+    // Handle test delay if needed
+    if s.testDelayPut > 0 {
+        time.Sleep(s.testDelayPut)
+    }
 
-	for _, item := range items {
-		if err = s.Put(item.PKey, item.CCols, item.Value); err != nil {
-			return err
-		}
-	}
+    // Process all items while holding the lock
+    for _, item := range items {
+        p := s.storage[string(item.PKey)]
+        if p == nil {
+            p = make(map[string]coreutils.DataWithExpiration)
+            s.storage[string(item.PKey)] = p
+        }
+        p[string(item.CCols)] = coreutils.DataWithExpiration{Data: copySlice(item.Value)}
+    }
 
-	return nil
+    return nil
 }
 
 func (s *appStorage) readPartSort(ctx context.Context, part map[string]coreutils.DataWithExpiration, startCCols, finishCCols []byte) (sortKeys []string) {
@@ -358,27 +356,45 @@ func (s *appStorage) Get(pKey []byte, cCols []byte, data *[]byte) (ok bool, err 
 }
 
 func (s *appStorage) GetBatch(pKey []byte, items []istorage.GetBatchItem) (err error) {
-	s.lock.Lock()
-	if s.testDelayGet > 0 {
-		time.Sleep(s.testDelayGet)
-		tmpDelayGet := s.testDelayGet
-		s.testDelayGet = 0
-		defer func() {
-			s.lock.Lock()
-			s.testDelayGet = tmpDelayGet
-			s.lock.Unlock()
-		}()
-	}
-	s.lock.Unlock()
+    s.lock.RLock()
+    defer s.lock.RUnlock()
 
-	for i := range items {
-		items[i].Ok, err = s.Get(pKey, items[i].CCols, items[i].Data)
-		if err != nil {
-			return
-		}
-	}
+    if s.testDelayGet > 0 {
+        time.Sleep(s.testDelayGet)
+    }
 
-	return
+    for i := range items {
+        var data []byte
+        items[i].Ok, err = s.getBatchItem(pKey, items[i].CCols, &data)
+        if err != nil {
+            return
+        }
+        if items[i].Ok {
+            *items[i].Data = append((*items[i].Data)[0:0], data...)
+        }
+    }
+
+    return nil
+}
+
+func (s *appStorage) getBatchItem(pKey []byte, cCols []byte, data *[]byte) (ok bool, err error) {
+    p, ok := s.storage[string(pKey)]
+    if !ok {
+        return false, nil
+    }
+
+    viewRecord, ok := p[string(cCols)]
+    if !ok {
+        return false, nil
+    }
+
+    now := s.iTime.Now()
+    if viewRecord.IsExpired(now) {
+        return false, nil
+    }
+
+    *data = copySlice(viewRecord.Data)
+    return true, nil
 }
 
 func copySlice(src []byte) []byte {

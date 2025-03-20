@@ -43,11 +43,11 @@ func TestBasic(t *testing.T) {
 		iTime := coreutils.MockTime
 		vvmCfg1 := GetTestVVMCfg(net.IPv4(192, 168, 0, 1))
 
-		// make so that VVM launch on vvmCfg1 will store the resulting storage in sharedStorageFactory
-		suffix := t.Name() + uuid.NewString()
+		// make so that VVM launched on vvmCfg1 will store the resulting storage in sharedStorageFactory
+		sameSuffix := t.Name() + uuid.NewString()
 		sharedStorageFactory, err := vvmCfg1.StorageFactory()
 		require.NoError(t, err)
-		vvmCfg1.KeyspaceNameSuffix = suffix
+		vvmCfg1.KeyspaceNameSuffix = sameSuffix // the same storage keyspace will be used on each VVM launch (empty -> guid will be added to each keyspce name on each VVM launch)
 		vvmCfg1.StorageFactory = func() (istorage.IAppStorageFactory, error) {
 			return sharedStorageFactory, nil
 		}
@@ -71,7 +71,7 @@ func TestBasic(t *testing.T) {
 			vvmCfg2.StorageFactory = func() (provider istorage.IAppStorageFactory, err error) {
 				return sharedStorageFactory, nil
 			}
-			vvmCfg2.KeyspaceNameSuffix = suffix
+			vvmCfg2.KeyspaceNameSuffix = sameSuffix
 
 			vvm2, err := Provide(vvmCfg2)
 			r.NoError(err)
@@ -121,6 +121,7 @@ func TestCancelLeadershipOnManualShutdown(t *testing.T) {
 	ok, err := vvmAppTTLStorage.TTLGet(pKey, cCols, &data)
 	r.NoError(err)
 	r.True(ok)
+	r.Equal("192.168.0.1", string(data))
 
 	// Shutdown VVM
 	problemErr := vvm.Shutdown()
