@@ -1,1 +1,3 @@
 Resolves issue 'fix data race in vvm/TestBasic/LeadershipCollision'
+
+Resolves #3447 fix data race in vvm/TestBasic/LeadershipCollision
