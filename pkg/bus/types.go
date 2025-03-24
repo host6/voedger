@@ -53,12 +53,31 @@ type implIRequestSender struct {
 
 type SendTimeout time.Duration
 
+type chunk struct {
+	obj      any
+	doneChan chan error
+}
+
+type IChunk interface {
+	Obj() any
+	Done(err error)
+}
+
+func (c chunk) Done(err error) {
+	c.doneChan <- err
+}
+
+func (c chunk) Obj() any {
+	return c.obj
+}
+
 type implResponseWriter struct {
-	ch          chan any
-	clientCtx   context.Context
-	sendTimeout SendTimeout
-	tm          coreutils.ITime
-	resultErr   *error
+	ch             chan IChunk
+	continuationCh chan error
+	clientCtx      context.Context
+	sendTimeout    SendTimeout
+	tm             coreutils.ITime
+	resultErr      *error
 }
 
 type implIResponder struct {

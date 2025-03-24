@@ -20,7 +20,7 @@ import (
 func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req Request) (responseCh <-chan any, responseMeta ResponseMeta, responseErr *error, err error) {
 	timeoutChan := rs.tm.NewTimerChan(time.Duration(rs.timeout))
 	respWriter := &implResponseWriter{
-		ch:          make(chan any, 1), // buf size 1 to make single write on Respond()
+		ch:          make(chan IChunk, 1), // buf size 1 to make single write on Respond()
 		clientCtx:   clientCtx,
 		sendTimeout: rs.timeout,
 		tm:          rs.tm,
@@ -102,6 +102,10 @@ func (r *implIResponder) InitResponse(statusCode int) IResponseWriter {
 	return r.respWriter
 }
 
+func newIChunk(doneChan chan error) IChunk {
+	return chunk{doneChan: doneChan}
+}
+
 func (r *implIResponder) Respond(responseMeta ResponseMeta, obj any) error {
 	r.checkStarted()
 	if responseMeta.mode != 0 {
@@ -111,6 +115,7 @@ func (r *implIResponder) Respond(responseMeta ResponseMeta, obj any) error {
 	select {
 	case r.responseMetaCh <- responseMeta:
 		// TODO: rework here: possible: http client disconnected, write to r.respWriter.ch successful, we're thinking that we're replied, but it is not, no socket to write to
+
 		r.respWriter.ch <- obj // buf size 1
 		close(r.respWriter.ch)
 	default:
@@ -119,10 +124,49 @@ func (r *implIResponder) Respond(responseMeta ResponseMeta, obj any) error {
 	return nil
 }
 
+/*
+только тут надо следить за клиентским контекстом, т.к. если роутер перестал читать канал, то мы тут не отличим
+если роутер следит за контекстом:
+невозможно использовать for  := range ch
+ну пусть не получится. тогда в роутере:
+for {
+	select {
+case <-ch:
+case <-requestCtx.Done():
+	return
+	}
+}
+а мы тут все равно обязаны вычитать канал до закрытия, но это один следующий раз, там скорее всего один элемент при закрытии канала,
+т.к. при следующем Write сработает requestCtx.Close()
+и потом сделается Close()
+а что если вообще не вычитывать при requestCtx.Done?
+будет ErrNoConsumer при следующем Write и потом Close()
+
+тогда так:
+- левая сторона обязана следить за requextCtx при Write
+- роутер может следить за контекстом и завершаться, если закрылся
+- роутер может не вычитывать канал до конца. В этом случае при следующем Write будет ErrNoConsumer
+
+continuation:
+роутер вызывает Done(requestCtx.Err())
+под капотом неблокирующий взод
+continuationChan chan error
+при Done(err): если в continuationChan что-то есть, то сразу паника
+
+
+стоп, слева вообще не должно быть default при Write. Надо просто следить за контекстом слева. Вот правая сторона обязана закрывать контекст
+
+
+ */
+
+
 func (rs *implResponseWriter) Write(obj any) error {
 	sendTimeoutTimerChan := rs.tm.NewTimerChan(time.Duration(rs.sendTimeout))
+	chunkImpl := newIChunk(rs.continuationCh)
+	chunkImpl.(*chunk).obj = obj
 	select {
-	case rs.ch <- obj:
+	case rs.ch <- chunkImpl:
+		<-
 	case <-rs.clientCtx.Done():
 	case <-sendTimeoutTimerChan:
 		return ErrNoConsumer
