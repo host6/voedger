@@ -11,26 +11,23 @@ import (
 	"fmt"
 	"runtime/debug"
 	"sync"
-	"time"
 
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 )
 
-func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req Request) (responseCh <-chan any, responseMeta ResponseMeta, responseErr *error, err error) {
-	timeoutChan := rs.tm.NewTimerChan(time.Duration(rs.timeout))
+func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req Request) (responseCh <-chan IChunk, responseMeta ResponseMeta, responseErr *error, err error) {
 	respWriter := &implResponseWriter{
-		ch:          make(chan IChunk, 1), // buf size 1 to make single write on Respond()
-		clientCtx:   clientCtx,
-		sendTimeout: rs.timeout,
-		tm:          rs.tm,
-		resultErr:   new(error),
+		ch:        make(chan IChunk, 1), // buf size 1 to make single write on Respond()
+		clientCtx: clientCtx,
+		tm:        rs.tm,
+		resultErr: new(error),
 	}
 	responder := &implIResponder{
 		respWriter:     respWriter,
 		responseMetaCh: make(chan ResponseMeta, 1),
 	}
-	handlerPanic := make(chan interface{})
+	handlerPanicCh := make(chan interface{})
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
@@ -38,21 +35,17 @@ func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req Request
 			wg.Done()
 		}()
 		select {
-		case <-timeoutChan:
-			if err = checkHandlerPanic(handlerPanic); err == nil {
-				err = ErrSendTimeoutExpired
-			}
 		case responseMeta = <-responder.responseMetaCh:
 			err = clientCtx.Err() // to make clientCtx.Done() take priority
 		case <-clientCtx.Done():
 			// wrong to close(replier.elems) because possible that elems is being writing at the same time -> data race
 			// clientCxt closed -> ErrNoConsumer on SendElement() according to IReplier contract
 			// so will do nothing here
-			if err = checkHandlerPanic(handlerPanic); err == nil {
+			if err = checkHandlerPanic(handlerPanicCh); err == nil {
 				err = clientCtx.Err() // to make clientCtx.Done() take priority
 			}
-		case panicIntf := <-handlerPanic:
-			err = handlePanic(panicIntf)
+		case r := <-handlerPanicCh:
+			err = handlePanic(r)
 		}
 	}()
 	func() {
@@ -61,7 +54,7 @@ func (rs *implIRequestSender) SendRequest(clientCtx context.Context, req Request
 				logger.Error("handler panic:", fmt.Sprint(r), "\n", string(debug.Stack()))
 				// will process panic in the goroutine instead of update err here to avoid data race
 				// https://dev.untill.com/projects/#!607751
-				handlerPanic <- r
+				handlerPanicCh <- r
 			}
 		}()
 		rs.requestHandler(clientCtx, req, responder)
@@ -92,7 +85,7 @@ func handlePanic(r interface{}) error {
 }
 
 func (r *implIResponder) InitResponse(statusCode int) IResponseWriter {
-	r.checkStarted()
+	r.checkStateAndStart()
 	select {
 	case r.responseMetaCh <- ResponseMeta{ContentType: coreutils.ApplicationJSON, StatusCode: statusCode}:
 	default:
@@ -107,14 +100,20 @@ func newIChunk(doneChan chan error) IChunk {
 }
 
 func (r *implIResponder) Respond(responseMeta ResponseMeta, obj any) error {
-	r.checkStarted()
+	r.checkStateAndStart()
 	if responseMeta.mode != 0 {
 		panic("responseMeta.mode is set by someone else!")
 	}
 	responseMeta.mode = RespondMode_Single
 	select {
-	case r.responseMetaCh <- responseMeta:
+	case r.responseMetaCh <- responseMeta: // buf size 1
 		// TODO: rework here: possible: http client disconnected, write to r.respWriter.ch successful, we're thinking that we're replied, but it is not, no socket to write to
+
+		// left side here!!!
+		// handler could call Respond() before delivering to processors.
+		// in this case nobody reads from ch yet
+		// write to buffered ch here -> ok, but how to check if sending is successful?
+		
 
 		r.respWriter.ch <- obj // buf size 1
 		close(r.respWriter.ch)
@@ -157,21 +156,20 @@ continuationChan chan error
 стоп, слева вообще не должно быть default при Write. Надо просто следить за контекстом слева. Вот правая сторона обязана закрывать контекст
 
 
- */
-
+*/
 
 func (rs *implResponseWriter) Write(obj any) error {
-	sendTimeoutTimerChan := rs.tm.NewTimerChan(time.Duration(rs.sendTimeout))
+	// sendTimeoutTimerChan := rs.tm.NewTimerChan(time.Duration(rs.sendTimeout))
 	chunkImpl := newIChunk(rs.continuationCh)
 	chunkImpl.(*chunk).obj = obj
 	select {
 	case rs.ch <- chunkImpl:
-		<-
+		// do not watch over clientCtx. Failed to process the chunk -> expect that the right side will call Done(error) anyway
+		return <-rs.continuationCh
 	case <-rs.clientCtx.Done():
-	case <-sendTimeoutTimerChan:
-		return ErrNoConsumer
+		// case <-sendTimeoutTimerChan:
 	}
-	return rs.clientCtx.Err()
+	return ErrNoConsumer
 }
 
 func (rs *implResponseWriter) Close(err error) {
@@ -179,7 +177,7 @@ func (rs *implResponseWriter) Close(err error) {
 	close(rs.ch)
 }
 
-func (r *implIResponder) checkStarted() {
+func (r *implIResponder) checkStateAndStart() {
 	if r.started {
 		panic("unable to start the response more than once")
 	}

@@ -46,7 +46,7 @@ const (
 )
 
 type implIRequestSender struct {
-	timeout        SendTimeout
+	// timeout        SendTimeout
 	tm             coreutils.ITime
 	requestHandler RequestHandler
 }
@@ -75,7 +75,7 @@ type implResponseWriter struct {
 	ch             chan IChunk
 	continuationCh chan error
 	clientCtx      context.Context
-	sendTimeout    SendTimeout
+	// sendTimeout    SendTimeout
 	tm             coreutils.ITime
 	resultErr      *error
 }
