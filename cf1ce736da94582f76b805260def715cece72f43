@@ -1,1 +1,3 @@
 Resolves issue 'improve errors handling on auth/login'
+
+Resolves #3540 improve errors handling on auth/login
