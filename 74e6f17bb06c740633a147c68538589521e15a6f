@@ -1,1 +1,3 @@
 Resolves issue 'cleanup go.mod'
+
+Resolves #3538 cleanup go.mod
