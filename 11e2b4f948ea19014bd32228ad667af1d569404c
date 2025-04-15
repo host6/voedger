@@ -1,1 +1,3 @@
 Resolves issue 'New should not wait for Actualize to finish'
+
+Resolves #3548 New should not wait for Actualize to finish
