@@ -1,1 +1,3 @@
 Resolves issue 'Fix TestISequencer_LongRecovery'
+
+Resolves #3537 Fix TestISequencer_LongRecovery
