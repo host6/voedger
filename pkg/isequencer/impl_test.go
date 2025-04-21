@@ -221,8 +221,6 @@ func TestBatcher(t *testing.T) {
 }
 
 func TestContextCloseDuringStorageErrors(t *testing.T) {
-	require := require.New(t)
-
 	storageErr := errors.New("storage error")
 	mockTime := coreutils.MockTime
 
@@ -232,14 +230,15 @@ func TestContextCloseDuringStorageErrors(t *testing.T) {
 
 	t.Run("flusher()", func(t *testing.T) {
 		storage := NewMockStorage()
-		seq, _ := New(params, storage, mockTime)
+		seq, cleanup := New(params, storage, mockTime)
+		defer cleanup()
 		s := seq.(*sequencer)
 		s.actualizerWG.Wait()
 		storage.SetWriteValuesAndOffset(storageErr)
 		defer func() { storage.SetReadNextPLogOffsetError(nil) }()
 		triedToWriteCh := make(chan any)
 		storage.onWriteValuesAndOffset = func() {
-			s.cleanupCtxCancel()
+			s.flusherCtxCancel()
 			close(triedToWriteCh)
 		}
 
@@ -259,46 +258,37 @@ func TestContextCloseDuringStorageErrors(t *testing.T) {
 		t.Run("on ReadNextPLogOffset", func(t *testing.T) {
 			storage := NewMockStorage()
 			seq, cleanup := New(params, storage, mockTime)
+			defer cleanup()
 			s := seq.(*sequencer)
 			s.actualizerWG.Wait()
 			storage.SetReadNextPLogOffsetError(storageErr)
+			triedToReadNextPLogOffset := make(chan any)
 			storage.onReadNextPLogOffset = func() {
-				cleanup() // ctx is closed here
+				s.actualizerCtxCancel()
+				close(triedToReadNextPLogOffset)
 			}
-			s.actualizerWG.Add(1) // simulate s.Actualize() behaviour
-			s.actualizer(s.cleanupCtx)
+			s.startActualizer()
+			s.actualizerWG.Wait()
+			<-triedToReadNextPLogOffset
 		})
 
 		t.Run("on ActualizeSequencesFromPLog", func(t *testing.T) {
 			storage := NewMockStorage()
 			storage.SetPLog(map[PLogOffset][]SeqValue{PLogOffset(1): {{Key: NumberKey{WSID: 1, SeqID: 1}, Value: 100}}})
 			seq, cleanup := New(params, storage, mockTime)
+			defer cleanup()
 			s := seq.(*sequencer)
 			s.actualizerWG.Wait()
+			triedToActualizeFromPLog := make(chan any)
 			storage.onActualizeFromPLog = func() {
-				cleanup() // ctx is closed here
+				s.actualizerCtxCancel()
+				close(triedToActualizeFromPLog)
 			}
-			s.actualizerWG.Add(1) // simulate s.Actualize() behaviour
-			s.actualizer(s.cleanupCtx)
+			s.startActualizer()
+			s.actualizerWG.Wait()
+			<-triedToActualizeFromPLog
 		})
 	})
-
-	t.Run("Next()", func(t *testing.T) {
-		storage := NewMockStorage()
-		seq, cleanup := New(params, storage, mockTime)
-		s := seq.(*sequencer)
-		s.actualizerWG.Wait()
-		storage.SetReadNumbersError(storageErr)
-		storage.onReadNumbers = func() {
-			cleanup() // ctx is closed here
-		}
-		_, ok := s.Start(1, 1)
-		require.True(ok)
-		num, err := s.Next(1)
-		require.ErrorIs(err, context.Canceled)
-		require.Zero(num)
-	})
-
 }
 
 func TestNextNumberSourceOrder(t *testing.T) {

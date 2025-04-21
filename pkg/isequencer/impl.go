@@ -157,7 +157,7 @@ func (s *sequencer) flusher(flusherCtx context.Context) {
 		s.toBeFlushedMu.RUnlock()
 
 		// Error handling: Handle errors with retry mechanism (500ms wait)
-		err := coreutils.Retry(s.cleanupCtx, s.iTime, func() error {
+		err := coreutils.Retry(flusherCtx, s.iTime, func() error {
 			return s.seqStorage.WriteValuesAndNextPLogOffset(flushValues, flushOffset)
 		})
 		if err != nil {
@@ -237,24 +237,17 @@ func (s *sequencer) Next(seqID SeqID) (num Number, err error) {
 		return s.incrementNumber(key, nextNumber), nil
 	}
 
-	// Try s.params.SeqStorage.ReadNumber()
-	var storedNumbers []Number
-	err = coreutils.Retry(s.cleanupCtx, s.iTime, func() error {
-		var err error
-		// Read all known Numbers for wsKind, wsID
-		storedNumbers, err = s.seqStorage.ReadNumbers(s.currentWSID, []SeqID{seqID})
-		// Write all Numbers to s.cache
-		for _, number := range storedNumbers {
-			if number == 0 {
-				continue
-			}
-			s.cache.Add(key, number)
-		}
-		return err
-	})
+	storedNumbers, err := s.seqStorage.ReadNumbers(s.currentWSID, []SeqID{seqID})
 	if err != nil {
-		// happens when ctx is closed during storage error
 		return 0, err
+	}
+
+	// Write all Numbers to s.cache
+	for _, number := range storedNumbers {
+		if number == 0 {
+			continue
+		}
+		s.cache.Add(key, number)
 	}
 
 	// If number is 0 then initial value is used
@@ -421,7 +414,7 @@ func (s *sequencer) actualizer(actualizerCtx context.Context) {
 
 	// Use s.params.SeqStorage.ActualizeSequencesFromPLog() and s.batcher()
 	err = coreutils.Retry(actualizerCtx, s.iTime, func() error {
-		return s.seqStorage.ActualizeSequencesFromPLog(s.cleanupCtx, s.nextOffset, s.batcher)
+		return s.seqStorage.ActualizeSequencesFromPLog(actualizerCtx, s.nextOffset, s.batcher)
 	})
 	if err != nil {
 		if errors.Is(err, context.Canceled) {

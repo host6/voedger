@@ -622,6 +622,20 @@ func TestISequencer_Next(t *testing.T) {
 		require.ErrorIs(err, isequencer.ErrUnknownSeqID)
 		require.Zero(num)
 	})
+
+	t.Run("storage error", func(t *testing.T) {
+		iTime := coreutils.MockTime
+		storage := createDefaultStorage()
+		params := createDefaultParams()
+		seq, cancel := isequencer.New(params, storage, iTime)
+		defer cancel()
+		isequencer.WaitForStart(t, seq, 1, 1, true)
+		storageErr := errors.New("test stroage errror")
+		storage.SetReadNumbersError(storageErr)
+		num, err := seq.Next(1)
+		require.ErrorIs(err, storageErr)
+		require.Zero(num)
+	})
 }
 
 func TestISequencer_Actualize(t *testing.T) {
