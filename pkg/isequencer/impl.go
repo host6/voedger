@@ -464,13 +464,10 @@ func (s *sequencer) Actualize() {
 
 // cleanup stops the actualizer() and flusher() goroutines.
 func (s *sequencer) cleanup() {
-	if s.actualizerInProgress.Load() {
-		s.actualizerCtxCancel()
-		s.actualizerWG.Wait()
-		s.actualizerInProgress.Store(false)
-	}
-	s.stopFlusher()
 	s.cleanupCtxCancel()
+	s.actualizerCtxCancel()
+	s.actualizerWG.Wait()
+	s.stopFlusher()
 	s.finishSequencingTransaction()
 }
 

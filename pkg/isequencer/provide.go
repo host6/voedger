@@ -52,7 +52,7 @@ func New(params Params, seqStorage ISeqStorage, iTime coreutils.ITime) (ISequenc
 		flusherSig:              make(chan struct{}, 1),
 		actualizerWG:            &sync.WaitGroup{},
 		seqStorage:              seqStorage,
-		transactionIsInProgress: true, // to allow Actualize() to exec right below
+		transactionIsInProgress: true, // to prevent start transaction before actualization completes
 	}
 	s.Actualize()
 
