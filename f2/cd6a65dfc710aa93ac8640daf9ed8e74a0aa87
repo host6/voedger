@@ -1,1 +1,3 @@
 Resolves issue 'Fix TestISequencer_Flush()'
+
+Resolves #3598 Fix TestISequencer_Flush()
