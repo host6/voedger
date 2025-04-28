@@ -1,1 +1,3 @@
 Resolves issue 'instantiate ISequencer on app partition deploy but DO NOT USE IT'
+
+Resolves #3617 instantiate ISequencer on app partition deploy but DO NOT USE IT
