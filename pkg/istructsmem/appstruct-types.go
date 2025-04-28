@@ -277,6 +277,10 @@ func (cfg *AppConfigType) SetNumAppWorkspaces(naw istructs.NumAppWorkspaces) {
 	cfg.numAppWorkspaces = naw
 }
 
+func (cfg *AppConfigType) QNameID(qName appdef.QName) (istructs.QNameID, error) {
+	return cfg.qNames.ID(qName)
+}
+
 // Application configuration parameters
 type AppConfigParams struct {
 	// PLog events cache size.

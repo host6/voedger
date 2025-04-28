@@ -348,7 +348,9 @@ func deployTestAppWithSecretToken(require *require.Assertions,
 				StatelessResources: statelessResources,
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "", imetrics.Provide()),
-		iratesce.TestBucketsFactory)
+		iratesce.TestBucketsFactory,
+		isequencer.SimpleSeqTypes(appName), coreutils.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+	)
 	require.NoError(err)
 	appParts.DeployApp(appName, nil, appDef, partCount, appEngines, cfg.NumAppWorkspaces())
 	appParts.DeployAppPartitions(appName, []istructs.PartitionID{partID})

@@ -18,6 +18,7 @@ import (
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/irates"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -31,6 +32,9 @@ type apps struct {
 	extEngineFactories     iextengine.ExtensionEngineFactories
 	bucketsFactory         irates.BucketsFactoryType
 	apps                   map[appdef.AppQName]*appRT
+	appsSeqTypes           map[appdef.AppQName]map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number
+	iTime                  coreutils.ITime
+	seqStorageAdapter      isequencer.IVVMSeqStorageAdapter
 }
 
 func newAppPartitions(
@@ -41,6 +45,9 @@ func newAppPartitions(
 	jobSchedulerRunner ISchedulerRunner,
 	eef iextengine.ExtensionEngineFactories,
 	bf irates.BucketsFactoryType,
+	appsSeqTypes map[appdef.AppQName]map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number,
+	iTime coreutils.ITime,
+	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap IAppPartitions, cleanup func(), err error) {
 	a := &apps{
 		mx:                     sync.RWMutex{},
@@ -52,6 +59,9 @@ func newAppPartitions(
 		extEngineFactories:     eef,
 		bucketsFactory:         bf,
 		apps:                   map[appdef.AppQName]*appRT{},
+		appsSeqTypes:           appsSeqTypes,
+		iTime:                  iTime,
+		seqStorageAdapter:      seqStorageAdapter,
 	}
 	a.asyncActualizersRunner.SetAppPartitions(a)
 	a.schedulerRunner.SetAppPartitions(a)

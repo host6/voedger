@@ -211,7 +211,7 @@ func deployTestApp(t *testing.T) (appParts appparts.IAppPartitions, appStructs i
 				StatelessResources: statelessResources,
 				WASMConfig:         iextengine.WASMFactoryConfig{},
 			}, "", imetrics.Provide()),
-		iratesce.TestBucketsFactory)
+		iratesce.TestBucketsFactory, isequencer.SimpleSeqTypes(test.appQName), coreutils.MockTime, nil)
 	require.NoError(err)
 	appParts.DeployApp(test.appQName, nil, appDef, test.totalPartitions, test.appEngines, 1)
 	appParts.DeployAppPartitions(test.appQName, []istructs.PartitionID{test.partition})

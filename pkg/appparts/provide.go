@@ -8,8 +8,11 @@ package appparts
 import (
 	"context"
 
+	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/irates"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
@@ -26,6 +29,7 @@ func New(structs istructs.IAppStructsProvider) (ap IAppPartitions, cleanup func(
 		NullSchedulerRunner,
 		NullExtensionEngineFactories,
 		irates.NullBucketsFactory,
+		nil, nil, nil,
 	)
 }
 
@@ -47,6 +51,9 @@ func New2(
 	jobSchedulerRunner ISchedulerRunner,
 	eef iextengine.ExtensionEngineFactories,
 	bf irates.BucketsFactoryType,
+	appsSeqTypes map[appdef.AppQName]map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number,
+	iTime coreutils.ITime,
+	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap IAppPartitions, cleanup func(), err error) {
-	return newAppPartitions(vvmCtx, structs, syncAct, asyncActualizersRunner, jobSchedulerRunner, eef, bf)
+	return newAppPartitions(vvmCtx, structs, syncAct, asyncActualizersRunner, jobSchedulerRunner, eef, bf, appsSeqTypes, iTime, seqStorageAdapter)
 }

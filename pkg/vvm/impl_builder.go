@@ -12,6 +12,8 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/isequencer"
+	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/parser"
 	builtinapps "github.com/voedger/voedger/pkg/vvm/builtin"
@@ -87,4 +89,27 @@ func (ab VVMAppsBuilder) BuildAppsArtefacts(apis builtinapps.APIs, emptyCfgs App
 		builtinAppsArtefacts.builtInAppPackages = append(builtinAppsArtefacts.builtInAppPackages, builtInAppPackages)
 	}
 	return builtinAppsArtefacts, nil
+}
+
+func (ab VVMAppsBuilder) BuildAppsSeqTypes(baas BuiltInAppsArtefacts) (map[appdef.AppQName]map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number, error) {
+	res := map[appdef.AppQName]map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number{}
+	for _, b := range baas.builtInAppPackages {
+		appSeqTypes := map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number{}
+		res[b.Name] = appSeqTypes
+		for _, appWS := range b.Def.Workspaces() {
+			wsKindSeqTypes := map[isequencer.SeqID]isequencer.Number{}
+			appCfg := baas.AppConfigsType[b.Name]
+			wsKindQNameID, err := appCfg.QNameID(appWS.Descriptor())
+			if err != nil {
+				return nil, err
+			}
+			appSeqTypes[isequencer.WSKind(wsKindQNameID)] = wsKindSeqTypes
+
+			// FIXME: place correct initial numbers here
+			wsKindSeqTypes[isequencer.SeqID(istructs.QNameIDCRecordIDSequence)] = 1
+			wsKindSeqTypes[isequencer.SeqID(istructs.QNameIDOWRecordIDSequence)] = 1
+			wsKindSeqTypes[isequencer.SeqID(istructs.QNameIDWLogOffsetSequence)] = 1
+		}
+	}
+	return res, nil
 }

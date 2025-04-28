@@ -49,6 +49,10 @@ func (ss *implISeqStorage) WriteValuesAndNextPLogOffset(batch []isequencer.SeqVa
 }
 
 func (ss *implISeqStorage) ReadNumbers(wsid isequencer.WSID, seqIDs []isequencer.SeqID) ([]isequencer.Number, error) {
+	if ss.storage == nil {
+		// happens in tests only
+		return nil, nil
+	}
 	res := make([]isequencer.Number, len(seqIDs))
 	for i, seqID := range seqIDs {
 		ok, number, err := ss.storage.Get(ss.appID, wsid, seqID)
@@ -64,6 +68,10 @@ func (ss *implISeqStorage) ReadNumbers(wsid isequencer.WSID, seqIDs []isequencer
 }
 
 func (ss *implISeqStorage) ReadNextPLogOffset() (isequencer.PLogOffset, error) {
+	if ss.storage == nil {
+		// happens in tests only
+		return 0, nil
+	}
 	numbers, err := ss.ReadNumbers(isequencer.WSID(istructs.NullWSID), []isequencer.SeqID{isequencer.SeqID(istructs.QNameIDPLogOffsetSequence)})
 	if err != nil {
 		// notest

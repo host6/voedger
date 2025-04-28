@@ -17,7 +17,10 @@ import (
 	"github.com/voedger/voedger/pkg/appparts/internal/limiter"
 	"github.com/voedger/voedger/pkg/appparts/internal/pool"
 	"github.com/voedger/voedger/pkg/appparts/internal/schedulers"
+	"github.com/voedger/voedger/pkg/appparts/internal/seqstorage"
+	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/iextengine"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
@@ -64,22 +67,26 @@ func (av *appVersion) upgrade(
 }
 
 type appRT struct {
-	mx             sync.RWMutex
-	apps           *apps
-	name           appdef.AppQName
-	partsCount     istructs.NumAppPartitions
-	lastestVersion appVersion
-	parts          map[istructs.PartitionID]*appPartitionRT
+	mx                sync.RWMutex
+	apps              *apps
+	name              appdef.AppQName
+	partsCount        istructs.NumAppPartitions
+	lastestVersion    appVersion
+	parts             map[istructs.PartitionID]*appPartitionRT
+	iTime             coreutils.ITime
+	seqStorageAdapter isequencer.IVVMSeqStorageAdapter
 }
 
 func newApplication(apps *apps, name appdef.AppQName, partsCount istructs.NumAppPartitions) *appRT {
 	return &appRT{
-		mx:             sync.RWMutex{},
-		apps:           apps,
-		name:           name,
-		partsCount:     partsCount,
-		lastestVersion: appVersion{},
-		parts:          map[istructs.PartitionID]*appPartitionRT{},
+		mx:                sync.RWMutex{},
+		apps:              apps,
+		name:              name,
+		partsCount:        partsCount,
+		lastestVersion:    appVersion{},
+		parts:             map[istructs.PartitionID]*appPartitionRT{},
+		iTime:             apps.iTime,
+		seqStorageAdapter: apps.seqStorageAdapter,
 	}
 }
 
@@ -156,11 +163,19 @@ type appPartitionRT struct {
 	actualizers    *actualizers.PartitionActualizers
 	schedulers     *schedulers.PartitionSchedulers
 	limiter        *limiter.Limiter
+	sequencer      isequencer.ISequencer
+	seqCleanup     context.CancelFunc // TODOL use it on partition undeploy
 }
 
 func newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
 	as := app.lastestVersion.appStructs()
 	buckets := app.apps.bucketsFactory()
+	seqStorage := seqstorage.New(as.ClusterAppID(), id, as.Events(), as.AppDef(), app.seqStorageAdapter)
+	seqTypes, ok := app.apps.appsSeqTypes[as.AppQName()]
+	if !ok {
+		panic("SeqTypes missing for app " + as.AppQName().String())
+	}
+	sequencer, seqCleanup := isequencer.New(isequencer.NewDefaultParams(seqTypes), seqStorage, app.iTime)
 	part := &appPartitionRT{
 		app:            app,
 		id:             id,
@@ -168,6 +183,8 @@ func newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
 		actualizers:    actualizers.New(app.name, id),
 		schedulers:     schedulers.New(app.name, app.partsCount, as.NumAppWorkspaces(), id),
 		limiter:        limiter.New(app.lastestVersion.appDef(), buckets),
+		sequencer:      sequencer,
+		seqCleanup:     seqCleanup,
 	}
 	return part
 }

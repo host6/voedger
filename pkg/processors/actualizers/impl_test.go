@@ -346,6 +346,7 @@ func deployTestAppEx(
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "", imetrics.Provide()),
 		iratesce.TestBucketsFactory,
+		isequencer.SimpleSeqTypes(appName), coreutils.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
 	if err != nil {
 		panic(err)

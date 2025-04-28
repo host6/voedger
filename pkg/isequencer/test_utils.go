@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/voedger/voedger/pkg/appdef"
 )
 
 var actualizationTimeoutLimit = 1 * time.Second
@@ -215,4 +216,18 @@ func (m *MockStorage) AddPLogEntry(offset PLogOffset, wsid WSID, seqID SeqID, nu
 			Value: number,
 		},
 	)
+}
+
+func SimpleSeqTypes(appQNames ...appdef.AppQName) map[appdef.AppQName]map[WSKind]map[SeqID]Number {
+	res := map[appdef.AppQName]map[WSKind]map[SeqID]Number{}
+	for _, app := range appQNames {
+		res[app] = map[WSKind]map[SeqID]Number{
+			1: {1: 1},
+		}
+	}
+	return res
+}
+
+func NullIVVMSeqStorageAdapter() IVVMSeqStorageAdapter {
+	return nil
 }

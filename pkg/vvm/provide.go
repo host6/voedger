@@ -224,6 +224,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		blobprocessor.NewIRequestHandler,
 		provideIVVMAppTTLStorage,
 		storage.NewElectionsTTLStorage,
+		storage.NewVVMSeqStorageAdapter,
 		// wire.Value(vvmConfig.NumCommandProcessors) -> (wire bug?) value github.com/untillpro/airs-bp3/vvm.CommandProcessorsCount can't be used: vvmConfig is not declared in package scope
 		wire.FieldsOf(&vvmConfig,
 			"NumCommandProcessors",
@@ -367,6 +368,9 @@ func provideAppPartitions(
 	builtinAppsArtefacts BuiltInAppsArtefacts,
 	vvmName processors.VVMName,
 	imetrics imetrics.IMetrics,
+	appsSeqTypes map[appdef.AppQName]map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number,
+	iTime coreutils.ITime,
+	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap appparts.IAppPartitions, cleanup func(), err error) {
 
 	eef := engines.ProvideExtEngineFactories(engines.ExtEngineFactoriesConfig{
@@ -385,6 +389,9 @@ func provideAppPartitions(
 		sch,
 		eef,
 		bf,
+		appsSeqTypes,
+		iTime,
+		seqStorageAdapter,
 	)
 }
 
