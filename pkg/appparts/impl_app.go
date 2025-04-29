@@ -74,7 +74,6 @@ type appRT struct {
 	lastestVersion    appVersion
 	parts             map[istructs.PartitionID]*appPartitionRT
 	iTime             coreutils.ITime
-	seqStorageAdapter isequencer.IVVMSeqStorageAdapter
 }
 
 func newApplication(apps *apps, name appdef.AppQName, partsCount istructs.NumAppPartitions) *appRT {
@@ -86,7 +85,6 @@ func newApplication(apps *apps, name appdef.AppQName, partsCount istructs.NumApp
 		lastestVersion:    appVersion{},
 		parts:             map[istructs.PartitionID]*appPartitionRT{},
 		iTime:             apps.iTime,
-		seqStorageAdapter: apps.seqStorageAdapter,
 	}
 }
 
@@ -170,11 +168,12 @@ type appPartitionRT struct {
 func newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
 	as := app.lastestVersion.appStructs()
 	buckets := app.apps.bucketsFactory()
-	seqStorage := seqstorage.New(as.ClusterAppID(), id, as.Events(), as.AppDef(), app.seqStorageAdapter)
+	seqStorage := seqstorage.New(as.ClusterAppID(), id, as.Events(), as.AppDef(), app.apps.seqStorageAdapter)
 	seqTypes, ok := app.apps.appsSeqTypes[as.AppQName()]
 	if !ok {
 		panic("SeqTypes missing for app " + as.AppQName().String())
 	}
+	// [~tuc.InstantiateSequencer~]
 	sequencer, seqCleanup := isequencer.New(isequencer.NewDefaultParams(seqTypes), seqStorage, app.iTime)
 	part := &appPartitionRT{
 		app:            app,
