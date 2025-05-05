@@ -87,6 +87,8 @@ type IAppStructs interface {
 	GetEventReapplier(IPLogEvent) IEventReapplier
 
 	SeqTypes() map[QNameID]map[QNameID]uint64
+
+	QNameID(qName appdef.QName) (QNameID, error)
 }
 
 // need to re-apply an already stored PLog

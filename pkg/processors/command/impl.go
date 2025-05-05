@@ -16,6 +16,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/processors/actualizers"
 	"github.com/voedger/voedger/pkg/processors/oldacl"
 	"golang.org/x/exp/maps"
@@ -180,6 +181,26 @@ func getIWorkspace(_ context.Context, work pipeline.IWorkpiece) (err error) {
 
 	return nil
 }
+
+func getWSKind(_ context.Context, work pipeline.IWorkpiece) (err error) {
+	cmd := work.(*cmdWorkpiece)
+	if cmd.cmdQName == workspacemgmt.QNameCommandCreateWorkspace {
+		args, _, err := cmd.requestData.AsObject("args")
+		if err != nil {
+			// notest: gauranteed by unmarshalRequestBody
+			return err
+		}
+		wsKindStr, _, err := args.AsString(authnz.Field_WSKind)
+		if err != nil {
+			return err
+		}
+		cmd.wsKind, err = appdef.ParseQName(wsKindStr)
+	} else {
+		cmd.wsKind = cmd.iWorkspace.Descriptor()
+	}
+	return err
+}
+
 func getCmdQName(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	cmdWorkpiece := work.(*cmdWorkpiece)
 	if cmdWorkpiece.cmdMes.APIPath() == processors.APIPath_Docs {
@@ -315,6 +336,7 @@ func getIDGenerator(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	cmd.idGeneratorReporter = &implIDGeneratorReporter{
 		IIDGenerator: cmd.workspace.idGenerator,
 		generatedIDs: map[istructs.RecordID]istructs.RecordID{},
+		sequencer:    cmd.appPart.Sequencer(),
 	}
 	return nil
 }
@@ -445,6 +467,31 @@ func unmarshalRequestBody(_ context.Context, work pipeline.IWorkpiece) (err erro
 func (cmdProc *cmdProc) getWorkspace(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	cmd := work.(*cmdWorkpiece)
 	cmd.workspace = cmd.appPartition.getWorkspace(cmd.cmdMes.WSID())
+	return nil
+}
+
+func sequencesStart(_ context.Context, work pipeline.IWorkpiece) (err error) {
+	cmd := work.(*cmdWorkpiece)
+	wsQNameID, err := cmd.appStructs.QNameID(cmd.wsKind)
+	if err != nil {
+		return err
+	}
+	// [~server.design.sequences/tuc.StartSequencesGeneration~impl]
+	seqPLogOffset, ok := cmd.appPart.Sequencer().Start(isequencer.WSKind(wsQNameID), isequencer.WSID(cmd.cmdMes.WSID()))
+	if !ok {
+		return coreutils.NewHTTPErrorf(http.StatusServiceUnavailable, "failed to start sequencer transaction")
+	}
+	seqWLogOffset, err := cmd.appPart.Sequencer().Next(isequencer.SeqID(istructs.QNameIDWLogOffsetSequence))
+	if err != nil {
+		return err
+	}
+	if seqPLogOffset != isequencer.PLogOffset(cmd.appPartition.nextPLogOffset) {
+		logger.Error("seqPlogOffset", seqPLogOffset, "cmd.appPartition.nextPLogOffset", cmd.appPartition.nextPLogOffset)
+	}
+	if seqWLogOffset != isequencer.Number(cmd.workspace.NextWLogOffset) {
+		logger.Error("seqWlogOffset", seqWLogOffset, "cmd.workspace.NextWLogOffset", cmd.workspace.NextWLogOffset)
+	}
+	cmd.sequencesStarted = true
 	return nil
 }
 
@@ -802,6 +849,12 @@ func (cmdProc *cmdProc) notifyAsyncActualizers(_ context.Context, work pipeline.
 	return nil
 }
 
+func sequencesFlush(_ context.Context, work pipeline.IWorkpiece) (err error) {
+	cmd := work.(*cmdWorkpiece)
+	cmd.appPart.Sequencer().Flush()
+	return nil
+}
+
 func sendResponse(cmd *cmdWorkpiece, handlingError error) {
 	if handlingError != nil {
 		cmd.metrics.increase(ErrorsTotal, 1.0)
@@ -842,5 +895,13 @@ func sendResponse(cmd *cmdWorkpiece, handlingError error) {
 func (idGen *implIDGeneratorReporter) NextID(rawID istructs.RecordID) (storageID istructs.RecordID, err error) {
 	storageID, err = idGen.IIDGenerator.NextID(rawID)
 	idGen.generatedIDs[rawID] = storageID
+	// [~server.design.sequences/tuc.NextSequenceNumber~impl]
+	seqNum, err := idGen.sequencer.Next(isequencer.SeqID(istructs.QNameIDRecordIDSequence))
+	if err != nil {
+		return 0, err
+	}
+	if seqNum != isequencer.Number(storageID) {
+		logger.Error("Sequencer and IDGenerator differs: storageID", storageID, ", seqNum", seqNum)
+	}
 	return
 }

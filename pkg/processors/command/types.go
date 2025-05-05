@@ -15,6 +15,7 @@ import (
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/isecrets"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
@@ -91,11 +92,14 @@ type cmdWorkpiece struct {
 	cmdQName                     appdef.QName
 	statusCodeOfSuccess          int
 	reapplier                    istructs.IEventReapplier
+	sequencesStarted             bool
+	wsKind                       appdef.QName
 }
 
 type implIDGeneratorReporter struct {
 	istructs.IIDGenerator
 	generatedIDs map[istructs.RecordID]istructs.RecordID
+	sequencer    isequencer.ISequencer
 }
 
 type parsedCUD struct {

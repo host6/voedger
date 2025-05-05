@@ -182,7 +182,10 @@ func (cfg *AppConfigType) prepare(buckets irates.IBuckets, appStorage istorage.I
 	}
 
 	for _, iWorkspace := range cfg.AppDef.Workspaces() {
-		wsKindQNameID, err := cfg.QNameID(iWorkspace.QName())
+		if iWorkspace.Abstract() {
+			continue
+		}
+		wsKindQNameID, err := cfg.QNameID(iWorkspace.Descriptor())
 		if err != nil {
 			// notest
 			return err

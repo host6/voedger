@@ -116,8 +116,10 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm coreutils.ITime,
 				pipeline.WireFunc("getICommand", getICommand),
 				pipeline.WireFunc("authorizeRequest", cmdProc.authorizeRequest),
 				pipeline.WireFunc("unmarshalRequestBody", unmarshalRequestBody),
+				pipeline.WireFunc("getWSKind", getWSKind),
 				pipeline.WireFunc("getWorkspace", cmdProc.getWorkspace),
 				pipeline.WireFunc("apiv2_denyODocCUD", apiv2_denyODocCUD),
+				pipeline.WireFunc("sequencesStart", sequencesStart),
 				pipeline.WireFunc("getRawEventBuilderBuilders", cmdProc.getRawEventBuilder),
 				pipeline.WireFunc("getArgsObject", getArgsObject),
 				pipeline.WireFunc("getUnloggedArgsObject", getUnloggedArgsObject),
@@ -142,6 +144,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm coreutils.ITime,
 				pipeline.WireFunc("putPLog", cmdProc.putPLog),
 				pipeline.WireFunc("store", cmdProc.storeOp.DoSync),
 				pipeline.WireFunc("notifyAsyncActualizers", cmdProc.notifyAsyncActualizers),
+				pipeline.WireFunc("sequencesFlush", sequencesFlush),
 			)
 			// TODO: later make so that each partition has its own plogOffset, wsid has its own wlogOffset
 			defer cmdPipeline.Close()
@@ -167,6 +170,10 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm coreutils.ITime,
 						cmdHandlingErr := cmdPipeline.SendSync(cmd)
 						if cmdHandlingErr != nil {
 							logger.Error(cmdHandlingErr)
+							if cmd.sequencesStarted {
+								// [~server.design.sequences/tuc.ReactualizeSequences~impl]
+								cmd.appPart.Sequencer().Actualize()
+							}
 						}
 						sendResponse(cmd, cmdHandlingErr)
 						if cmd.appPartitionRestartScheduled {
