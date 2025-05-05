@@ -481,6 +481,7 @@ func (as *implIAppStructs) EventValidators() []istructs.EventValidator          
 func (as *implIAppStructs) NumAppWorkspaces() istructs.NumAppWorkspaces                    { panic("") }
 func (as *implIAppStructs) AppTokens() istructs.IAppTokens                                 { panic("") }
 func (as *implIAppStructs) GetEventReapplier(istructs.IPLogEvent) istructs.IEventReapplier { panic("") }
+func (as *implIAppStructs) SeqTypes() map[istructs.QNameID]map[istructs.QNameID]uint64     { panic("") }
 
 type implIRecords struct {
 	data map[istructs.WSID]map[appdef.QName]map[istructs.RecordID]map[string]interface{}

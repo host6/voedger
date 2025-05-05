@@ -349,7 +349,7 @@ func deployTestAppWithSecretToken(require *require.Assertions,
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "", imetrics.Provide()),
 		iratesce.TestBucketsFactory,
-		isequencer.SimpleSeqTypes(appName), coreutils.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		coreutils.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
 	require.NoError(err)
 	appParts.DeployApp(appName, nil, appDef, partCount, appEngines, cfg.NumAppWorkspaces())

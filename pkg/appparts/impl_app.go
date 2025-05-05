@@ -67,24 +67,24 @@ func (av *appVersion) upgrade(
 }
 
 type appRT struct {
-	mx                sync.RWMutex
-	apps              *apps
-	name              appdef.AppQName
-	partsCount        istructs.NumAppPartitions
-	lastestVersion    appVersion
-	parts             map[istructs.PartitionID]*appPartitionRT
-	iTime             coreutils.ITime
+	mx             sync.RWMutex
+	apps           *apps
+	name           appdef.AppQName
+	partsCount     istructs.NumAppPartitions
+	lastestVersion appVersion
+	parts          map[istructs.PartitionID]*appPartitionRT
+	iTime          coreutils.ITime
 }
 
 func newApplication(apps *apps, name appdef.AppQName, partsCount istructs.NumAppPartitions) *appRT {
 	return &appRT{
-		mx:                sync.RWMutex{},
-		apps:              apps,
-		name:              name,
-		partsCount:        partsCount,
-		lastestVersion:    appVersion{},
-		parts:             map[istructs.PartitionID]*appPartitionRT{},
-		iTime:             apps.iTime,
+		mx:             sync.RWMutex{},
+		apps:           apps,
+		name:           name,
+		partsCount:     partsCount,
+		lastestVersion: appVersion{},
+		parts:          map[istructs.PartitionID]*appPartitionRT{},
+		iTime:          apps.iTime,
 	}
 }
 
@@ -165,16 +165,29 @@ type appPartitionRT struct {
 	seqCleanup     context.CancelFunc // TODOL use it on partition undeploy
 }
 
+func getSeqTypes(seqTypes map[istructs.QNameID]map[istructs.QNameID]uint64) map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number {
+	res := map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number{}
+	for wsKind, seqTypes := range seqTypes {
+		wsKindSeqTypes, ok := res[isequencer.WSKind(wsKind)]
+		if !ok {
+			wsKindSeqTypes = map[isequencer.SeqID]isequencer.Number{}
+			res[isequencer.WSKind(wsKind)] = wsKindSeqTypes
+		}
+		for seqID, number := range seqTypes {
+			wsKindSeqTypes[isequencer.SeqID(seqID)] = isequencer.Number(number)
+		}
+	}
+	return res
+}
+
 func newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
 	as := app.lastestVersion.appStructs()
 	buckets := app.apps.bucketsFactory()
 	seqStorage := seqstorage.New(as.ClusterAppID(), id, as.Events(), as.AppDef(), app.apps.seqStorageAdapter)
-	seqTypes, ok := app.apps.appsSeqTypes[as.AppQName()]
-	if !ok {
-		panic("SeqTypes missing for app " + as.AppQName().String())
-	}
-	// [~tuc.InstantiateSequencer~]
-	sequencer, seqCleanup := isequencer.New(isequencer.NewDefaultParams(seqTypes), seqStorage, app.iTime)
+
+	// [~server.design.sequences/tuc.InstantiateSequencer~impl]
+	sequencer, seqCleanup := isequencer.New(isequencer.NewDefaultParams(getSeqTypes(as.SeqTypes())), seqStorage, app.iTime)
+
 	part := &appPartitionRT{
 		app:            app,
 		id:             id,
@@ -271,6 +284,11 @@ func (bp *borrowedPartition) IsOperationAllowed(ws appdef.IWorkspace, op appdef.
 
 func (bp *borrowedPartition) String() string {
 	return fmt.Sprintf("borrowedPartition{app=%s, part=%d, kind=%s}", bp.part.app.name, bp.part.id, bp.kind)
+}
+
+// [~server.design.sequences/cmp.IAppPartition.Sequencer~impl]
+func (bp *borrowedPartition) Sequencer() isequencer.ISequencer {
+	return bp.part.sequencer
 }
 
 // # IAppPartition.Release

@@ -753,7 +753,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "", imetrics.Provide()),
 		iratesce.TestBucketsFactory,
-		isequencer.SimpleSeqTypes(istructs.AppQName_untill_airs_bp), coreutils.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		coreutils.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
 	require.NoError(err)
 	defer appPartsClean()

@@ -146,7 +146,7 @@ func Test_DeployActualizersAndSchedulers(t *testing.T) {
 		mockSchedulers,
 		appparts.NullExtensionEngineFactories,
 		iratesce.TestBucketsFactory,
-		isequencer.SimpleSeqTypes(appName), coreutils.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		coreutils.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
 	require.NoError(err)
 

@@ -10,6 +10,7 @@ import (
 	"iter"
 	"net/url"
 
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/pipeline"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -111,6 +112,8 @@ type IAppPartition interface {
 	//
 	// If resource usage is exceeded then returns name of first exceeded limit.
 	IsLimitExceeded(resource appdef.QName, operation appdef.OperationKind, workspace istructs.WSID, remoteAddr string) (exceed bool, limit appdef.QName)
+
+	Sequencer() isequencer.ISequencer
 }
 
 // Async actualizer runner.

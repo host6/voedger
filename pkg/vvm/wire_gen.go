@@ -148,7 +148,14 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		cleanup()
 		return nil, nil, err
 	}
-	iAppPartitions, cleanup3, err := provideAppPartitions(vvmCtx, iAppStructsProvider, v3, iActualizersService, iSchedulerRunner, bucketsFactoryType, iStatelessResources, builtInAppsArtefacts, vvmName, iMetrics)
+	iSysVvmStorage, err := provideIVVMAppTTLStorage(iAppStorageProvider)
+	if err != nil {
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
+	ivvmSeqStorageAdapter := storage.NewVVMSeqStorageAdapter(iSysVvmStorage)
+	iAppPartitions, cleanup3, err := provideAppPartitions(vvmCtx, iAppStructsProvider, v3, iActualizersService, iSchedulerRunner, bucketsFactoryType, iStatelessResources, builtInAppsArtefacts, vvmName, iMetrics, iTime, ivvmSeqStorageAdapter)
 	if err != nil {
 		cleanup2()
 		cleanup()
@@ -222,14 +229,6 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 	servicePipeline := provideServicePipeline(vvmCtx, operatorCommandProcessors, operatorQueryProcessors_V1, operatorQueryProcessors_V2, operatorBLOBProcessors, iActualizersService, iAppPartsCtlPipelineService, bootstrapOperator, adminEndpointServiceOperator, publicEndpointServiceOperator, iAppStorageProvider)
 	v9 := provideMetricsServicePortGetter(metricsService)
 	v10 := provideBuiltInAppPackages(builtInAppsArtefacts)
-	iSysVvmStorage, err := provideIVVMAppTTLStorage(iAppStorageProvider)
-	if err != nil {
-		cleanup4()
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
 	ittlStorage := storage.NewElectionsTTLStorage(iSysVvmStorage)
 	vvm := &VVM{
 		ServicePipeline:     servicePipeline,
@@ -428,6 +427,8 @@ func provideAppPartitions(
 	builtinAppsArtefacts BuiltInAppsArtefacts,
 	vvmName processors.VVMName, imetrics2 imetrics.IMetrics,
 
+	iTime coreutils.ITime,
+	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap appparts.IAppPartitions, cleanup func(), err error) {
 
 	eef := engines.ProvideExtEngineFactories(engines.ExtEngineFactoriesConfig{
@@ -446,6 +447,8 @@ func provideAppPartitions(
 		sch,
 		eef,
 		bf,
+		iTime,
+		seqStorageAdapter,
 	)
 }
 

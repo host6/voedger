@@ -14,12 +14,15 @@ import (
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	"github.com/voedger/voedger/pkg/istorage/provider"
+	"github.com/voedger/voedger/pkg/istoragecache"
 	"github.com/voedger/voedger/pkg/istructs"
+	imetrics "github.com/voedger/voedger/pkg/metrics"
 )
 
 func TestSeqStorage(t *testing.T) {
 	require := require.New(t)
-	appStorageProvider := provider.Provide(mem.Provide(coreutils.MockTime))
+	memStorageFactory := mem.Provide(coreutils.MockTime)
+	appStorageProvider := istoragecache.Provide(1000, provider.Provide(memStorageFactory), imetrics.Provide(), "", coreutils.MockTime)
 	sysVvmAppStorage, err := appStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
 	require.NoError(err)
 	seqStorage := NewVVMSeqStorageAdapter(sysVvmAppStorage)

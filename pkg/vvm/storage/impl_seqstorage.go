@@ -29,7 +29,10 @@ func (s *implVVMSeqStorageAdapter) Get(appID istructs.ClusterAppID, wsid isequen
 	binary.BigEndian.PutUint16(cCols[8:], uint16(seqID))
 	data := make([]byte, utils.Uint64Size)
 	ok, err = s.sysVVMStorage.Get(pKey, cCols, &data)
-	return ok, isequencer.Number(binary.BigEndian.Uint64(data)), err
+	if len(data) > 0 {
+		number = isequencer.Number(binary.BigEndian.Uint64(data))
+	}
+	return ok, number, err
 }
 
 func (s *implVVMSeqStorageAdapter) PutPLogOffset(appID istructs.ClusterAppID, pLogOffset isequencer.PLogOffset) (err error) {

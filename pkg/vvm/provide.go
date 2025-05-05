@@ -369,7 +369,6 @@ func provideAppPartitions(
 	builtinAppsArtefacts BuiltInAppsArtefacts,
 	vvmName processors.VVMName,
 	imetrics imetrics.IMetrics,
-	appsSeqTypes map[appdef.AppQName]map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number,
 	iTime coreutils.ITime,
 	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap appparts.IAppPartitions, cleanup func(), err error) {
@@ -390,7 +389,6 @@ func provideAppPartitions(
 		sch,
 		eef,
 		bf,
-		appsSeqTypes,
 		iTime,
 		seqStorageAdapter,
 	)

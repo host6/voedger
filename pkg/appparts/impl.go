@@ -32,7 +32,6 @@ type apps struct {
 	extEngineFactories     iextengine.ExtensionEngineFactories
 	bucketsFactory         irates.BucketsFactoryType
 	apps                   map[appdef.AppQName]*appRT
-	appsSeqTypes           map[appdef.AppQName]map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number
 	iTime                  coreutils.ITime
 	seqStorageAdapter      isequencer.IVVMSeqStorageAdapter
 }
@@ -45,7 +44,6 @@ func newAppPartitions(
 	jobSchedulerRunner ISchedulerRunner,
 	eef iextengine.ExtensionEngineFactories,
 	bf irates.BucketsFactoryType,
-	appsSeqTypes map[appdef.AppQName]map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number,
 	iTime coreutils.ITime,
 	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap IAppPartitions, cleanup func(), err error) {
@@ -59,13 +57,12 @@ func newAppPartitions(
 		extEngineFactories:     eef,
 		bucketsFactory:         bf,
 		apps:                   map[appdef.AppQName]*appRT{},
-		appsSeqTypes:           appsSeqTypes,
 		iTime:                  iTime,
 		seqStorageAdapter:      seqStorageAdapter,
 	}
 	a.asyncActualizersRunner.SetAppPartitions(a)
 	a.schedulerRunner.SetAppPartitions(a)
-	return a, func() {}, err
+	return a, a.cleanup, err
 }
 
 func (aps *apps) AppDef(name appdef.AppQName) (appdef.IAppDef, error) {
@@ -276,6 +273,14 @@ func (aps *apps) WorkedSchedulers(app appdef.AppQName) iter.Seq2[istructs.Partit
 			if !visit(id, names[id]) {
 				return
 			}
+		}
+	}
+}
+
+func (aps *apps) cleanup() {
+	for _, appRT := range aps.apps {
+		for _, appPartitionRT := range appRT.parts {
+			appPartitionRT.seqCleanup()
 		}
 	}
 }
