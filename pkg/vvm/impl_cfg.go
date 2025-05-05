@@ -57,7 +57,7 @@ func NewVVMDefaultConfig() VVMConfig {
 		NumVVM:        1,
 
 		// [~server.design.sequences/tuc.VVMConfig.ConfigureSequencesTrustLevel~impl]
-		SequencesTrustLevel: isequencer.SequencesTrustLevel_0,
+		SequencesTrustLevel: isequencer.SequencesTrustLevel_2,
 	}
 	if coreutils.IsTest() {
 		res.SecretsReader = itokensjwt.ProvideTestSecretsReader(res.SecretsReader)
