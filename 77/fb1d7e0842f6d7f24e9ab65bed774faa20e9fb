@@ -1,1 +1,3 @@
 Resolves issue 'consider wlogoffset in batcher'
+
+Resolves #3650 consider wlogoffset in batcher
