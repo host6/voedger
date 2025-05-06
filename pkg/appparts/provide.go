@@ -51,7 +51,6 @@ func New2(
 	eef iextengine.ExtensionEngineFactories,
 	bf irates.BucketsFactoryType,
 	iTime coreutils.ITime,
-	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap IAppPartitions, cleanup func(), err error) {
 	return newAppPartitions(vvmCtx, structs, syncAct, asyncActualizersRunner, jobSchedulerRunner, eef, bf, iTime, seqStorageAdapter)
 }
