@@ -1,1 +1,3 @@
 Resolves issue 'do not store PartitionID in VVMSeqStorageAdapter'
+
+Resolves #3652 do not store PartitionID in VVMSeqStorageAdapter
