@@ -37,21 +37,17 @@ func (ss *implISeqStorage) ActualizeSequencesFromPLog(ctx context.Context, offse
 }
 
 func (ss *implISeqStorage) WriteValuesAndNextPLogOffset(batch []isequencer.SeqValue, pLogOffset isequencer.PLogOffset) error {
-	if err := ss.storage.PutBatch(ss.appID, batch); err != nil {
+	if err := ss.storage.PutNumbers(ss.appID, batch); err != nil {
 		// notest
 		return err
 	}
-	return ss.storage.PutPLogOffset(ss.appID, pLogOffset)
+	return ss.storage.PutPLogOffset(pLogOffset)
 }
 
 func (ss *implISeqStorage) ReadNumbers(wsid isequencer.WSID, seqIDs []isequencer.SeqID) ([]isequencer.Number, error) {
-	if ss.storage == nil {
-		// happens in tests only
-		return nil, nil
-	}
 	res := make([]isequencer.Number, len(seqIDs))
 	for i, seqID := range seqIDs {
-		ok, number, err := ss.storage.Get(ss.appID, wsid, seqID)
+		ok, number, err := ss.storage.GetNumber(ss.appID, wsid, seqID)
 		if err != nil {
 			// notest
 			return nil, err
@@ -64,16 +60,12 @@ func (ss *implISeqStorage) ReadNumbers(wsid isequencer.WSID, seqIDs []isequencer
 }
 
 func (ss *implISeqStorage) ReadNextPLogOffset() (isequencer.PLogOffset, error) {
-	if ss.storage == nil {
-		// happens in tests only
-		return 0, nil
-	}
-	numbers, err := ss.ReadNumbers(isequencer.WSID(istructs.NullWSID), []isequencer.SeqID{isequencer.SeqID(istructs.QNameIDPLogOffsetSequence)})
+	_, pLogOffset, err := ss.storage.GetPLogOffset()
 	if err != nil {
 		// notest
 		return 0, err
 	}
-	return isequencer.PLogOffset(numbers[0]), nil
+	return pLogOffset, nil
 }
 
 func (ss *implISeqStorage) getNumbersFromObject(root istructs.IObject, wsid istructs.WSID, batch *[]isequencer.SeqValue) {

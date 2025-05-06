@@ -25,7 +25,8 @@ func TestSeqStorage(t *testing.T) {
 	appStorageProvider := istoragecache.Provide(1000, provider.Provide(memStorageFactory), imetrics.Provide(), "", coreutils.MockTime)
 	sysVvmAppStorage, err := appStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
 	require.NoError(err)
-	seqStorage := NewVVMSeqStorageAdapter(sysVvmAppStorage)
+	testPartitionID := isequencer.PartitionID(42)
+	seqStorage := NewVVMSeqStorageAdapter(sysVvmAppStorage, testPartitionID)
 
 	// Base test data
 	baseAppID := istructs.ClusterApps[istructs.AppQName_test1_app1]
@@ -72,7 +73,7 @@ func TestSeqStorage(t *testing.T) {
 	for i, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// Verify value doesn't exist before Put
-			ok, num, err := seqStorage.Get(tt.appID+isequencer.ClusterAppID(i), tt.wsid+isequencer.WSID(i), tt.seqID+isequencer.SeqID(i))
+			ok, num, err := seqStorage.GetNumber(tt.appID+isequencer.ClusterAppID(i), tt.wsid+isequencer.WSID(i), tt.seqID+isequencer.SeqID(i))
 			require.NoError(err)
 			require.False(ok)
 			require.Zero(num)
@@ -85,22 +86,24 @@ func TestSeqStorage(t *testing.T) {
 				},
 				Value: tt.num,
 			}}
-			err = seqStorage.PutBatch(tt.appID+isequencer.ClusterAppID(i), batch)
+			err = seqStorage.PutNumbers(tt.appID+isequencer.ClusterAppID(i), batch)
 			require.NoError(err)
 
 			// Verify value after Put
-			ok, num, err = seqStorage.Get(tt.appID+isequencer.ClusterAppID(i), tt.wsid+isequencer.WSID(i), tt.seqID+isequencer.SeqID(i))
+			ok, num, err = seqStorage.GetNumber(tt.appID+isequencer.ClusterAppID(i), tt.wsid+isequencer.WSID(i), tt.seqID+isequencer.SeqID(i))
 			require.NoError(err)
 			require.True(ok)
 			require.Equal(tt.num, num)
 
 			// check the key structure using the underlying storage
-			pKey := []byte{}
-			pKey = binary.BigEndian.AppendUint32(pKey, pKeyPrefix_SeqStorage)
+			pKey := make([]byte, 0, 4+4+8)
+			pKey = binary.BigEndian.AppendUint32(pKey, pKeyPrefix_SeqStorage_WS)
 			pKey = binary.BigEndian.AppendUint32(pKey, tt.appID+isequencer.ClusterAppID(i))
-			cCols := []byte{}
-			cCols = binary.BigEndian.AppendUint64(cCols, uint64(tt.wsid+isequencer.WSID(i)))
-			cCols = binary.BigEndian.AppendUint16(cCols, uint16(tt.seqID+isequencer.SeqID(i)))
+			pKey = binary.BigEndian.AppendUint64(pKey, uint64(tt.wsid+isequencer.WSID(i)))
+
+			cCols := make([]byte, 2)
+			binary.BigEndian.PutUint16(cCols, uint16(tt.seqID+isequencer.SeqID(i)))
+
 			data := []byte{}
 			ok, err = sysVvmAppStorage.Get(pKey, cCols, &data)
 			require.NoError(err)
@@ -120,37 +123,26 @@ func TestSeqStorage(t *testing.T) {
 		num2 := isequencer.Number(43)
 
 		// Verify value doesn't exist before Put
-		ok, num, err := seqStorage.Get(baseAppID, baseWsid, baseSeqID)
+		ok, num, err := seqStorage.GetNumber(baseAppID, baseWsid, baseSeqID)
 		require.NoError(err)
 		require.False(ok)
 		require.Zero(num)
 
 		// Put initial value
 		batch := []isequencer.SeqValue{{Key: isequencer.NumberKey{WSID: baseWsid, SeqID: baseSeqID}, Value: num1}}
-		err = seqStorage.PutBatch(baseAppID, batch)
+		err = seqStorage.PutNumbers(baseAppID, batch)
 		require.NoError(err)
 
 		// Overwrite with new value
 		batch = []isequencer.SeqValue{{Key: isequencer.NumberKey{WSID: baseWsid, SeqID: baseSeqID}, Value: num2}}
-		err = seqStorage.PutBatch(baseAppID, batch)
+		err = seqStorage.PutNumbers(baseAppID, batch)
 		require.NoError(err)
 
 		// Verify new value
-		ok, actualNum, err := seqStorage.Get(baseAppID, baseWsid, baseSeqID)
+		ok, actualNum, err := seqStorage.GetNumber(baseAppID, baseWsid, baseSeqID)
 		require.NoError(err)
 		require.True(ok)
 		require.Equal(num2, actualNum)
-	})
-
-	t.Run("panic on try to write PLogOffsetSequence", func(t *testing.T) {
-		batch := []isequencer.SeqValue{{
-			Key: isequencer.NumberKey{
-				WSID:  1,
-				SeqID: isequencer.SeqID(istructs.QNameIDPLogOffsetSequence),
-			},
-			Value: 42,
-		}}
-		require.Panics(func() { seqStorage.PutBatch(istructs.ClusterAppID(1), batch) })
 	})
 }
 
@@ -159,24 +151,39 @@ func TestPutPLogOffset(t *testing.T) {
 	appStorageProvider := provider.Provide(mem.Provide(coreutils.MockTime))
 	sysVvmAppStorage, err := appStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
 	require.NoError(err)
-	seqStorage := NewVVMSeqStorageAdapter(sysVvmAppStorage)
+	testPartitionID := isequencer.PartitionID(42)
+	seqStorage := NewVVMSeqStorageAdapter(sysVvmAppStorage, testPartitionID)
 
 	// Base test data
-	baseAppID := istructs.ClusterApps[istructs.AppQName_test1_app1]
 	pLogOffset := isequencer.PLogOffset(42)
 
 	// initially missing
-	ok, num, err := seqStorage.Get(baseAppID, isequencer.WSID(istructs.NullWSID), isequencer.SeqID(istructs.QNameIDPLogOffsetSequence))
+	ok, num, err := seqStorage.GetPLogOffset()
 	require.NoError(err)
 	require.False(ok)
 	require.Zero(num)
 
 	// write
-	require.NoError(seqStorage.PutPLogOffset(baseAppID, pLogOffset))
+	require.NoError(seqStorage.PutPLogOffset(pLogOffset))
 
 	// read
-	ok, num, err = seqStorage.Get(baseAppID, isequencer.WSID(istructs.NullWSID), isequencer.SeqID(istructs.QNameIDPLogOffsetSequence))
+	ok, num, err = seqStorage.GetPLogOffset()
 	require.NoError(err)
 	require.True(ok)
 	require.Equal(pLogOffset, isequencer.PLogOffset(num))
+
+	// storage for an another partition must be different
+	testPartitionID2 := isequencer.PartitionID(123)
+	seqStorage2 := NewVVMSeqStorageAdapter(sysVvmAppStorage, testPartitionID2)
+	pLogOffset2 := isequencer.PLogOffset(100)
+	require.NoError(seqStorage2.PutPLogOffset(pLogOffset2))
+	ok, num, err = seqStorage2.GetPLogOffset()
+	require.NoError(err)
+	require.True(ok)
+	require.Equal(pLogOffset2, isequencer.PLogOffset(num))
+	ok, num, err = seqStorage.GetPLogOffset()
+	require.NoError(err)
+	require.True(ok)
+	require.Equal(pLogOffset, isequencer.PLogOffset(num))
+
 }
