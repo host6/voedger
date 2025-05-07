@@ -49,7 +49,10 @@ func (s *implVVMSeqStorageAdapter) GetPLogOffset(partitionID isequencer.Partitio
 
 	data := make([]byte, utils.Uint64Size)
 	ok, err = s.sysVVMStorage.Get(pKey, cCols, &data)
-	return ok, isequencer.PLogOffset(binary.BigEndian.Uint64(data)), err
+	if len(data) > 0 {
+		pLogOffset = isequencer.PLogOffset(binary.BigEndian.Uint64(data))
+	}
+	return ok, pLogOffset, err
 }
 
 func (s *implVVMSeqStorageAdapter) PutPLogOffset(partitionID isequencer.PartitionID, pLogOffset isequencer.PLogOffset) error {
