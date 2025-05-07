@@ -66,10 +66,6 @@ func (ss *implISeqStorage) ReadNumbers(wsid isequencer.WSID, seqIDs []isequencer
 }
 
 func (ss *implISeqStorage) ReadNextPLogOffset() (isequencer.PLogOffset, error) {
-	if ss.storage == nil {
-		// happens if appparts initialized by New(), IVVMSeqStroage is nil there
-		return 0, nil
-	}
 	_, pLogOffset, err := ss.storage.GetPLogOffset(isequencer.PartitionID(ss.partitionID))
 	if err != nil {
 		// notest

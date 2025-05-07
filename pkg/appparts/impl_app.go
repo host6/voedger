@@ -184,9 +184,13 @@ func newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
 	as := app.lastestVersion.appStructs()
 	buckets := app.apps.bucketsFactory()
 
-	// [~server.design.sequences/tuc.InstantiateSequencer~impl]
-	seqStorage := seqstorage.New(as.ClusterAppID(), id, as.Events(), as.AppDef(), app.apps.seqStorageAdapter)
-	sequencer, seqCleanup := isequencer.New(isequencer.NewDefaultParams(getSeqTypes(as.SeqTypes())), seqStorage, app.iTime)
+	var sequencer isequencer.ISequencer
+	seqCleanup := func() {}
+	if app.apps.seqStorageAdapter != nil {
+		// [~server.design.sequences/tuc.InstantiateSequencer~impl]
+		seqStorage := seqstorage.New(as.ClusterAppID(), id, as.Events(), as.AppDef(), app.apps.seqStorageAdapter)
+		sequencer, seqCleanup = isequencer.New(isequencer.NewDefaultParams(getSeqTypes(as.SeqTypes())), seqStorage, app.iTime)
+	}
 
 	part := &appPartitionRT{
 		app:            app,
