@@ -79,7 +79,7 @@ func ExampleIAppPartition_IsLimitExceeded() {
 		appparts.NullSchedulerRunner,
 		appparts.NullExtensionEngineFactories,
 		iratesce.TestBucketsFactory,
-		coreutils.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
 	if err != nil {
 		panic(err)

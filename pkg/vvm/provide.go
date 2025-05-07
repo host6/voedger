@@ -370,7 +370,7 @@ func provideAppPartitions(
 	builtinAppsArtefacts BuiltInAppsArtefacts,
 	vvmName processors.VVMName,
 	imetrics imetrics.IMetrics,
-	iTime coreutils.ITime,
+	iTime timeu.ITime,
 	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap appparts.IAppPartitions, cleanup func(), err error) {
 

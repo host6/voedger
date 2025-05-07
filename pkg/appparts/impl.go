@@ -16,6 +16,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/irates"
 	"github.com/voedger/voedger/pkg/isequencer"
@@ -32,7 +33,7 @@ type apps struct {
 	extEngineFactories     iextengine.ExtensionEngineFactories
 	bucketsFactory         irates.BucketsFactoryType
 	apps                   map[appdef.AppQName]*appRT
-	iTime                  coreutils.ITime
+	iTime                  timeu.ITime
 	seqStorageAdapter      isequencer.IVVMSeqStorageAdapter
 }
 
@@ -44,7 +45,7 @@ func newAppPartitions(
 	jobSchedulerRunner ISchedulerRunner,
 	eef iextengine.ExtensionEngineFactories,
 	bf irates.BucketsFactoryType,
-	iTime coreutils.ITime,
+	iTime timeu.ITime,
 	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap IAppPartitions, cleanup func(), err error) {
 	a := &apps{

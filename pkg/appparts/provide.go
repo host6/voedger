@@ -8,7 +8,7 @@ package appparts
 import (
 	"context"
 
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/irates"
 	"github.com/voedger/voedger/pkg/isequencer"
@@ -50,7 +50,7 @@ func New2(
 	jobSchedulerRunner ISchedulerRunner,
 	eef iextengine.ExtensionEngineFactories,
 	bf irates.BucketsFactoryType,
-	iTime coreutils.ITime,
+	iTime timeu.ITime,
 	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
 ) (ap IAppPartitions, cleanup func(), err error) {
 	return newAppPartitions(vvmCtx, structs, syncAct, asyncActualizersRunner, jobSchedulerRunner, eef, bf, iTime, seqStorageAdapter)

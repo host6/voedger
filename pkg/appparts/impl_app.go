@@ -18,7 +18,7 @@ import (
 	"github.com/voedger/voedger/pkg/appparts/internal/pool"
 	"github.com/voedger/voedger/pkg/appparts/internal/schedulers"
 	"github.com/voedger/voedger/pkg/appparts/internal/seqstorage"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -73,7 +73,7 @@ type appRT struct {
 	partsCount     istructs.NumAppPartitions
 	lastestVersion appVersion
 	parts          map[istructs.PartitionID]*appPartitionRT
-	iTime          coreutils.ITime
+	iTime          timeu.ITime
 }
 
 func newApplication(apps *apps, name appdef.AppQName, partsCount istructs.NumAppPartitions) *appRT {
