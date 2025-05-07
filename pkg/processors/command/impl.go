@@ -198,6 +198,9 @@ func getWSKind(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	} else {
 		cmd.wsKind = cmd.iWorkspace.Descriptor()
 	}
+	if cmd.wsKind == istructs.NullQName {
+		return errors.New("failed to get wsKind")
+	}
 	return err
 }
 

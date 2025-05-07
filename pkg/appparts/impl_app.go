@@ -162,7 +162,7 @@ type appPartitionRT struct {
 	schedulers     *schedulers.PartitionSchedulers
 	limiter        *limiter.Limiter
 	sequencer      isequencer.ISequencer
-	seqCleanup     context.CancelFunc // TODOL use it on partition undeploy
+	seqCleanup     context.CancelFunc // TODO: use it on partition undeploy
 }
 
 func getSeqTypes(seqTypes map[istructs.QNameID]map[istructs.QNameID]uint64) map[isequencer.WSKind]map[isequencer.SeqID]isequencer.Number {
