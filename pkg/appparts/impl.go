@@ -47,7 +47,7 @@ func newAppPartitions(
 	bf irates.BucketsFactoryType,
 	iTime timeu.ITime,
 	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
-) (ap IAppPartitions, cleanup func(), err error) {
+) (ap IAppPartitions, cleanup func()) {
 	a := &apps{
 		mx:                     sync.RWMutex{},
 		vvmCtx:                 vvmCtx,
@@ -63,7 +63,7 @@ func newAppPartitions(
 	}
 	a.asyncActualizersRunner.SetAppPartitions(a)
 	a.schedulerRunner.SetAppPartitions(a)
-	return a, a.cleanup, err
+	return a, a.cleanup
 }
 
 func (aps *apps) AppDef(name appdef.AppQName) (appdef.IAppDef, error) {

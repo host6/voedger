@@ -143,14 +143,13 @@ func Test_DeployActualizersAndSchedulers(t *testing.T) {
 	mockSchedulers := &mockSchedulerRunner{}
 	mockSchedulers.On("SetAppPartitions", mock.Anything).Once()
 
-	appParts, cleanupParts, err := appparts.New2(ctx, appStructs, appparts.NullSyncActualizerFactory,
+	appParts, cleanupParts := appparts.New2(ctx, appStructs, appparts.NullSyncActualizerFactory,
 		mockActualizers,
 		mockSchedulers,
 		appparts.NullExtensionEngineFactories,
 		iratesce.TestBucketsFactory,
 		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
-	require.NoError(err)
 
 	defer cleanupParts()
 

@@ -18,9 +18,9 @@ import (
 
 type SyncActualizerFactory = func(istructs.IAppStructs, istructs.PartitionID) pipeline.ISyncOperator
 
-// New only for tests where sync actualizer is not used
-func New(structs istructs.IAppStructsProvider) (ap IAppPartitions, cleanup func(), err error) {
-	return New2(
+// NewForTests only for tests where sync actualizer is not used
+func NewForTests(structs istructs.IAppStructsProvider) IAppPartitions {
+	iAppParts, _ := New2(
 		context.Background(),
 		structs,
 		NullSyncActualizerFactory,
@@ -30,6 +30,7 @@ func New(structs istructs.IAppStructsProvider) (ap IAppPartitions, cleanup func(
 		irates.NullBucketsFactory,
 		nil, nil,
 	)
+	return iAppParts
 }
 
 // New2 creates new app partitions.
@@ -52,6 +53,6 @@ func New2(
 	bf irates.BucketsFactoryType,
 	iTime timeu.ITime,
 	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
-) (ap IAppPartitions, cleanup func(), err error) {
+) (ap IAppPartitions, cleanup func()) {
 	return newAppPartitions(vvmCtx, structs, syncAct, asyncActualizersRunner, jobSchedulerRunner, eef, bf, iTime, seqStorageAdapter)
 }

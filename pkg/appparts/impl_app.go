@@ -180,13 +180,14 @@ func getSeqTypes(seqTypes map[istructs.QNameID]map[istructs.QNameID]uint64) map[
 	return res
 }
 
-func newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
+func  newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
 	as := app.lastestVersion.appStructs()
 	buckets := app.apps.bucketsFactory()
 
 	var sequencer isequencer.ISequencer
 	seqCleanup := func() {}
 	if app.apps.seqStorageAdapter != nil {
+		// seqStorageAdapter is nil in tests
 		// [~server.design.sequences/tuc.InstantiateSequencer~impl]
 		seqStorage := seqstorage.New(as.ClusterAppID(), id, as.Events(), as.AppDef(), app.apps.seqStorageAdapter)
 		sequencer, seqCleanup = isequencer.New(isequencer.NewDefaultParams(getSeqTypes(as.SeqTypes())), seqStorage, app.iTime)

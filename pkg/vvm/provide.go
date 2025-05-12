@@ -372,7 +372,7 @@ func provideAppPartitions(
 	imetrics imetrics.IMetrics,
 	iTime timeu.ITime,
 	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
-) (ap appparts.IAppPartitions, cleanup func(), err error) {
+) (ap appparts.IAppPartitions, cleanup func()) {
 
 	eef := engines.ProvideExtEngineFactories(engines.ExtEngineFactoriesConfig{
 		StatelessResources: sr,

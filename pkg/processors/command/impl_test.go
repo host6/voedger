@@ -744,7 +744,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	}, timeu.NewITime())
 
 	// prepare the AppParts to borrow AppStructs
-	appParts, appPartsClean, err := appparts.New2(ctx, appStructsProvider,
+	appParts, appPartsClean := appparts.New2(ctx, appStructsProvider,
 		actualizers.NewSyncActualizerFactoryFactory(actualizers.ProvideSyncActualizerFactory(), secretReader, n10nBroker, statelessResources),
 		appparts.NullActualizerRunner,
 		appparts.NullSchedulerRunner,
@@ -757,7 +757,6 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 		iratesce.TestBucketsFactory,
 		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
-	require.NoError(err)
 	defer appPartsClean()
 
 	appParts.DeployApp(testAppName, nil, appDef, testAppPartCount, testAppEngines, cfg.NumAppWorkspaces())

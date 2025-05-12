@@ -202,7 +202,7 @@ func deployTestApp(t *testing.T) (appParts appparts.IAppPartitions, appStructs i
 		SubscriptionsPerSubject: 10,
 	}, timeu.NewITime())
 
-	appParts, appPartsCleanup, err := appparts.New2(context.Background(), appStructsProvider,
+	appParts, appPartsCleanup := appparts.New2(context.Background(), appStructsProvider,
 		actualizers.NewSyncActualizerFactoryFactory(actualizers.ProvideSyncActualizerFactory(), secretReader, n10nBroker, statelessResources),
 		appparts.NullActualizerRunner,
 		appparts.NullSchedulerRunner,
@@ -213,7 +213,6 @@ func deployTestApp(t *testing.T) (appParts appparts.IAppPartitions, appStructs i
 				WASMConfig:         iextengine.WASMFactoryConfig{},
 			}, "", imetrics.Provide()),
 		iratesce.TestBucketsFactory, testingu.MockTime, nil)
-	require.NoError(err)
 	appParts.DeployApp(test.appQName, nil, appDef, test.totalPartitions, test.appEngines, 1)
 	appParts.DeployAppPartitions(test.appQName, []istructs.PartitionID{test.partition})
 

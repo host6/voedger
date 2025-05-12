@@ -71,7 +71,7 @@ func ExampleIAppPartition_IsLimitExceeded() {
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
 		provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0)
 
-	appParts, cleanupParts, err := appparts.New2(
+	appParts, cleanupParts := appparts.New2(
 		context.Background(),
 		appStructs,
 		appparts.NullSyncActualizerFactory,
@@ -81,9 +81,6 @@ func ExampleIAppPartition_IsLimitExceeded() {
 		iratesce.TestBucketsFactory,
 		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
-	if err != nil {
-		panic(err)
-	}
 	defer cleanupParts()
 
 	appParts.DeployApp(istructs.AppQName_test1_app1, nil, app, 1, appparts.PoolSize(1, 1, 1, 1), istructs.DefaultNumAppWorkspaces)

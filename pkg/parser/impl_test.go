@@ -3074,7 +3074,7 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
 		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
 	statelessResources := istructsmem.NewStatelessResources()
-	appParts, cleanup, err := appparts.New2(context.Background(), appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
+	appParts, cleanup := appparts.New2(context.Background(), appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
 		engines.ProvideExtEngineFactories(
 			engines.ExtEngineFactoriesConfig{
 				AppConfigs:         cfgs,
@@ -3082,7 +3082,6 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
 		irates.NullBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter())
-	require.NoError(err)
 	defer cleanup()
 	appParts.DeployApp(appQName, nil, appDef, 1, [4]uint{1, 1, 1, 1}, 1)
 	appParts.DeployAppPartitions(appQName, []istructs.PartitionID{1})
@@ -3128,7 +3127,7 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
 		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
 	statelessResources := istructsmem.NewStatelessResources()
-	appParts, cleanup, err := appparts.New2(context.Background(), appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
+	appParts, cleanup := appparts.New2(context.Background(), appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
 		engines.ProvideExtEngineFactories(
 			engines.ExtEngineFactoriesConfig{
 				AppConfigs:         cfgs,
@@ -3136,7 +3135,6 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
 		irates.NullBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter())
-	require.NoError(err)
 	defer cleanup()
 	appParts.DeployApp(appQName, nil, appDef, 1, [4]uint{1, 1, 1, 1}, 1)
 	appParts.DeployAppPartitions(appQName, []istructs.PartitionID{1})

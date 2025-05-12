@@ -334,7 +334,7 @@ func deployTestAppEx(
 
 	actualizers = ProvideActualizers(*actualizerCfg)
 
-	appParts, appPartsCleanup, err := appparts.New2(
+	appParts, appPartsCleanup := appparts.New2(
 		vvmCtx,
 		appStructsProvider,
 		NewSyncActualizerFactoryFactory(ProvideSyncActualizerFactory(), secretReader, n10nBroker, statelessResources),
@@ -349,9 +349,6 @@ func deployTestAppEx(
 		iratesce.TestBucketsFactory,
 		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
-	if err != nil {
-		panic(err)
-	}
 
 	appParts.DeployApp(appName, nil, appDef, appPartsCount, appparts.PoolSize(10, 10, 10, 0), cfg.NumAppWorkspaces())
 
