@@ -340,7 +340,7 @@ func (e *appEventsType) PutPlog(ev istructs.IRawEvent, buildErr error, generator
 	}
 
 	p, o := ev.HandlingPartition(), ev.PLogOffset()
-	pKey, cCols := plogKey(p, o)
+	pKey, cCols := PLogKey(p, o)
 
 	evData := dbEvent.storeToBytes()
 
@@ -369,7 +369,7 @@ func (e *appEventsType) PutPlog(ev istructs.IRawEvent, buildErr error, generator
 }
 
 func getEventBytes(ev istructs.IPLogEvent) (pKey, cCols, data []byte) {
-	pKey, cCols = wlogKey(ev.Workspace(), ev.WLogOffset())
+	pKey, cCols = WLogKey(ev.Workspace(), ev.WLogOffset())
 	data = ev.(*eventType).storeToBytes()
 	return pKey, cCols, data
 }
@@ -405,7 +405,7 @@ func (e *appEventsType) ReadPLog(ctx context.Context, partition istructs.Partiti
 			return cb(offset, e)
 		}
 
-		pKey, cCols := plogKey(partition, offset)
+		pKey, cCols := PLogKey(partition, offset)
 		data := bytespool.Get()
 		ok, err := e.app.config.storage.Get(pKey, cCols, &data.B)
 		if ok {
@@ -421,7 +421,7 @@ func (e *appEventsType) ReadPLog(ctx context.Context, partition istructs.Partiti
 	default:
 		return readLogParts(offset, toReadCount, func(ofsHi uint64, ofsLo1, ofsLo2 uint16) (ok bool, err error) {
 			count := 0
-			pKey, cFrom := plogKey(partition, glueLogOffset(ofsHi, ofsLo1))
+			pKey, cFrom := PLogKey(partition, glueLogOffset(ofsHi, ofsLo1))
 			cTo := uint16bytes(ofsLo2 + 1) // storage.Read() pass half-open interval [cFrom, cTo)
 			if ofsLo2 >= lowMask {
 				cTo = nil
@@ -446,7 +446,7 @@ func (e *appEventsType) ReadWLog(ctx context.Context, workspace istructs.WSID, o
 	switch toReadCount {
 	case 1:
 		// See [#292](https://github.com/voedger/voedger/issues/292)
-		pKey, cCols := wlogKey(workspace, offset)
+		pKey, cCols := WLogKey(workspace, offset)
 		data := bytespool.Get()
 		ok, err := e.app.config.storage.Get(pKey, cCols, &data.B)
 		if ok {
@@ -462,7 +462,7 @@ func (e *appEventsType) ReadWLog(ctx context.Context, workspace istructs.WSID, o
 	default:
 		return readLogParts(offset, toReadCount, func(ofsHi uint64, ofsLo1, ofsLo2 uint16) (ok bool, err error) {
 			count := 0
-			pKey, cFrom := wlogKey(workspace, glueLogOffset(ofsHi, ofsLo1))
+			pKey, cFrom := WLogKey(workspace, glueLogOffset(ofsHi, ofsLo1))
 			cTo := uint16bytes(ofsLo2 + 1) // storage.Read() pass half-open interval [cFrom, cTo)
 			if ofsLo2 >= lowMask {
 				cTo = nil
@@ -496,7 +496,7 @@ func newRecords(app *appStructsType) appRecordsType {
 
 // getRecord reads record from application storage through view-records methods
 func (recs *appRecordsType) getRecord(workspace istructs.WSID, id istructs.RecordID, data *[]byte) (ok bool, err error) {
-	pk, cc := recordKey(workspace, id)
+	pk, cc := RecordKey(workspace, id)
 	return recs.app.config.storage.Get(pk, cc, data)
 }
 
@@ -509,7 +509,7 @@ func (recs *appRecordsType) getRecordBatch(workspace istructs.WSID, ids []istruc
 	plan := make(map[string][]istorage.GetBatchItem)
 	for i := 0; i < len(ids); i++ {
 		ids[i].Record = NewNullRecord(ids[i].ID)
-		pk, cc := recordKey(workspace, ids[i].ID)
+		pk, cc := RecordKey(workspace, ids[i].ID)
 		batch, ok := plan[string(pk)]
 		if !ok {
 			batch = make([]istorage.GetBatchItem, 0, len(ids)-i) // to prevent reallocation
@@ -538,7 +538,7 @@ func (recs *appRecordsType) getRecordBatch(workspace istructs.WSID, ids []istruc
 
 // putRecord puts record to application storage through view-records methods
 func (recs *appRecordsType) putRecord(workspace istructs.WSID, id istructs.RecordID, data []byte) (err error) {
-	pk, cc := recordKey(workspace, id)
+	pk, cc := RecordKey(workspace, id)
 	return recs.app.config.storage.Put(pk, cc, data)
 }
 
@@ -554,13 +554,13 @@ func (recs *appRecordsType) putRecordsBatch(workspace istructs.WSID, records []r
 	switch {
 	case isReapply, recs.app.seqTrustLevel == isequencer.SequencesTrustLevel_1, recs.app.seqTrustLevel == isequencer.SequencesTrustLevel_2:
 		for i, r := range records {
-			batch[i].PKey, batch[i].CCols = recordKey(workspace, r.id)
+			batch[i].PKey, batch[i].CCols = RecordKey(workspace, r.id)
 			batch[i].Value = r.data
 		}
 		return recs.app.config.storage.PutBatch(batch)
 	case recs.app.seqTrustLevel == isequencer.SequencesTrustLevel_0:
 		for _, r := range records {
-			pKey, cCols := recordKey(workspace, r.id)
+			pKey, cCols := RecordKey(workspace, r.id)
 			// [~tuc.SequencesTrustLevelForRecords~]
 			if r.isNew {
 				ok, err := recs.app.config.storage.InsertIfNotExists(pKey, cCols, r.data, 0)

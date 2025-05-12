@@ -351,7 +351,10 @@ func (cmdProc *cmdProc) putPLog(_ context.Context, work pipeline.IWorkpiece) (er
 	} else {
 		cmd.appPartition.nextPLogOffset++
 	}
-	return
+	if err != nil {
+		return fmt.Errorf("PutPLog: %w", err)
+	}
+	return nil
 }
 
 func getWSDesc(_ context.Context, work pipeline.IWorkpiece) (err error) {

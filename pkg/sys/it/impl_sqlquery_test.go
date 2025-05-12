@@ -30,24 +30,6 @@ func TestBasicUsage_SqlQuery(t *testing.T) {
 	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
 	idUntillUsers := vit.GetAny("app1pkg.untill_users", ws)
 
-	findPLogOffsetByWLogOffset := func(wLogOffset istructs.Offset) istructs.Offset {
-		type row struct {
-			Workspace  istructs.WSID
-			PlogOffset istructs.Offset
-			WLogOffset istructs.Offset
-		}
-		body := `{"args":{"Query":"select Workspace, PlogOffset, WLogOffset from sys.plog limit -1"},"elements":[{"fields":["Result"]}]}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body)
-		for _, element := range resp.Sections[0].Elements {
-			r := new(row)
-			require.NoError(json.Unmarshal([]byte(element[0][0][0].(string)), r))
-			if r.Workspace == ws.WSID && r.WLogOffset == wLogOffset {
-				return r.PlogOffset
-			}
-		}
-		panic("PlogOffset not found")
-	}
-
 	tableNum := vit.NextNumber()
 
 	body := `{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.category","name":"Awesome food"}}]}`
@@ -57,7 +39,8 @@ func TestBasicUsage_SqlQuery(t *testing.T) {
 	body = `{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.payments","name":"EFT","guid":"0a53b7c6-2c47-491c-ac00-307b8d5ba6f2"}}]}`
 	resp := vit.PostWS(ws, "c.sys.CUD", body)
 
-	body = fmt.Sprintf(`{"args":{"Query":"select CUDs from sys.plog where Offset>=%d"},"elements":[{"fields":["Result"]}]}`, findPLogOffsetByWLogOffset(resp.CurrentWLogOffset))
+	body = fmt.Sprintf(`{"args":{"Query":"select CUDs from sys.plog where Offset>=%d"},"elements":[{"fields":["Result"]}]}`,
+		findPLogOffsetByWLogOffset(t, vit, ws, resp.CurrentWLogOffset))
 	resp = vit.PostWS(ws, "q.sys.SqlQuery", body)
 
 	require.Contains(resp.SectionRow()[0], "0a53b7c6-2c47-491c-ac00-307b8d5ba6f2")
@@ -582,4 +565,22 @@ func TestAuthnz(t *testing.T) {
 		body = `{"args":{"Query":"select Fld1 from app1pkg.TestCDocWithDeniedFields.123"},"elements":[{"fields":["Result"]}]}`
 		vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect400("record with ID '123' not found"))
 	})
+}
+
+func findPLogOffsetByWLogOffset(t *testing.T, vit *it.VIT, ws *it.AppWorkspace, wLogOffset istructs.Offset) istructs.Offset {
+	type row struct {
+		Workspace  istructs.WSID
+		PlogOffset istructs.Offset
+		WLogOffset istructs.Offset
+	}
+	body := `{"args":{"Query":"select Workspace, PlogOffset, WLogOffset from sys.plog limit -1"},"elements":[{"fields":["Result"]}]}`
+	resp := vit.PostWS(ws, "q.sys.SqlQuery", body)
+	for _, element := range resp.Sections[0].Elements {
+		r := new(row)
+		require.NoError(t, json.Unmarshal([]byte(element[0][0][0].(string)), r))
+		if r.Workspace == ws.WSID && r.WLogOffset == wLogOffset {
+			return r.PlogOffset
+		}
+	}
+	panic("PlogOffset not found")
 }

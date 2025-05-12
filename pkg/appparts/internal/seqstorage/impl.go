@@ -70,7 +70,7 @@ func (ss *implISeqStorage) ReadNextPLogOffset() (isequencer.PLogOffset, error) {
 	if err != nil {
 		// notest
 		return 0, err
-	}
+	}          
 	return pLogOffset, nil
 }
 

@@ -67,7 +67,7 @@ func uint16bytes(v uint16) []byte {
 const uint64len, uint16len = 8, 2
 
 // Returns partition key and clustering columns bytes for specified record id in specified workspace
-func recordKey(ws istructs.WSID, id istructs.RecordID) (pkey, ccols []byte) {
+func RecordKey(ws istructs.WSID, id istructs.RecordID) (pkey, ccols []byte) {
 	hi, lo := crackRecordID(id)
 
 	pkey = make([]byte, uint16len+uint64len+uint64len)
@@ -79,7 +79,7 @@ func recordKey(ws istructs.WSID, id istructs.RecordID) (pkey, ccols []byte) {
 }
 
 // Returns partition key and clustering columns bytes for specified plog partition and offset
-func plogKey(partition istructs.PartitionID, offset istructs.Offset) (pkey, ccols []byte) {
+func PLogKey(partition istructs.PartitionID, offset istructs.Offset) (pkey, ccols []byte) {
 	hi, lo := crackLogOffset(offset)
 
 	pkey = make([]byte, uint16len+uint16len+uint64len)
@@ -91,7 +91,7 @@ func plogKey(partition istructs.PartitionID, offset istructs.Offset) (pkey, ccol
 }
 
 // Returns partition key and clustering columns bytes for specified wlog workspace and offset
-func wlogKey(ws istructs.WSID, offset istructs.Offset) (pkey, ccols []byte) {
+func WLogKey(ws istructs.WSID, offset istructs.Offset) (pkey, ccols []byte) {
 	hi, lo := crackLogOffset(offset)
 
 	pkey = make([]byte, uint16len+uint64len+uint64len)

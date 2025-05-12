@@ -66,6 +66,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 						err = cmd.appStructs.Records().Apply(cmd.pLogEvent)
 					}
 					if err != nil {
+						err = fmt.Errorf("ApplyRecords: %w", err)
 						cmd.appPartitionRestartScheduled = true
 					}
 					return err
@@ -96,6 +97,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 							err = cmd.appStructs.Events().PutWlog(cmd.pLogEvent)
 						}
 						if err != nil {
+							err = fmt.Errorf("PutWLog: %w", err)
 							cmd.appPartitionRestartScheduled = true
 						} else {
 							cmd.workspace.NextWLogOffset++
