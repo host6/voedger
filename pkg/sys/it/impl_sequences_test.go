@@ -49,18 +49,7 @@ func TestSequencesTrustLevel_0(t *testing.T) {
 		require.NoError(as.Put(pkey, ccols, []byte{1}))
 
 		// try to insert one more record
-		require.Panics(func() { vit.PostWS(ws, "c.sys.CUD", body) })
-		
-		// func() {
-		// 	defer func() {
-		// 		r := recover()
-		// 		log.Println(r)
-		// 	}()
-		// 	vit.PostWS(ws, "c.sys.CUD", body)
-		// }()
-		// require.PanicsWithValue(istructsmem.ErrSequencesViolation_Record, func() {
-		// 	vit.PostWS(ws, "c.sys.CUD", body)
-		// })
+		vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect500("Records: sequences violation"))
 	})
 
 	t.Run("wlog event - protected against overwrite", func(t *testing.T) {

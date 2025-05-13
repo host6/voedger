@@ -103,7 +103,7 @@ func TestSequencesTrustLevel(t *testing.T) {
 			app.(*appStructsType).seqTrustLevel = isequencer.SequencesTrustLevel_0
 			t.Run("panic on write the same PLogOffset", func(t *testing.T) {
 				ev, err := app.Events().PutPlog(rawEvent, buildErr, NewIDGenerator())
-				require.ErrorIs(err, ErrSequencesViolation_Record)
+				require.ErrorIs(err, ErrSequencesViolation)
 				require.Nil(ev)
 			})
 		})
@@ -111,7 +111,7 @@ func TestSequencesTrustLevel(t *testing.T) {
 			app.(*appStructsType).seqTrustLevel = isequencer.SequencesTrustLevel_1
 			t.Run("panic on write the same PLogOffset", func(t *testing.T) {
 				ev, err := app.Events().PutPlog(rawEvent, buildErr, NewIDGenerator())
-				require.ErrorIs(err, ErrSequencesViolation_Record)
+				require.ErrorIs(err, ErrSequencesViolation)
 				require.Nil(ev)
 			})
 		})
@@ -133,7 +133,7 @@ func TestSequencesTrustLevel(t *testing.T) {
 			app.(*appStructsType).seqTrustLevel = isequencer.SequencesTrustLevel_0
 			t.Run("panic on write the same RecordIDs", func(t *testing.T) {
 				err := app.Records().Apply(pLogEvent)
-				require.ErrorIs(err, ErrSequencesViolation_Record)
+				require.ErrorIs(err, ErrSequencesViolation)
 			})
 		})
 		t.Run("trust level 1", func(t *testing.T) {
@@ -161,14 +161,14 @@ func TestSequencesTrustLevel(t *testing.T) {
 			app.(*appStructsType).seqTrustLevel = isequencer.SequencesTrustLevel_0
 			t.Run("panic on overwrite the same WLogOffset", func(t *testing.T) {
 				err := app.Events().PutWlog(pLogEvent)
-				require.ErrorIs(err, ErrSequencesViolation_Record)
+				require.ErrorIs(err, ErrSequencesViolation)
 			})
 		})
 		t.Run("trust level 1", func(t *testing.T) {
 			app.(*appStructsType).seqTrustLevel = isequencer.SequencesTrustLevel_1
 			t.Run("panic on write the same WLogOffset", func(t *testing.T) {
 				err := app.Events().PutWlog(pLogEvent)
-				require.ErrorIs(err, ErrSequencesViolation_Record)
+				require.ErrorIs(err, ErrSequencesViolation)
 			})
 		})
 

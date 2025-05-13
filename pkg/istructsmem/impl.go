@@ -352,7 +352,7 @@ func (e *appEventsType) PutPlog(ev istructs.IRawEvent, buildErr error, generator
 		// [~server.design.sequences/tuc.SequencesTrustLevelForPLog~impl]
 		if ok, err = e.app.config.storage.InsertIfNotExists(pKey, cCols, evData, 0); err == nil {
 			if !ok {
-				panic(ErrSequencesViolation_PLog)
+				return nil, ErrSequencesViolation
 			}
 		}
 	default:
@@ -385,7 +385,7 @@ func (e *appEventsType) PutWlog(ev istructs.IPLogEvent) (err error) {
 		// [~server.design.sequences/tuc.SequencesTrustLevelForWLog~impl]
 		if ok, err = e.app.config.storage.InsertIfNotExists(pKey, cCols, evData, 0); err == nil {
 			if !ok {
-				panic(ErrSequencesViolation_WLog)
+				return ErrSequencesViolation
 			}
 		}
 	default:
@@ -569,7 +569,7 @@ func (recs *appRecordsType) putRecordsBatch(workspace istructs.WSID, records []r
 					return err
 				}
 				if !ok {
-					panic(ErrSequencesViolation_Record)
+					return ErrSequencesViolation
 				}
 			} else {
 				if err := recs.app.config.storage.Put(pKey, cCols, r.data); err != nil {
