@@ -229,4 +229,8 @@ type ValidateError interface {
 	Code() int
 }
 
-var ErrSequencesViolation = errors.New("sequences violation")
+var (
+	ErrSequencesViolation_Record = errors.New("Records: sequences violation")
+	ErrSequencesViolation_WLog   = errors.New("WLog: sequences violation")
+	ErrSequencesViolation_PLog   = errors.New("PLog: sequences violation")
+)
