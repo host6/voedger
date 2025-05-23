@@ -1,1 +1,3 @@
 Resolves issue 'Fix c.sys.Workspace.InitiateInvitationByEMail() behaviour'
+
+Resolves #3698 Fix c.sys.Workspace.InitiateInvitationByEMail() behaviour
