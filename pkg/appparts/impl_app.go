@@ -180,7 +180,7 @@ func getSeqTypes(seqTypes map[istructs.QNameID]map[istructs.QNameID]uint64) map[
 	return res
 }
 
-func  newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
+func newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
 	as := app.lastestVersion.appStructs()
 	buckets := app.apps.bucketsFactory()
 
