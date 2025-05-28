@@ -1,1 +1,3 @@
 Resolves issue 'allow re-invite on `ToBeJoined` state'
+
+Resolves #3716 allow re-invite on `ToBeJoined` state
