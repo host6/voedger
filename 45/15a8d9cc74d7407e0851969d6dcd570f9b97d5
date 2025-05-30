@@ -1,1 +1,3 @@
 Resolves issue 'fix camelCase in CPv2: must be for APIv2 only'
+
+Resolves #3724 fix camelCase in CPv2: must be for APIv2 only
