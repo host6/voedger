@@ -1,1 +1,3 @@
 Resolves issue 'APIv2 notifications: extract router serve SSE and client-side read SSe routine'
+
+Resolves #3750 APIv2 notifications: extract router serve SSE and client-side read SSe routine
