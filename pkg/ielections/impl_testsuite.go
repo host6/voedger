@@ -28,8 +28,8 @@ func ElectionsTestSuite[K any, V any](t *testing.T, ttlStorage ITTLStorage[K, V]
 		"ReleaseLeadershipWithoutAcquire":                releaseLeadershipWithoutAcquire[K, V],
 		"AcquireFailingAfterCleanup":                     acquireFailingAfterCleanup[K, V],
 		"CleanupDuringRenewal":                           cleanupDuringRenewal[K, V],
+		// note: testing the case when ttl record is expired is nonsense because it is renewing, can not be expired. Key deletion case is covered
 	}
-	// note: testing the case when ttl record is expired is nonsense because it is renewing, can not be expired. Key deletion case is covered
 	for name, test := range tests {
 		t.Run(name, func(t *testing.T) {
 			elections, cleanup := Provide(ttlStorage, testingu.MockTime)
@@ -79,7 +79,7 @@ func closeContextOnCompareAndSwapFailure_KeyChanged[K any, V any](require *requi
 	ctx := elections.AcquireLeadership(key, val1, seconds60)
 	require.NotNil(ctx)
 
-	// sabotage the storage so next CompareAndSwap fails by changing the value
+	// sabotage the storage so next CompareAndSwap fails
 	ok, err := iTTLStorage.CompareAndSwap(key, val1, val2, seconds60*2)
 	require.NoError(err)
 	require.True(ok)
@@ -95,9 +95,6 @@ func closeContextOnCompareAndSwapFailure_KeyChanged[K any, V any](require *requi
 	require.NoError(err)
 	require.True(ok)
 	require.Equal(val2, keptValue)
-
-	// make the sabotaged key be expired
-	testingu.MockTime.Sleep((seconds60 + 1) * time.Second)
 }
 
 func closeContextOnCompareAndSwapFailure_KeyDeleted[K any, V any](require *require.Assertions, elections IElections[K, V], iTTLStorage ITTLStorage[K, V], _ func(), dataGen TestDataGen[K, V]) {
