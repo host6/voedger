@@ -1,1 +1,3 @@
 Resolves issue 'Invites: eliminate coreutils.IsTest usage on loading the mailer pwd secret'
+
+Resolves #3808 Invites: eliminate coreutils.IsTest usage on loading the mailer pwd secret
