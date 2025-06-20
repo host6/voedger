@@ -1,1 +1,3 @@
 Resolves issue 'fix missing VIT taerdown in `TestBoostrap_BasicUsage()`'
+
+Resolves #3816 fix missing VIT taerdown in `TestBoostrap_BasicUsage()`
