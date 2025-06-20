@@ -35,8 +35,8 @@ type IN10nBroker interface {
 	// Panics if a Channel with ChannelID does not exist
 	// Terminates if channelDuration expired
 	// Metrics are updated when WatchChannel enters/exits
-	// It is not guaranteed that all offsets from Update() comes to `notifySubscriber` callback
-	// - It is guaranteed that the last one is delivered
+	// It is guaranteed that the client is eventually notified about the latest offset used in Update() for the
+	//   projection, including the calls to Update() happened prior to the Subscribe() call
 	// Exits if ctx is Done
 	// Only one client must call WatchChannel, concurrent use is not allowed
 	//
@@ -60,6 +60,9 @@ type IN10nBroker interface {
 	MetricNumSubcriptions() int
 	// @ConcurrentAccess
 	MetricSubject(ctx context.Context, cb func(subject istructs.SubjectLogin, numChannels int, numSubscriptions int))
+
+	// @ConcurrentAccess
+	MetricNumProjectionSubscriptions(projection ProjectionKey) int
 }
 
 type ChannelID string

@@ -17,7 +17,6 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/istructsmem"
 
 	"github.com/voedger/voedger/pkg/coreutils"
 )
@@ -178,6 +177,15 @@ func writeUniqueKeyValue(uniqueField appdef.IField, value interface{}, buf *byte
 			buf.WriteByte(zeroByte)
 		}
 		buf.Write(value.([]byte))
+	case appdef.DataKind_QName:
+		buf.WriteByte(zeroByte)
+		qNameStr := ""
+		if qName, ok := value.(appdef.QName); ok {
+			qNameStr = qName.String()
+		} else {
+			qNameStr = value.(string)
+		}
+		buf.WriteString(qNameStr)
 	default:
 		binary.Write(buf, binary.BigEndian, value) // nolint
 	}
@@ -240,7 +248,7 @@ func getUniqueIDByValues(appStructs istructs.IAppStructs, wsid istructs.WSID, un
 	if err == nil {
 		return val.AsRecordID(field_ID), true, nil
 	}
-	if errors.Is(err, istructsmem.ErrRecordNotFound) {
+	if errors.Is(err, istructs.ErrRecordNotFound) {
 		err = nil
 	}
 	return istructs.NullRecordID, false, err

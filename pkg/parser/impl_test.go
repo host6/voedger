@@ -1024,15 +1024,28 @@ func Test_Commands(t *testing.T) {
 
 func Test_Queries(t *testing.T) {
 	require := assertions(t)
-	require.AppSchemaError(`APPLICATION test();
+	t.Run("Query with fake return type", func(t *testing.T) {
+		require.AppSchemaError(`APPLICATION test();
 	WORKSPACE Workspace (
 		EXTENSION ENGINE BUILTIN (
 			QUERY q(fake.Fake) RETURNS fake.Fake
 		);
 	)
 	`, "file.vsql:4:12: fake undefined",
-		"file.vsql:4:31: fake undefined",
-	)
+			"file.vsql:4:31: fake undefined",
+		)
+
+	})
+	t.Run("Query with no return", func(t *testing.T) {
+
+		require := assertions(t)
+		require.AppSchemaError(`APPLICATION test();
+	WORKSPACE Workspace (		
+		EXTENSION ENGINE BUILTIN (
+			QUERY Qry();
+		);
+	)`, "file.vsql:4:4: query must have a return type")
+	})
 }
 
 func Test_DuplicatesInViews(t *testing.T) {
@@ -2232,6 +2245,25 @@ func Test_Constraints(t *testing.T) {
 		CONSTRAINT c2 UNIQUE(t2, t1)
 	))`, "file.vsql:7:3: field t1 already in unique constraint")
 
+	t.Run("Unique ref fields", func(t *testing.T) {
+		schema, err := require.AppSchema(`
+	 	APPLICATION app1(); WORKSPACE ws1 (
+			TABLE t1 INHERITS sys.CDoc ();
+	    TABLE t2 INHERITS sys.WDoc (
+        f1 ref(t1) NOT NULL,
+        UNIQUE(f1)
+    ))`)
+		require.NoError(err)
+		builder := builder.New()
+		err = BuildAppDefs(schema, builder)
+		require.NoError(err)
+
+		app, err := builder.Build()
+		require.NoError(err)
+		wdoc := appdef.WDoc(app.Type, appdef.NewQName("pkg", "t2"))
+		require.NotNil(wdoc)
+		require.Equal(1, wdoc.UniqueCount())
+	})
 }
 
 func Test_Grants(t *testing.T) {
@@ -2893,6 +2925,30 @@ func Test_Jobs(t *testing.T) {
 				);
 			);`)
 	})
+
+	t.Run("missing cron", func(t *testing.T) {
+		require := assertions(t)
+		require.AppSchemaError(`APPLICATION test();
+			ALTER WORKSPACE sys.AppWorkspaceWS (
+				EXTENSION ENGINE BUILTIN (
+					JOB GoodJob '1 0 * * *';
+					JOB JobWithNoCron;
+				);
+			);`, "file.vsql:5:6: job without cron schedule is not allowed")
+	})
+
+	t.Run("missing cron version 2", func(t *testing.T) {
+		require := assertions(t)
+		require.AppSchemaError(`APPLICATION test();
+			ALTER WORKSPACE sys.AppWorkspaceWS (
+				EXTENSION ENGINE BUILTIN (
+					JOB GoodJob1 '1 0 * * *';
+					JOB GoodJob2 '1 0 * * *';
+					JOB JobWithNoCron;
+				);
+			);`, "file.vsql:6:6: job without cron schedule is not allowed")
+	})
+
 }
 
 func Test_DataTypes(t *testing.T) {
@@ -3213,4 +3269,48 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 		[]appdef.QName{appdef.NewQName("pkg", "Role1")})
 	require.NoError(err)
 	require.True(ok)
+}
+
+func Test_NotAllowedTypes(t *testing.T) {
+
+	require := assertions(t)
+
+	t.Run("BLOB in VIEWs not allowed", func(t *testing.T) {
+		require.AppSchemaError(`APPLICATION test();
+			WORKSPACE MyWS (
+				VIEW v1(
+					f1 int32,
+					f2 binary large object,
+					PRIMARY KEY(f1)
+				) AS RESULT OF p;
+
+				EXTENSION ENGINE BUILTIN (
+					PROJECTOR p AFTER EXECUTE ON c INTENTS (sys.View(v1));
+					COMMAND c();
+				);
+			);`, "file.vsql:5:9: BLOB field only allowed in table")
+	})
+
+	t.Run("BLOB in TYPEs not allowed", func(t *testing.T) {
+		require.AppSchemaError(`APPLICATION test();
+			WORKSPACE MyWS (
+				TYPE t1(
+					f1 int32,
+					f2 binary large object
+				);
+			);`, "file.vsql:5:9: BLOB field only allowed in table")
+	})
+
+	t.Run("Reference from CDoc to WDoc not allowed", func(t *testing.T) {
+		require.AppSchemaError(`APPLICATION test();
+			WORKSPACE MyWS (
+				TABLE t01 INHERITS sys.WDoc();
+				TABLE t02 INHERITS sys.WRecord();
+				TABLE t1 INHERITS sys.CDoc(
+					f1 ref(t01),
+					f2 ref(t02)
+				);
+			);`, "file.vsql:6:13: t01: reference to WDoc/WRecord",
+			"file.vsql:7:13: t02: reference to WDoc/WRecord")
+	})
 }

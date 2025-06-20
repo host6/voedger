@@ -239,7 +239,7 @@ func TestVSqlUpdate_BasicUsage_DirectUpdate_View(t *testing.T) {
 		body = fmt.Sprintf(`{"args": {"Query":"unlogged update test1.app1.%d.app1pkg.CategoryIdx set Name = 'any' where IntFld = 1 and Dummy = 1"}}`, ws.WSID)
 		vit.PostApp(istructs.AppQName_sys_cluster, clusterapp.ClusterAppWSID, "c.cluster.VSqlUpdate", body,
 			coreutils.WithAuthorizeBy(sysPrn.Token),
-			coreutils.Expect400("record cannot be found"),
+			coreutils.Expect400(fmt.Sprint(istructs.ErrRecordNotFound)), // `record not found`
 		)
 	})
 
@@ -523,7 +523,7 @@ func TestVSqlUpdateValidateErrors(t *testing.T) {
 		"update corrupted test1.app1.1.sys.PLog.1 set name = 42 where x = 1":  "any params of update corrupted are not allowed",
 		"update corrupted test1.app1.1.sys.PLog.1 where x = 1":                "syntax error",
 		"update corrupted test1.app1.0.sys.WLog.44":                           "wsid must be provided",
-		"update corrupted test1.app1.1000.sys.PLog.44":                        "provided partno 1000 is out of 10 declared by app test1/app1",
+		"update corrupted test1.app1.1000.sys.PLog.44":                        "provided partno 1000 is out of 5 declared by app test1/app1",
 		"update corrupted test1.app1.1.sys.PLog.-44":                          "invalid query format",
 		"update corrupted test1.app1.1.sys.PLog.0":                            "provided offset or ID must not be 0",
 		"update corrupted test1.app1.1.sys.PLog":                              "offset must be provided",

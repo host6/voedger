@@ -8,7 +8,9 @@ package sys_it
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"testing"
@@ -26,7 +28,7 @@ import (
 	it "github.com/voedger/voedger/pkg/vit"
 )
 
-func prepareDailyIdx(require *require.Assertions, vit *it.VIT, ws *it.AppWorkspace) (resultOffset istructs.Offset, newIDs map[string]istructs.RecordID) {
+func prepareDailyIdx(t *testing.T, vit *it.VIT, ws *it.AppWorkspace) (resultOffset istructs.Offset, newIDs map[string]istructs.RecordID) {
 	testProjectionKey := in10n.ProjectionKey{
 		App:        istructs.AppQName_test1_app1,
 		Projection: it.QNameApp1_ViewCategoryIdx,
@@ -121,7 +123,8 @@ func prepareDailyIdx(require *require.Assertions, vit *it.VIT, ws *it.AppWorkspa
 	// force projection update
 	resp := vit.PostWS(ws, "c.sys.CUD", cuds.MustToJSON())
 	resultOffsetOfCUD := resp.CurrentWLogOffset
-	require.EqualValues(resultOffsetOfCUD, <-offsetsChan)
+	// wait for the offset because server could send previous offset. It is guaranteed that the expected offset will eventually arrive
+	waitForOffset(t, resultOffsetOfCUD, offsetsChan)
 	unsubscribe()
 	return resultOffsetOfCUD, resp.NewIDs
 }
@@ -131,7 +134,7 @@ func TestQueryProcessor2_Views(t *testing.T) {
 	vit := it.NewVIT(t, &it.SharedConfig_App1)
 	defer vit.TearDown()
 	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
-	expectedOffset, _ := prepareDailyIdx(require, vit, ws)
+	expectedOffset, _ := prepareDailyIdx(t, vit, ws)
 	t.Run("Read by PK with eq", func(t *testing.T) {
 		resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/views/%s?where={"Year":2025}`, ws.WSID, it.QNameApp1_ViewDailyIdx), coreutils.WithAuthorizeBy(ws.Owner.Token))
 		require.NoError(err)
@@ -254,7 +257,7 @@ func TestQueryProcessor2_Queries(t *testing.T) {
 	defer vit.TearDown()
 
 	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
-	prepareDailyIdx(require, vit, ws)
+	prepareDailyIdx(t, vit, ws)
 
 	t.Run("Echo function", func(t *testing.T) {
 		resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/queries/sys.Echo?args=%s`, ws.WSID, url.QueryEscape(`{"Text":"Hello world"}`)))
@@ -462,7 +465,7 @@ func TestQueryProcessor2_Include(t *testing.T) {
 		},
 	}
 	offset := vit.PostWS(ws, "c.sys.CUD", cuds.MustToJSON()).CurrentWLogOffset
-	require.EqualValues(offset, <-offsetsChan)
+	waitForOffset(t, offset, offsetsChan)
 	unsubscribe()
 
 	cuds = coreutils.CUDs{
@@ -899,6 +902,42 @@ func TestQueryProcessor2_Include(t *testing.T) {
 					"offs":13,
 					"sys.QName":"app1pkg.Clients"
 			}]}`, resp.Body)
+		})
+		t.Run("Expected error https://github.com/voedger/voedger/issues/3714", func(t *testing.T) {
+			_, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/views/%s?where={"Year":{"$in":[1988]},"Month":{"$in":[1]}}&include=EpicFail`, ws.WSID, it.QNameApp1_ViewClients),
+				coreutils.WithAuthorizeBy(ws.Owner.Token),
+			)
+			var e coreutils.SysError
+			_ = errors.As(err, &e)
+			require.Equal(http.StatusBadRequest, e.HTTPStatus)
+			require.Equal("field expression - 'EpicFail', 'EpicFail' - unexpected field", e.Message)
+		})
+		t.Run("Read by PK, include all and select some fields", func(t *testing.T) {
+			resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/views/%s?where={"Year":{"$in":[1988]},"Month":{"$in":[1]}}&include=Client.Wallet.Currency,Client.Country,Client.Wallet.Capabilities&keys=Day,Month,"sys.QName"",Client.DOB,Client."sys.ID",Client.FirstName,Client.Country.Name,Client.Wallet.Balance,Client.Wallet.Capabilities.Deposit,Client.Wallet.Currency.Code`, ws.WSID, it.QNameApp1_ViewClients), coreutils.WithAuthorizeBy(ws.Owner.Token))
+			require.NoError(err)
+			require.JSONEq(`{"results":[{
+					"Client":{
+						"Country":{
+							"Name":"Spain"
+						},
+						"DOB":568209600000,
+						"FirstName":"Juan",
+						"Wallet":{
+							"Balance":1000,
+							"Capabilities":{
+								"Deposit":true
+							},
+							"Currency":{
+								"Code":978
+							}
+						},
+						"sys.ID":200017
+					},
+					"Day":3,
+					"Month":1,
+					"sys.QName":"app1pkg.Clients"
+				}
+			]}`, resp.Body)
 		})
 	})
 	t.Run("Document", func(t *testing.T) {
@@ -2008,10 +2047,229 @@ func TestQueryProcessor2_Include(t *testing.T) {
 										]
 									}`, resp.Body)
 		})
+		t.Run("Read all, include all and select some fields", func(t *testing.T) {
+			include := []string{
+				`Cfg`,
+				`GroupA.Cfg`,
+				`GroupB.Cfg`,
+				`GroupA.GroupA.Cfg`,
+				`GroupA.GroupB.Cfg`,
+				`GroupB.GroupB.Cfg`,
+				`GroupB.GroupB.GroupA.Cfg`,
+				`GroupB.GroupB.GroupB.Cfg`,
+				`GroupB.GroupB.GroupB.GroupB.Cfg`,
+			}
+			keys := []string{
+				`Cfg.Name`,
+				`Cfg."sys.ID"`,
+				`GroupA.Name`,
+				`GroupA."sys.Container"`,
+				`GroupA."sys.IsActive"`,
+				`GroupB.Cfg.Name`,
+				`GroupB.Cfg."sys.ID"`,
+				`GroupA.GroupA.Name`,
+				`GroupA.GroupA."sys.ParentID"`,
+				`GroupA.GroupA."sys.QName"`,
+				`GroupA.GroupB."sys.ParentID"`,
+				`GroupA.GroupB."sys.QName"`,
+				`GroupB.GroupB.GroupA."sys.ParentID"`,
+				`GroupB.GroupB.GroupA."sys.QName"`,
+				`GroupB.GroupB.GroupB."sys.ParentID"`,
+				`GroupB.GroupB.GroupB."sys.QName"`,
+				`GroupB.GroupB.GroupB.GroupA."sys.ParentID"`,
+				`GroupB.GroupB.GroupB.GroupA."sys.QName"`,
+				`GroupB.GroupB.GroupB.GroupB."sys.ParentID"`,
+				`GroupB.GroupB.GroupB.GroupB."sys.QName"`,
+				`GroupB.GroupB.GroupB.GroupA.Cfg.Name`,
+				`GroupB.GroupB.GroupB.GroupA.Cfg.Name`,
+				`GroupB.GroupB.GroupB.GroupB.Cfg.Name`,
+				`GroupB.GroupB.GroupB.GroupB.Cfg.Name`,
+			}
+			path := fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/cdocs/%s?include=%s&keys=%s`, ws.WSID, it.QNameApp1_CDocBatch, strings.Join(include, ","), strings.Join(keys, ","))
+			resp, err := vit.IFederation.Query(path, coreutils.WithAuthorizeBy(ws.Owner.Token))
+			require.NoError(err)
+			require.JSONEq(`{
+										"results": [
+											{
+												"Cfg": {
+													"Name": "CfgBatch",
+													"sys.ID": 200024
+												},
+												"GroupA": [
+													{
+														"GroupA": [
+															{
+																"Name": "SubTaskA1_TaskA1",
+																"sys.ParentID": 200028,
+																"sys.QName": "app1pkg.Task"
+															},
+															{
+																"Name": "SubTaskA2_TaskA1",
+																"sys.ParentID": 200028,
+																"sys.QName": "app1pkg.Task"
+															}
+														],
+														"GroupB": [
+															{
+																"sys.ParentID": 200028,
+																"sys.QName": "app1pkg.Task"
+															},
+															{
+																"sys.ParentID": 200028,
+																"sys.QName": "app1pkg.Task"
+															}
+														],
+														"Name": "TaskA1",
+														"sys.Container": "GroupA",
+														"sys.IsActive": true
+													},
+													{
+														"GroupA": [
+															{
+																"Name": "SubTaskA1_TaskA2",
+																"sys.ParentID": 200029,
+																"sys.QName": "app1pkg.Task"
+															}
+														],
+														"Name": "TaskA2",
+														"sys.Container": "GroupA",
+														"sys.IsActive": true
+													}
+												],
+												"GroupB": [
+													{
+														"Cfg": {
+															"Name": "CfgB",
+															"sys.ID": 200023
+														},
+														"GroupB": [
+															{
+																"GroupA": [
+																	{
+																		"sys.ParentID": 200039,
+																		"sys.QName": "app1pkg.Task"
+																	},
+																	{
+																		"sys.ParentID": 200039,
+																		"sys.QName": "app1pkg.Task"
+																	}
+																],
+																"GroupB": [
+																	{
+																		"GroupB": [
+																			{
+																				"Cfg": {
+																					"Name": "CfgB"
+																				},
+																				"sys.ParentID": 200048,
+																				"sys.QName": "app1pkg.Task"
+																			}
+																		],
+																		"sys.ParentID": 200039,
+																		"sys.QName": "app1pkg.Task"
+																	}
+																]
+															}
+														]
+													}
+												]
+											},
+											{
+												"Cfg": {
+													"Name": "CfgBatch",
+													"sys.ID": 200024
+												},
+												"GroupA": [
+													{
+														"GroupA": [
+															{
+																"Name": "SubTaskA1_TaskA1",
+																"sys.ParentID": 200031,
+																"sys.QName": "app1pkg.Task"
+															},
+															{
+																"Name": "SubTaskA2_TaskA1",
+																"sys.ParentID": 200031,
+																"sys.QName": "app1pkg.Task"
+															}
+														],
+														"GroupB": [
+															{
+																"sys.ParentID": 200031,
+																"sys.QName": "app1pkg.Task"
+															},
+															{
+																"sys.ParentID": 200031,
+																"sys.QName": "app1pkg.Task"
+															}
+														],
+														"Name": "TaskA1",
+														"sys.Container": "GroupA",
+														"sys.IsActive": true
+													},
+													{
+														"GroupA": [
+															{
+																"Name": "SubTaskA1_TaskA2",
+																"sys.ParentID": 200032,
+																"sys.QName": "app1pkg.Task"
+															}
+														],
+														"Name": "TaskA2",
+														"sys.Container": "GroupA",
+														"sys.IsActive": true
+													}
+												],
+												"GroupB": [
+													{
+														"Cfg": {
+															"Name": "CfgB",
+															"sys.ID": 200023
+														},
+														"GroupB": [
+															{
+																"GroupA": [
+																	{
+																		"sys.ParentID": 200045,
+																		"sys.QName": "app1pkg.Task"
+																	},
+																	{
+																		"sys.ParentID": 200045,
+																		"sys.QName": "app1pkg.Task"
+																	}
+																],
+																"GroupB": [
+																	{
+																		"GroupB": [
+																			{
+																				"Cfg": {
+																					"Name": "CfgB"
+																				},
+																				"sys.ParentID": 200051,
+																				"sys.QName": "app1pkg.Task"
+																			}
+																		],
+																		"sys.ParentID": 200045,
+																		"sys.QName": "app1pkg.Task"
+																	}
+																]
+															}
+														]
+													}
+												]
+											},
+											{
+												"Cfg": {
+													"Name": "CfgBatch",
+													"sys.ID": 200024
+												}
+											}
+										]
+									}`, resp.Body)
+		})
 	})
-
 	t.Run("Expected error https://github.com/voedger/voedger/issues/3696", func(t *testing.T) {
-		vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/views/%s?where={"Year":{"$in":[1988]},"Month":{"$in":[1]}}&include=Client.Country.Name`, ws.WSID, it.QNameApp1_ViewClients),
+		_, _ = vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/views/%s?where={"Year":{"$in":[1988]},"Month":{"$in":[1]}}&include=Client.Country.Name`, ws.WSID, it.QNameApp1_ViewClients),
 			coreutils.WithAuthorizeBy(ws.Owner.Token),
 			coreutils.Expect400(),
 		)
@@ -2156,7 +2414,7 @@ func TestQueryProcessor2_Docs(t *testing.T) {
 	defer vit.TearDown()
 
 	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
-	_, ids := prepareDailyIdx(require, vit, ws)
+	_, ids := prepareDailyIdx(t, vit, ws)
 
 	t.Run("read document", func(t *testing.T) {
 		path := fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/docs/%s/%d`, ws.WSID, it.QNameApp1_CDocCategory, ids["1"])
@@ -2165,10 +2423,26 @@ func TestQueryProcessor2_Docs(t *testing.T) {
 		require.JSONEq(fmt.Sprintf(`{"name":"Awesome food", "sys.ID":%d, "sys.IsActive":true, "sys.QName":"app1pkg.category"}`, ids["1"]), resp.Body)
 	})
 
-	t.Run("400 document type not defined", func(t *testing.T) {
-		path := fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/docs/%s/%d`, ws.WSID, it.QNameODoc1, 123)
-		resp, _ := vit.IFederation.Query(path, coreutils.WithAuthorizeBy(ws.Owner.Token), coreutils.Expect400())
-		require.JSONEq(`{"status":400,"message":"document or record app1pkg.odoc1 is not defined in Workspace «app1pkg.test_wsWS»"}`, resp.Body)
+	t.Run("odocs", func(t *testing.T) {
+		body := `{"args":{"sys.ID": 1,"odocIntFld":42, "orecord1":[{"sys.ID":2,"sys.ParentID":1,"orecord1IntFld":43}]}}`
+		resp := vit.PostWS(ws, "c.app1pkg.CmdODocOne", body)
+		odocID := resp.NewIDs["1"]
+		orecordID := resp.NewIDs["2"]
+
+		t.Run("odoc", func(t *testing.T) {
+			path := fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/docs/%s/%d`, ws.WSID, it.QNameODoc1, odocID)
+			resp, err := vit.IFederation.Query(path, coreutils.WithAuthorizeBy(ws.Owner.Token))
+			require.NoError(err)
+			require.JSONEq(fmt.Sprintf(`{"odocIntFld":42, "sys.ID":%d, "sys.QName":"app1pkg.odoc1"}`, odocID), resp.Body)
+		})
+
+		t.Run("orecord", func(t *testing.T) {
+			path := fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/docs/%s/%d`, ws.WSID, appdef.NewQName("app1pkg", "orecord1"), orecordID)
+			resp, err := vit.IFederation.Query(path, coreutils.WithAuthorizeBy(ws.Owner.Token))
+			require.NoError(err)
+			require.JSONEq(fmt.Sprintf(`{"orecord1IntFld":43, "sys.Container":"orecord1", "sys.ID":%d, "sys.ParentID":%d, "sys.QName":"app1pkg.orecord1"}`, orecordID, odocID),
+				resp.Body)
+		})
 	})
 
 	t.Run("403 not authorized", func(t *testing.T) {
@@ -2232,7 +2506,7 @@ func TestQueryProcessor2_CDocs(t *testing.T) {
 	defer vit.TearDown()
 
 	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws3")
-	_, ids := prepareDailyIdx(require, vit, ws)
+	_, ids := prepareDailyIdx(t, vit, ws)
 
 	t.Run("Read documents", func(t *testing.T) {
 		resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/cdocs/%s`, ws.WSID, it.QNameApp1_CDocCategory), coreutils.WithAuthorizeBy(ws.Owner.Token))
@@ -2240,12 +2514,12 @@ func TestQueryProcessor2_CDocs(t *testing.T) {
 		require.JSONEq(fmt.Sprintf(`{"results":[{"name":"Awesome food","sys.ID":%d,"sys.IsActive":true,"sys.QName":"app1pkg.category"}]}`, ids["1"]), resp.Body)
 	})
 	t.Run("Read documents and use keys constraint", func(t *testing.T) {
-		resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/cdocs/%s?keys=name,sys.ID`, ws.WSID, it.QNameApp1_CDocCategory), coreutils.WithAuthorizeBy(ws.Owner.Token))
+		resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/cdocs/%s?keys=name,"sys.ID"`, ws.WSID, it.QNameApp1_CDocCategory), coreutils.WithAuthorizeBy(ws.Owner.Token))
 		require.NoError(err)
 		require.JSONEq(fmt.Sprintf(`{"results":[{"name":"Awesome food","sys.ID":%d}]}`, ids["1"]), resp.Body)
 	})
 	t.Run("Read documents and use keys, order, skip and limit constraints", func(t *testing.T) {
-		resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/cdocs/%s?keys=sys.ID,Year,Month,Day&order=-Month&skip=6&limit=10`, ws.WSID, it.QNameApp1_CDocDaily), coreutils.WithAuthorizeBy(ws.Owner.Token))
+		resp, err := vit.IFederation.Query(fmt.Sprintf(`api/v2/apps/test1/app1/workspaces/%d/cdocs/%s?keys="sys.ID",Year,Month,Day&order=-Month&skip=6&limit=10`, ws.WSID, it.QNameApp1_CDocDaily), coreutils.WithAuthorizeBy(ws.Owner.Token))
 		require.NoError(err)
 		require.JSONEq(fmt.Sprintf(`{"results":[
 				{"Day":4,"Month":4,"Year":2023,"sys.ID":%[1]d},
@@ -2275,68 +2549,74 @@ func TestQueryProcessor2_AuthLogin(t *testing.T) {
 	vit.SignIn(login1)
 
 	t.Run("Login", func(t *testing.T) {
-		body := fmt.Sprintf(`{"Login": "%s","Password": "%s"}`, login1.Name, login1.Pwd)
+		body := fmt.Sprintf(`{"login": "%s","password": "%s"}`, login1.Name, login1.Pwd)
 		resp := vit.POST("api/v2/apps/test1/app1/auth/login", body)
 		require.Equal(200, resp.HTTPResp.StatusCode)
 		result := make(map[string]interface{})
 		err := json.Unmarshal([]byte(resp.Body), &result)
 		require.NoError(err)
-		require.Equal(3600.0, result["ExpiresIn"])
-		require.Greater(istructs.WSID(result["WSID"].(float64)), login1.PseudoProfileWSID)
-		require.NotEmpty(result["PrincipalToken"].(string))
+		require.Equal(3600.0, result["expiresInSeconds"])
+		require.Greater(istructs.WSID(result["profileWSID"].(float64)), login1.PseudoProfileWSID)
+		require.NotEmpty(result["principalToken"].(string))
 	})
 
 	t.Run("Bad request", func(t *testing.T) {
 		cases := []struct {
 			bodies   []string
-			expected string
+			expected []string
 		}{
 			{
 				bodies:   []string{"", "{}"},
-				expected: `field is empty: Object «registry.IssuePrincipalTokenParams» string-field «Login»; validate error code: 4\nfield is empty: Object «registry.IssuePrincipalTokenParams» string-field «Password»; validate error code: 4`,
+				expected: []string{`field is empty`, `Object «registry.IssuePrincipalTokenParams»`, `string-field «Login»`, `validate error code 4`, `string-field «Password»`},
 			},
 			{
 				bodies: []string{
-					`{"Password": "pwd"}`,
-					fmt.Sprintf(`{"UnknownField": "%s","Password": "pwd"}`, login1.Name),
+					`{"password": "pwd"}`,
+					fmt.Sprintf(`{"UnknownField": "%s","password": "pwd"}`, login1.Name),
 				},
-				expected: `field is empty: Object «registry.IssuePrincipalTokenParams» string-field «Login»; validate error code: 4`,
+				expected: []string{`field is empty`, `Object «registry.IssuePrincipalTokenParams»`, `string-field «Login»`, `validate error code 4`},
 			},
 			{
 				bodies: []string{
-					`{"Login": "pwd"}`,
-					fmt.Sprintf(`{"Login": "%s","UnknownField": "pwd"}`, login1.Name),
+					`{"login": "pwd"}`,
+					fmt.Sprintf(`{"login": "%s","UnknownField": "pwd"}`, login1.Name),
 				},
-				expected: `field is empty: Object «registry.IssuePrincipalTokenParams» string-field «Password»; validate error code: 4`,
+				expected: []string{`field is empty`, `Object «registry.IssuePrincipalTokenParams»`, `string-field «Password»`, `validate error code 4`},
 			},
 			{
 				bodies: []string{
-					`{"Login": 42}`,
+					`{"login": 42}`,
 				},
-				expected: `field \"Login\" must be a string: field type mismatch`,
+				expected: []string{`field \"login\" must be a string`, `field type mismatch`},
 			},
 			{
 				bodies: []string{
-					`{"Password": 42}`,
+					`{"password": 42}`,
 				},
-				expected: `field \"Password\" must be a string: field type mismatch`,
+				expected: []string{`field \"password\" must be a string`, `field type mismatch`},
+			},
+			{
+				bodies: []string{
+					fmt.Sprintf(`{"UnknownField": "%s","password": "%s"}`, login1.Name, "badpwd"),
+				},
+				expected: []string{`field is empty`, `Object «registry.IssuePrincipalTokenParams»`, `string-field «Login»`, `validate error code 4`},
 			},
 		}
 		for _, c := range cases {
 			for _, body := range c.bodies {
 				t.Run(body, func(t *testing.T) {
 					resp := vit.POST("api/v2/apps/test1/app1/auth/login", body, coreutils.Expect400())
-					require.JSONEq(fmt.Sprintf(`{"message":"%s","status":400}`, c.expected), resp.Body)
+					require.Contains(resp.Body, `"status":400`)
+					for _, expected := range c.expected {
+						require.Contains(resp.Body, expected)
+					}
 				})
 			}
 		}
-		body := fmt.Sprintf(`{"UnknownField": "%s","Password": "%s"}`, login1.Name, "badpwd")
-		resp := vit.POST("api/v2/apps/test1/app1/auth/login", body, coreutils.Expect400())
-		require.JSONEq(`{"message":"field is empty: Object «registry.IssuePrincipalTokenParams» string-field «Login»; validate error code: 4","status":400}`, resp.Body)
 	})
 
 	t.Run("Login with incorrect password", func(t *testing.T) {
-		body := fmt.Sprintf(`{"Login": "%s","Password": "%s"}`, login1.Name, "badpwd")
+		body := fmt.Sprintf(`{"login": "%s","password": "%s"}`, login1.Name, "badpwd")
 		resp := vit.POST("api/v2/apps/test1/app1/auth/login", body, coreutils.Expect401())
 		require.JSONEq(`{"status":401,"message":"login or password is incorrect"}`, resp.Body)
 	})
@@ -2361,9 +2641,9 @@ func TestQueryProcessor2_AuthRefresh(t *testing.T) {
 		result := make(map[string]interface{})
 		err := json.Unmarshal([]byte(resp.Body), &result)
 		require.NoError(err)
-		require.Equal(3600.0, result["ExpiresIn"])
-		require.Equal(istructs.WSID(result["WSID"].(float64)), prn1.ProfileWSID)
-		newToken := result["PrincipalToken"].(string)
+		require.Equal(3600.0, result["expiresInSeconds"])
+		require.Equal(istructs.WSID(result["profileWSID"].(float64)), prn1.ProfileWSID)
+		newToken := result["principalToken"].(string)
 		require.NotEmpty(newToken)
 		require.NotEqual(newToken, prn1.Token)
 	})

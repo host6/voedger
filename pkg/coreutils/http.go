@@ -122,6 +122,12 @@ func WithRetryOnAnyError(timeout time.Duration, retryDelay time.Duration) ReqOpt
 	return WithRetryOnCertainError(func(error) bool { return true }, timeout, retryDelay)
 }
 
+func WithDeadlineOn503(deadline time.Duration) ReqOptFunc {
+	return func(opts *reqOpts) {
+		opts.deadlineOn503 = deadline
+	}
+}
+
 func WithSkipRetryOn503() ReqOptFunc {
 	return func(opts *reqOpts) {
 		opts.skipRetryOn503 = true
@@ -154,6 +160,10 @@ func WithMethod(m string) ReqOptFunc {
 	return func(po *reqOpts) {
 		po.method = m
 	}
+}
+
+func Expect204(expectErrorContains ...string) ReqOptFunc {
+	return WithExpectedCode(http.StatusNoContent, expectErrorContains...)
 }
 
 func Expect409(expected ...string) ReqOptFunc {
@@ -228,6 +238,7 @@ type reqOpts struct {
 	bodyReader            io.Reader
 	withoutAuth           bool
 	skipRetryOn503        bool
+	deadlineOn503         time.Duration
 }
 
 // body and bodyReader are mutual exclusive
@@ -337,15 +348,18 @@ reqLoop:
 		}
 		if resp.StatusCode == http.StatusServiceUnavailable && !slices.Contains(opts.expectedHTTPCodes, http.StatusServiceUnavailable) &&
 			!opts.skipRetryOn503 {
+			if opts.deadlineOn503 > 0 && time.Since(startTime) > opts.deadlineOn503 {
+				break
+			}
 			if err := discardRespBody(resp); err != nil {
 				return nil, err
 			}
+			logger.Verbose("503. retrying...")
 			if tryNum > shortRetriesOn503Amount {
 				time.Sleep(longRetryOn503Delay)
 			} else {
 				time.Sleep(shortRetryOn503Delay)
 			}
-			logger.Verbose("503. retrying...")
 			tryNum++
 			continue
 		}
@@ -361,7 +375,7 @@ reqLoop:
 		expectedSysErrorCode: opts.expectedSysErrorCode,
 		expectedHTTPCodes:    opts.expectedHTTPCodes,
 	}
-	if isCodeExpected && opts.responseHandler != nil {
+	if resp.StatusCode == http.StatusOK && isCodeExpected && opts.responseHandler != nil {
 		opts.responseHandler(resp)
 		return httpResponse, nil
 	}

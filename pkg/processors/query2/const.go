@@ -32,13 +32,6 @@ const (
 var qNameWDocBLOB = appdef.NewQName(appdef.SysPackage, "BLOB")
 
 const (
-	fieldLogin              = "Login"
-	fieldPassword           = "Password"
-	fieldDisplayName        = "DisplayName"
-	fieldVerifiedEmailToken = "VerifiedEmailToken"
-)
-
-const (
 	methodGet    = "get"
 	methodPost   = "post"
 	methodPut    = "put"
@@ -120,21 +113,25 @@ const (
 
 // Common field names and properties
 const (
-	fieldMessage           = "message"
-	fieldStatus            = "status"
-	fieldQName             = "qname"
-	fieldData              = "data"
-	fieldBlobID            = "BlobID"
-	fieldPrincipalToken    = "PrincipalToken"
-	fieldExpiresIn         = "ExpiresIn"
-	fieldWSID              = "WSID"
-	fieldProfileWSID       = "ProfileWSID"
-	fieldCurrentWLogOffset = "CurrentWLogOffset"
-	fieldNewIDs            = "NewIDs"
-	fieldResults           = "results"
-	fieldError             = "error"
-	fieldArgs              = "args"
-	fieldUnloggedArgs      = "unloggedArgs"
+	fieldLogin              = "login"
+	fieldPassword           = "password"
+	fieldDisplayName        = "displayName"
+	fieldAppName            = "appName"
+	fieldVerifiedEmailToken = "verifiedEmailToken"
+	fieldMessage            = "message"
+	fieldStatus             = "status"
+	fieldQName              = "qname"
+	fieldData               = "data"
+	fieldBlobID             = "blobID"
+	fieldPrincipalToken     = "principalToken"
+	fieldExpiresInSeconds   = "expiresInSeconds"
+	fieldProfileWSID        = "profileWSID"
+	fieldCurrentWLogOffset  = "currentWLogOffset"
+	fieldNewIDs             = "newIDs"
+	fieldResults            = "results"
+	fieldError              = "error"
+	fieldArgs               = "args"
+	fieldUnloggedArgs       = "unloggedArgs"
 )
 
 // Parameter names

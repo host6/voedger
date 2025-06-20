@@ -441,7 +441,7 @@ func provideSubjectGetterFunc() iauthnzimpl.SubjectGetterFunc {
 		kb.PutInt64(invite.Field_LoginHash, coreutils.LoginHash(name))
 		kb.PutString(invite.Field_Login, name)
 		subjectsIdx, err := as.ViewRecords().Get(wsid, kb)
-		if err == istructsmem.ErrRecordNotFound {
+		if err == istructs.ErrRecordNotFound {
 			return nil, nil
 		}
 		if err != nil {
@@ -747,9 +747,9 @@ func provideRouterServices(rp router.RouterParams, sendTimeout bus.SendTimeout, 
 	wLimiterFactory blobprocessor.WLimiterFactory, blobStorage BlobStorage,
 	autocertCache autocert.Cache, requestSender bus.IRequestSender, vvmPortSource *VVMPortSource,
 	numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces, iTokens itokens.ITokens,
-	federation federation.IFederation) RouterServices {
+	federation federation.IFederation, appTokensFactory payloads.IAppTokensFactory) RouterServices {
 	httpSrv, acmeSrv, adminSrv := router.Provide(rp, broker, blobRequestHandler, autocertCache, requestSender, numsAppsWorkspaces,
-		iTokens, federation)
+		iTokens, federation, appTokensFactory)
 	vvmPortSource.getter = func() VVMPortType {
 		return VVMPortType(httpSrv.GetPort())
 	}

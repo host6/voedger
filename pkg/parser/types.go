@@ -329,6 +329,7 @@ type VoidOrDef struct {
 }
 
 type DataType struct {
+	Pos       lexer.Position
 	Varchar   *TypeVarchar `parser:"( @@"`
 	Bytes     *TypeBytes   `parser:"| @@"`
 	Int8      bool         `parser:"| @('tinyint' | 'int8')"`
@@ -510,7 +511,7 @@ func (t *ProjectorTrigger) deactivate() bool {
 type JobStmt struct {
 	Statement
 	Name         Ident          `parser:"'JOB' @Ident"`
-	CronSchedule *string        `parser:"@String"`
+	CronSchedule *string        `parser:"@String?"`
 	State        []StateStorage `parser:"('STATE'   '(' @@ (',' @@)* ')' )?"`
 	Intents      []StateStorage `parser:"('INTENTS' '(' @@ (',' @@)* ')' )?"`
 	Engine       EngineType     // Initialized with 1st pass
@@ -873,14 +874,14 @@ type QueryStmt struct {
 	Name      Ident           `parser:"'QUERY' @Ident"`
 	Param     *AnyOrVoidOrDef `parser:"('(' @@? ')')?"`
 	State     []StateStorage  `parser:"('STATE'   '(' @@ (',' @@)* ')' )?"`
-	Returns   AnyOrVoidOrDef  `parser:"'RETURNS' @@"`
+	Returns   *AnyOrVoidOrDef `parser:"('RETURNS' @@)?"`
 	With      []WithItem      `parser:"('WITH' @@ (',' @@)* )?"`
-	Engine    EngineType      // Initialized with 1st pass
+	engine    EngineType      // Initialized with 1st pass
 	workspace workspaceAddr   // filled on the analysis stage
 }
 
 func (s *QueryStmt) GetName() string            { return string(s.Name) }
-func (s *QueryStmt) SetEngineType(e EngineType) { s.Engine = e }
+func (s *QueryStmt) SetEngineType(e EngineType) { s.engine = e }
 
 type EngineType struct {
 	WASM    bool `parser:"@'WASM'"`

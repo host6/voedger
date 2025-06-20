@@ -23,11 +23,11 @@ func authLoginHandler() apiPathHandler {
 		exec: func(ctx context.Context, qw *queryWork) (err error) {
 
 			args := coreutils.MapObject(qw.msg.QueryParams().Argument)
-			login, _, err := args.AsString("Login")
+			login, _, err := args.AsString(fieldLogin)
 			if err != nil {
 				return coreutils.NewHTTPError(http.StatusBadRequest, err)
 			}
-			password, _, err := args.AsString("Password")
+			password, _, err := args.AsString(fieldPassword)
 			if err != nil {
 				return coreutils.NewHTTPError(http.StatusBadRequest, err)
 			}
@@ -52,12 +52,16 @@ func authLoginHandler() apiPathHandler {
 				return errors.New("the login profile is created with an error: " + wsError)
 			}
 
-			expiresIn := authnz.DefaultPrincipalTokenExpiration.Seconds()
+			if wsid == 0 {
+				return coreutils.NewHTTPError(http.StatusConflict, fmt.Errorf("profile workspace is not yet ready, try again later"))
+			}
+
+			expiresInSeconds := authnz.DefaultPrincipalTokenExpiration.Seconds()
 			json := fmt.Sprintf(`{
-				"PrincipalToken": "%s",
-				"ExpiresIn": %d,
-				"WSID": %d
-			}`, token, int(expiresIn), int(wsid))
+				"%s": "%s",
+				"%s": %d,
+				"%s": %d
+			}`, fieldPrincipalToken, token, fieldExpiresInSeconds, int(expiresInSeconds), fieldProfileWSID, int(wsid))
 			return qw.msg.Responder().Respond(bus.ResponseMeta{ContentType: coreutils.ContentType_ApplicationJSON, StatusCode: http.StatusOK}, json)
 		},
 	}
