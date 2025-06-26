@@ -150,6 +150,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 			for vvmCtx.Err() == nil {
 				select {
 				case intf := <-commandsChannel:
+					logger.Info(41)
 					start := tm.Now()
 					cmdMes := intf.(ICommandMessage)
 					cmd := &cmdWorkpiece{
@@ -166,11 +167,14 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 					func() { // borrowed application partition should be guaranteed to be freed
 						defer cmd.Release()
 						cmd.metrics.increase(CommandsTotal, 1.0)
+						logger.Info(42)
 						cmdHandlingErr := cmdPipeline.SendSync(cmd)
 						if cmdHandlingErr != nil {
 							logger.Error(cmdHandlingErr)
 						}
+						logger.Info(43)
 						sendResponse(cmd, cmdHandlingErr)
+						logger.Info(44)
 						if cmd.appPartitionRestartScheduled {
 							logger.Info(fmt.Sprintf("partition %d will be restarted due of an error on writing to Log: %s", cmd.cmdMes.PartitionID(), cmdHandlingErr))
 							delete(cmdProc.appsPartitions, cmd.cmdMes.AppQName())
@@ -178,6 +182,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 					}()
 					metrics.IncreaseApp(CommandsSeconds, string(vvm), cmdMes.AppQName(), time.Since(start).Seconds())
 				case <-vvmCtx.Done():
+					logger.Info(45)
 					cmdProc.appsPartitions = map[appdef.AppQName]map[istructs.PartitionID]*appPartition{} // clear appPartitions to test recovery
 					return
 				}

@@ -25,8 +25,7 @@ import (
 )
 
 func TestJksdfdf(t *testing.T) {
-	TestBasicUsage_Uniques(t)
-	// TestActivateDeactivateRecordWithUniques(t)
+	TestActivateDeactivateRecordWithUniques(t)
 	TestUniquesUpdate(t)
 
 	logger.Info("!!!!!!")
@@ -34,21 +33,32 @@ func TestJksdfdf(t *testing.T) {
 }
 
 func TestVSqlUpdate_BasicUsage_UpdateTable(t *testing.T) {
+	logger.SetLogLevel(logger.LogLevelVerbose)
 	vit := it.NewVIT(t, &it.SharedConfig_App1)
 	defer vit.TearDown()
 
+	logger.Info(5)
+
 	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
 
+	logger.Info(6)
+
 	categoryName := vit.NextName()
+	logger.Info(7)
 	body := fmt.Sprintf(`{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.category","name":"%s"}}]}`, categoryName)
 	categoryID := vit.PostWS(ws, "c.sys.CUD", body).NewID()
+	logger.Info(8)
 
 	sysPrn := vit.GetSystemPrincipal(istructs.AppQName_sys_cluster)
+	logger.Info(9)
 
 	newName := vit.NextName()
+	logger.Info(10)
 	body = fmt.Sprintf(`{"args": {"Query":"update test1.app1.%d.app1pkg.category.%d set name = '%s'"}}`, ws.WSID, categoryID, newName)
 	vit.PostApp(istructs.AppQName_sys_cluster, clusterapp.ClusterAppWSID, "c.cluster.VSqlUpdate", body,
 		coreutils.WithAuthorizeBy(sysPrn.Token)).Println()
+
+	logger.Info(11)
 
 	// check the value is update in another app and another wsid
 	body = fmt.Sprintf(`{"args":{"Query":"select * from app1pkg.category where id = %d"},"elements":[{"fields":["Result"]}]}`, categoryID)

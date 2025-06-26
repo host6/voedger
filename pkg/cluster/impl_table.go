@@ -13,6 +13,7 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -20,21 +21,26 @@ import (
 )
 
 func updateTable(update update, federation federation.IFederation, itokens itokens.ITokens) error {
+	logger.Info(17)
 	jsonFields, err := json.Marshal(update.setFields)
 	if err != nil {
 		// notest
 		return err
 	}
+	logger.Info(18)
 	cudBody := fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":%s}]}`, update.id, jsonFields)
 	sysToken, err := payloads.GetSystemPrincipalToken(itokens, update.AppQName)
+	logger.Info(19)
 	if err != nil {
 		// notest
 		return err
 	}
+	logger.Info(20)
 	_, err = federation.Func(fmt.Sprintf("api/%s/%d/c.sys.CUD", update.AppQName, update.wsid), cudBody,
 		coreutils.WithAuthorizeBy(sysToken),
 		coreutils.WithDiscardResponse(),
 	)
+	logger.Info(21)
 	return err
 }
 

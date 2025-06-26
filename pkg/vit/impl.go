@@ -57,16 +57,24 @@ func NewVIT(t testing.TB, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
 		}
 	}
 
+	logger.Info(1)
+
 	for _, opt := range opts {
 		opt(vit)
 	}
 
+	logger.Info(2)
+
 	vit.emailCaptor.checkEmpty(t)
+
+	logger.Info(3)
 
 	vit.T = t
 
 	// run each test in the next day to mostly prevent previous tests impact and\or workspace initialization
 	vit.TimeAdd(day)
+
+	logger.Info(4)
 
 	vit.initialGoroutinesNum = runtime.NumGoroutine()
 

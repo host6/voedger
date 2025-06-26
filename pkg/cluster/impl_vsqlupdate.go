@@ -18,6 +18,7 @@ import (
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/dml"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
@@ -27,11 +28,17 @@ import (
 func provideExecCmdVSqlUpdate(federation federation.IFederation, itokens itokens.ITokens, time timeu.ITime,
 	asp istructs.IAppStructsProvider) istructsmem.ExecCommandClosure {
 	return func(args istructs.ExecCommandArgs) (err error) {
+		logger.Info(12)
 		query := args.ArgumentObject.AsString(field_Query)
+		logger.Info(13)
 		update, err := parseAndValidateQuery(args, query, asp)
+		logger.Info(14)
 		if err != nil {
+			logger.Info(16)
 			return coreutils.NewHTTPError(http.StatusBadRequest, err)
 		}
+
+		logger.Info(15)
 
 		switch update.Kind {
 		case dml.OpKind_UpdateTable:

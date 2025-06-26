@@ -16,6 +16,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 )
 
 func reply_v1(requestCtx context.Context, w http.ResponseWriter, responseCh <-chan any, responseErr *error,
@@ -36,9 +37,11 @@ func reply_v1(requestCtx context.Context, w http.ResponseWriter, responseCh <-ch
 		}
 	}()
 
+	logger.Info(30)
 	if mode == bus.RespondMode_Single {
 		select {
 		case data := <-responseCh:
+			logger.Info(31)
 			if requestCtx.Err() != nil {
 				// possible: ctx is done but on select {sections<-section, <-ctx.Done()} write to sections channel is triggered.
 				// ctx.Done() must have the priority

@@ -28,21 +28,24 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 	qpcgIdx_v2 QueryProcessorsChannelGroupIdxType_V2,
 	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps) bus.RequestHandler {
 	return func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+		logger.Info(32)
 		if logger.IsVerbose() {
 			// FIXME: eliminate this. Unlogged params are logged
 			logger.Verbose("request body:\n", string(request.Body))
 		}
-
+		logger.Info(33)
 		if !vvmApps.Exists(request.AppQName) {
 			bus.ReplyBadRequest(responder, "unknown app "+request.AppQName.String())
 			return
 		}
-
+		logger.Info(34)
 		token, err := bus.GetPrincipalToken(request)
 		if err != nil {
 			bus.ReplyAccessDeniedUnauthorized(responder, err.Error())
 			return
 		}
+
+		logger.Info(35)
 
 		partitionID, err := appParts.AppWorkspacePartitionID(request.AppQName, request.WSID)
 		if err != nil {
@@ -54,6 +57,8 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 			bus.ReplyInternalServerError(responder, "failed to compute the partition number", err)
 			return
 		}
+
+		logger.Info(36)
 
 		// deliver to processors
 		if request.IsAPIV2 {
@@ -77,11 +82,15 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 				cmdProcessorIdx := uint(partitionID) % uint(cpAmount)
 				icm := commandprocessor.NewCommandMessage(requestCtx, request.Body, request.AppQName, request.WSID, responder, partitionID, request.QName, token,
 					request.Host, processors.APIPath(request.APIPath), istructs.RecordID(request.DocID), request.Method)
+
 				if !procbus.Submit(uint(cpchIdx), cmdProcessorIdx, icm) {
+
 					bus.ReplyErrf(responder, http.StatusServiceUnavailable, fmt.Sprintf("command processor of partition %d is busy", partitionID))
 				}
+
 			}
 		} else {
+			logger.Info(37)
 			if len(request.Resource) <= ShortestPossibleFunctionNameLen {
 				bus.ReplyBadRequest(responder, "wrong function name: "+request.Resource)
 				return
@@ -91,6 +100,7 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 				bus.ReplyBadRequest(responder, "wrong function name: "+request.Resource)
 				return
 			}
+			logger.Info(38)
 
 			switch request.Resource[:1] {
 			case "q":
@@ -103,9 +113,13 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 				cmdProcessorIdx := uint(partitionID) % uint(cpAmount)
 				icm := commandprocessor.NewCommandMessage(requestCtx, request.Body, request.AppQName, request.WSID, responder, partitionID, funcQName, token,
 					request.Host, processors.APIPath(request.APIPath), istructs.RecordID(request.DocID), request.Method)
+				logger.Info(39)
 				if !procbus.Submit(uint(cpchIdx), cmdProcessorIdx, icm) {
+					logger.Info(46)
 					bus.ReplyErrf(responder, http.StatusServiceUnavailable, fmt.Sprintf("command processor of partition %d is busy", partitionID))
+					logger.Info(47)
 				}
+				logger.Info(48, cmdProcessorIdx, icm)
 			default:
 				bus.ReplyBadRequest(responder, fmt.Sprintf(`wrong function mark "%s" for function %s`, request.Resource[:1], funcQName))
 			}

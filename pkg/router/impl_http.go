@@ -193,7 +193,9 @@ func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[
 		// requestCtx.Done() -> SendRequest2 implementation will notify the handler that the consumer has left us
 		requestCtx, cancel := context.WithCancel(req.Context())
 		defer cancel() // to avoid context leak
+		logger.Info(26)
 		responseCh, responseMeta, responseErr, err := requestSender.SendRequest(requestCtx, request)
+		logger.Info(27)
 		if err != nil {
 			logger.Error("sending request to VVM on", request.Resource, "is failed:", err, ". Body:\n", string(request.Body))
 			status := http.StatusInternalServerError
@@ -203,8 +205,10 @@ func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[
 			WriteTextResponse(rw, err.Error(), status)
 			return
 		}
+		logger.Info(28)
 
 		initResponse(rw, responseMeta.ContentType, responseMeta.StatusCode)
+		logger.Info(29)
 		reply_v1(requestCtx, rw, responseCh, responseErr, responseMeta.ContentType, cancel, request, responseMeta.Mode())
 	})
 }

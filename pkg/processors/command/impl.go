@@ -133,7 +133,10 @@ func (c *cmdWorkpiece) Release() {
 }
 
 func borrowAppPart(_ context.Context, work pipeline.IWorkpiece) error {
-	return work.(*cmdWorkpiece).borrow()
+	logger.Info(22)
+	err :=  work.(*cmdWorkpiece).borrow()
+	logger.Info(23)
+	return err
 }
 
 func (ap *appPartition) getWorkspace(wsid istructs.WSID) *workspace {
@@ -377,9 +380,11 @@ func checkWSActive(_ context.Context, work pipeline.IWorkpiece) (err error) {
 
 func limitCallRate(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	cmd := work.(*cmdWorkpiece)
+	logger.Info(24)
 	if cmd.appStructs.IsFunctionRateLimitsExceeded(cmd.cmdQName, cmd.cmdMes.WSID()) {
 		return coreutils.NewHTTPErrorf(http.StatusTooManyRequests)
 	}
+	logger.Info(25)
 	return nil
 }
 
