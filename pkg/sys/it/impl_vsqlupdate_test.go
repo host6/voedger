@@ -17,11 +17,21 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	it "github.com/voedger/voedger/pkg/vit"
 	"github.com/voedger/voedger/pkg/vvm/builtin/clusterapp"
 )
+
+func TestJksdfdf(t *testing.T) {
+	TestBasicUsage_Uniques(t)
+	// TestActivateDeactivateRecordWithUniques(t)
+	TestUniquesUpdate(t)
+
+	logger.Info("!!!!!!")
+	TestVSqlUpdate_BasicUsage_UpdateTable(t)
+}
 
 func TestVSqlUpdate_BasicUsage_UpdateTable(t *testing.T) {
 	vit := it.NewVIT(t, &it.SharedConfig_App1)
