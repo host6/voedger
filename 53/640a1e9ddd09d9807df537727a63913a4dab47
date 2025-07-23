@@ -1,1 +1,3 @@
 Resolves issue 'q.sys.SqlQuery: fix QName fields conditions'
+
+Resolves #3913 q.sys.SqlQuery: fix QName fields conditions
