@@ -1,3 +1,5 @@
 Resolves issue 'q.sys.SqlQuery: fix QName fields conditions'
 
 Resolves #3913 q.sys.SqlQuery: fix QName fields conditions
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/3913","jira_ticket_url":"","branch_type":2}
