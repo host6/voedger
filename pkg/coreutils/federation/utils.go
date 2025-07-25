@@ -89,10 +89,8 @@ func HTTPRespToFuncResp(httpResp *coreutils.HTTPResponse, httpRespErr error) (re
 		return nil, funcError
 	}
 	res = &coreutils.FuncResponse{
-		CommandResponse: coreutils.CommandResponse{
-			NewIDs:    map[string]istructs.RecordID{},
-			CmdResult: map[string]interface{}{},
-		},
+		NewIDs:       map[string]istructs.RecordID{},
+		CmdResult:    map[string]interface{}{},
 		HTTPResponse: httpResp,
 	}
 	if len(httpResp.Body) == 0 {
@@ -101,9 +99,7 @@ func HTTPRespToFuncResp(httpResp *coreutils.HTTPResponse, httpRespErr error) (re
 	if strings.HasPrefix(httpResp.HTTPResp.Request.URL.Path, "/api/v2/") {
 		// TODO: eliminate this after https://github.com/voedger/voedger/issues/1313
 		if httpResp.HTTPResp.Header.Get(coreutils.ContentType) == coreutils.ContentType_ApplicationJSON {
-			if err = json.Unmarshal([]byte(httpResp.Body), &res.QPv2Response); err == nil {
-				err = json.Unmarshal([]byte(httpResp.Body), &res.CommandResponse)
-			}
+			err = json.Unmarshal([]byte(httpResp.Body), &res)
 		}
 	} else {
 		err = json.Unmarshal([]byte(httpResp.Body), &res)

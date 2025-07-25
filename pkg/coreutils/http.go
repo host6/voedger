@@ -483,38 +483,38 @@ func discardRespBody(resp *http.Response) error {
 	return nil
 }
 
-func (resp *FuncResponse) Len() int {
-	return resp.NumRows()
+func (fr *FuncResponse) Len() int {
+	return fr.NumRows()
 }
 
-func (resp *FuncResponse) NumRows() int {
-	if resp.IsEmpty() {
+func (fr *FuncResponse) NumRows() int {
+	if fr.IsEmpty() {
 		return 0
 	}
-	return len(resp.Sections[0].Elements)
+	return len(fr.Sections[0].Elements)
 }
 
-func (resp *FuncResponse) SectionRow(rowIdx ...int) []interface{} {
+func (fr *FuncResponse) SectionRow(rowIdx ...int) []interface{} {
 	if len(rowIdx) > 1 {
 		panic("must be 0 or 1 rowIdx'es")
 	}
-	if len(resp.Sections) == 0 {
+	if len(fr.Sections) == 0 {
 		panic("empty response")
 	}
 	i := 0
 	if len(rowIdx) == 1 {
 		i = rowIdx[0]
 	}
-	return resp.Sections[0].Elements[i][0][0]
+	return fr.Sections[0].Elements[i][0][0]
 }
 
 // returns a new ID for raw ID 1
-func (resp *FuncResponse) NewID() istructs.RecordID {
-	return resp.NewIDs["1"]
+func (fr *FuncResponse) NewID() istructs.RecordID {
+	return fr.NewIDs["1"]
 }
 
-func (resp *FuncResponse) IsEmpty() bool {
-	return len(resp.Sections) == 0 && len(resp.QPv2Response) == 0
+func (fr *FuncResponse) IsEmpty() bool {
+	return len(fr.Sections) == 0 && len(fr.QPv2Response) == 0
 }
 
 func (fe FuncError) Error() string {
