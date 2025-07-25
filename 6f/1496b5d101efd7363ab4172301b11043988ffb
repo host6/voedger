@@ -1,3 +1,5 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1246","branch_type":1}
 
 [AIR-1246] voedger: set actualizer retry delay on error to 100ms in tests
+
+https://untill.atlassian.net/browse/AIR-1246
