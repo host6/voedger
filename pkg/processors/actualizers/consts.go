@@ -30,6 +30,10 @@ const (
 	borrowRetryDelay             = 50 * time.Millisecond
 	initFailureErrorLogInterval  = 30 * time.Second
 	DefaultIntentsLimit          = builtin.MaxCUDs * 10
+
+	// Exponential backoff constants
+	minErrorDelay = 100 * time.Millisecond // starting delay
+	maxErrorDelay = 30 * time.Second       // maximum delay
 )
 
 var PLogUpdatesQName = appdef.NewQName(appdef.SysPackage, "PLogUpdates")

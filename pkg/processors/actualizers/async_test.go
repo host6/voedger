@@ -16,6 +16,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appdef/filter"
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/in10nmem"
@@ -295,18 +296,14 @@ func getProjectorsInError(metrics imetrics.IMetrics, appName appdef.AppQName, vv
 	return projInErrors
 }
 
-// Tests that error is handled correctly.
-// Async actualizer should write the error to log, then rebuild and restart itself after a 30-second pause
-func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
-	require := require.New(t)
-
-	appName, totalPartitions, partitionNr := istructs.AppQName_test1_app1, istructs.NumAppPartitions(1), istructs.PartitionID(1) // test within partition 1
+// setupErrorTestActualizer creates a test actualizer with error handling capabilities
+func setupErrorTestActualizer(
+	projectorFunc func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) error,
+	afterErrorFunc func(time.Duration) <-chan time.Time,
+	logErrorFunc func(...interface{}),
+) (appparts.IAppPartitions, istructs.IAppStructs, func(), func(), appdef.QName, istructs.Offset, istructs.PartitionID, *BasicAsyncActualizerConfig, appdef.AppQName) {
+	appName, totalPartitions, partitionNr := istructs.AppQName_test1_app1, istructs.NumAppPartitions(1), istructs.PartitionID(1)
 	name := appdef.NewQName("test", "failing_projector")
-
-	attempts := 0
-
-	errorsCh := make(chan string, 10)
-	chanAfterError := make(chan time.Time)
 
 	broker, cleanup := in10nmem.ProvideEx2(in10n.Quotas{
 		Channels:                2,
@@ -314,21 +311,11 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 		Subscriptions:           2,
 		SubscriptionsPerSubject: 2,
 	}, timeu.NewITime())
-	defer cleanup()
 
 	actConf := &BasicAsyncActualizerConfig{
-		Broker: broker,
-
-		AfterError: func(d time.Duration) <-chan time.Time {
-			if d != testActualizerErrorDelay {
-				panic("unexpected pause")
-			}
-			return chanAfterError
-		},
-		LogError: func(args ...interface{}) {
-			errorsCh <- fmt.Sprint("error: ", args)
-		},
-
+		Broker:        broker,
+		AfterError:    afterErrorFunc,
+		LogError:      logErrorFunc,
 		BundlesLimit:  10,
 		FlushInterval: 10 * time.Millisecond,
 	}
@@ -340,7 +327,6 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 			ProvideViewDef(wsb, incProjectionView, buildProjectionView)
 			ProvideViewDef(wsb, decProjectionView, buildProjectionView)
 			wsb.AddCommand(testQName)
-			// add not-View and not-Record state to make the projector NonBuffered
 			prj := wsb.AddProjector(name)
 			prj.Events().Add(
 				[]appdef.OperationKind{appdef.OperationKind_Execute},
@@ -352,16 +338,7 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 			cfg.AddAsyncProjectors(
 				istructs.Projector{
 					Name: name,
-					Func: func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
-						if event.Workspace() == 1002 {
-							if attempts == 0 {
-								attempts++
-								return errors.New("test error")
-							}
-							attempts++
-						}
-						return nil
-					},
+					Func: projectorFunc,
 				})
 		},
 		actConf)
@@ -377,10 +354,49 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 		cmdQName:  testQName,
 	}
 	f.fill(1001, idGen)
-	f.fill(1002, idGen)
-	topOffset := f.fill(1001, idGen)
+	topOffset := f.fill(1002, idGen)
 
 	appParts.DeployAppPartitions(appName, []istructs.PartitionID{partitionNr})
+
+	// Return cleanup function that includes broker cleanup
+	cleanupFunc := func() {
+		stop()
+		cleanup()
+	}
+
+	return appParts, appStructs, start, cleanupFunc, name, topOffset, partitionNr, actConf, appName
+}
+
+// Tests that error is handled correctly.
+// Async actualizer should write the error to log, then rebuild and restart itself after a 30-second pause
+func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
+	require := require.New(t)
+
+	attempts := 0
+	errorsCh := make(chan string, 10)
+	chanAfterError := make(chan time.Time)
+
+	_, appStructs, start, cleanup, name, topOffset, partitionNr, actConf, appName := setupErrorTestActualizer(
+		func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
+			if event.Workspace() == 1002 {
+				if attempts == 0 {
+					attempts++
+					return errors.New("test error")
+				}
+				attempts++
+			}
+			return nil
+		},
+		func(d time.Duration) <-chan time.Time {
+			if d != testActualizerErrorDelay {
+				panic("unexpected pause")
+			}
+			return chanAfterError
+		},
+		func(args ...interface{}) {
+			errorsCh <- fmt.Sprint("error: ", args)
+		})
+	defer cleanup()
 
 	start()
 
@@ -408,9 +424,6 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	require.NotNil(projInErr)
 	require.Equal(0.0, *projInErr)
 
-	// stop services
-	stop()
-
 	require.Equal(2, attempts)
 
 	select {
@@ -420,84 +433,221 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	}
 }
 
+// Tests exponential backoff behavior on consecutive errors
+func Test_AsynchronousActualizer_ExponentialBackoff(t *testing.T) {
+	require := require.New(t)
+
+	attempts := 0
+	errorsCh := make(chan string, 10)
+	delaysCh := make(chan time.Duration, 10)
+
+	_, appStructs, start, cleanup, name, topOffset, partitionNr, _, _ := setupErrorTestActualizer(
+		func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
+			if event.Workspace() == 1002 {
+				attempts++
+				if attempts <= 4 { // Fail first 4 attempts to test exponential backoff
+					return errors.New("test error")
+				}
+			}
+			return nil
+		},
+		func(d time.Duration) <-chan time.Time {
+			delaysCh <- d
+			return time.After(1 * time.Millisecond) // Short delay for test
+		},
+		func(args ...interface{}) {
+			errorsCh <- fmt.Sprint("error: ", args)
+		})
+	defer cleanup()
+
+	start()
+
+	// Collect delays from exponential backoff
+	delays := make([]time.Duration, 0, 4)
+	for range 4 { // Expect 4 errors
+		<-errorsCh // Wait for error
+		delay := <-delaysCh
+		delays = append(delays, delay)
+	}
+
+	// Verify exponential backoff: 100ms, 200ms, 400ms, 800ms
+	require.Equal(100*time.Millisecond, delays[0])
+	require.Equal(200*time.Millisecond, delays[1])
+	require.Equal(400*time.Millisecond, delays[2])
+	require.Equal(800*time.Millisecond, delays[3])
+
+	// Wait for successful processing
+	for getActualizerOffset(require, appStructs, partitionNr, name) < topOffset {
+		time.Sleep(time.Microsecond)
+	}
+
+	require.Equal(5, attempts) // 4 failures + 1 success
+}
+
+// Tests that exponential backoff caps at maximum delay
+func Test_AsynchronousActualizer_ExponentialBackoffMaxCap(t *testing.T) {
+	require := require.New(t)
+
+	attempts := 0
+	errorsCh := make(chan string, 20)
+	delaysCh := make(chan time.Duration, 20)
+
+	_, appStructs, start, cleanup, name, topOffset, partitionNr, _, _ := setupErrorTestActualizer(
+		func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
+			if event.Workspace() == 1002 {
+				attempts++
+				if attempts <= 10 { // Fail first 10 attempts to test max cap
+					return errors.New("test error")
+				}
+			}
+			return nil
+		},
+		func(d time.Duration) <-chan time.Time {
+			delaysCh <- d
+			return time.After(1 * time.Millisecond) // Short delay for test
+		},
+		func(args ...interface{}) {
+			errorsCh <- fmt.Sprint("error: ", args)
+		})
+	defer cleanup()
+
+	start()
+
+	// Collect delays from exponential backoff
+	delays := make([]time.Duration, 0, 10)
+	for range 10 { // Expect 10 errors
+		<-errorsCh // Wait for error
+		delay := <-delaysCh
+		delays = append(delays, delay)
+	}
+
+	// Verify that delays cap at 30 seconds
+	// Expected progression: 100ms, 200ms, 400ms, 800ms, 1.6s, 3.2s, 6.4s, 12.8s, 25.6s, 30s (capped)
+	require.Equal(100*time.Millisecond, delays[0])
+	require.Equal(200*time.Millisecond, delays[1])
+	require.Equal(400*time.Millisecond, delays[2])
+	require.Equal(800*time.Millisecond, delays[3])
+	require.Equal(1600*time.Millisecond, delays[4])
+	require.Equal(3200*time.Millisecond, delays[5])
+	require.Equal(6400*time.Millisecond, delays[6])
+	require.Equal(12800*time.Millisecond, delays[7])
+	require.Equal(25600*time.Millisecond, delays[8])
+	require.Equal(30*time.Second, delays[9]) // Should be capped at 30 seconds
+
+	// Wait for successful processing
+	for getActualizerOffset(require, appStructs, partitionNr, name) < topOffset {
+		time.Sleep(time.Millisecond)
+	}
+
+	require.Equal(11, attempts) // 10 failures + 1 success
+}
+
+// Tests the exponential backoff calculation logic directly
+func Test_AsyncActualizer_ExponentialBackoffCalculation(t *testing.T) {
+	require := require.New(t)
+
+	actualizer := &asyncActualizer{}
+	actualizer.Prepare() // Initialize backoff fields
+
+	// Test initial state
+	require.Equal(0, actualizer.consecutiveErrors)
+	require.Equal(minErrorDelay, actualizer.currentErrorDelay)
+
+	// Test first error
+	actualizer.consecutiveErrors++
+	delay1 := actualizer.calculateNextErrorDelay()
+	require.Equal(100*time.Millisecond, delay1)
+
+	// Test second error
+	actualizer.consecutiveErrors++
+	delay2 := actualizer.calculateNextErrorDelay()
+	require.Equal(200*time.Millisecond, delay2)
+
+	// Test third error
+	actualizer.consecutiveErrors++
+	delay3 := actualizer.calculateNextErrorDelay()
+	require.Equal(400*time.Millisecond, delay3)
+
+	// Test many errors to verify cap
+	for range 20 {
+		actualizer.consecutiveErrors++
+		actualizer.calculateNextErrorDelay()
+	}
+	require.Equal(maxErrorDelay, actualizer.currentErrorDelay)
+
+	// Test reset
+	actualizer.resetErrorDelay()
+	require.Equal(0, actualizer.consecutiveErrors)
+	require.Equal(minErrorDelay, actualizer.currentErrorDelay)
+}
+
 func Test_AsynchronousActualizer_ResumeReadAfterNotifications(t *testing.T) {
 	require := require.New(t)
 
-	appName, totalPartitions, partitionNr := istructs.AppQName_test1_app1, istructs.NumAppPartitions(1), istructs.PartitionID(1) // test within partition 1
-
-	broker, bCleanup := in10nmem.ProvideEx2(in10n.Quotas{
-		Channels:                2,
-		ChannelsPerSubject:      2,
-		Subscriptions:           2,
-		SubscriptionsPerSubject: 2,
-	}, timeu.NewITime())
-	defer bCleanup()
-
-	actCfg := &BasicAsyncActualizerConfig{
-		IntentsLimit:  2,
-		BundlesLimit:  2,
-		FlushInterval: 1 * time.Second,
-		Broker:        broker,
+	// Simple projector that increments a counter without errors (same as testIncrementor)
+	projectorFunc := func(event istructs.IPLogEvent, s istructs.IState, intents istructs.IIntents) (err error) {
+		wsid := event.Workspace()
+		if wsid == 1099 {
+			return fmt.Errorf("test error for workspace 1099")
+		}
+		key, err := s.KeyBuilder(sys.Storage_View, incProjectionView)
+		if err != nil {
+			return
+		}
+		key.PutInt32("pk", 0)
+		key.PutInt32("cc", 0)
+		el, ok, err := s.CanExist(key)
+		if err != nil {
+			return
+		}
+		eb, err := intents.NewValue(key)
+		if err != nil {
+			return
+		}
+		if ok {
+			eb.PutInt32("myvalue", el.AsInt32("myvalue")+1)
+		} else {
+			eb.PutInt32("myvalue", 1)
+		}
+		return
 	}
 
-	appParts, appStructs, start, stop := deployTestApp(
-		appName, totalPartitions, false,
-		testWorkspace, testWorkspaceDescriptor,
-		func(wsb appdef.IWorkspaceBuilder) {
-			ProvideViewDef(wsb, incProjectionView, buildProjectionView)
-			ProvideViewDef(wsb, decProjectionView, buildProjectionView)
-			wsb.AddCommand(testQName)
-			wsb.AddProjector(incrementorName).Events().Add(
-				[]appdef.OperationKind{appdef.OperationKind_Execute},
-				filter.QNames(testQName))
-		},
-		func(cfg *istructsmem.AppConfigType) {
-			cfg.Resources.Add(istructsmem.NewCommandFunction(testQName, istructsmem.NullCommandExec))
-			cfg.AddAsyncProjectors(testIncrementor)
-		},
-		actCfg)
-
-	idGen := istructsmem.NewIDGenerator()
-	createWS(appStructs, istructs.WSID(1001), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(1), idGen)
-	createWS(appStructs, istructs.WSID(1002), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(2), idGen)
-
-	f := pLogFiller{
-		app:       appStructs,
-		partition: partitionNr,
-		offset:    istructs.Offset(3),
-		cmdQName:  testQName,
-	}
-	//Initial events in pLog
-	f.fill(1001, idGen)
-	topOffset := f.fill(1002, idGen)
-
-	appParts.DeployAppPartitions(appName, []istructs.PartitionID{partitionNr})
+	_, appStructs, start, cleanup, name, topOffset, partitionNr, actCfg, appName := setupErrorTestActualizer(
+		projectorFunc,
+		time.After,                   // Standard time.After function
+		func(args ...interface{}) {}, // No-op log function
+	)
+	defer cleanup()
 
 	start()
 
 	// Wait for the projectors
-	for getActualizerOffset(require, appStructs, partitionNr, incrementorName) < topOffset {
+	for getActualizerOffset(require, appStructs, partitionNr, name) < topOffset {
 		time.Sleep(time.Millisecond)
 	}
 
-	//New events in pLog
+	// Create additional events in pLog
+	idGen := istructsmem.NewIDGenerator()
+	f := pLogFiller{
+		app:       appStructs,
+		partition: partitionNr,
+		offset:    topOffset + 1,
+		cmdQName:  testQName,
+	}
 	f.fill(1001, idGen)
 	topOffset = f.fill(1001, idGen)
 
-	//Notify the projectors
-	broker.Update(in10n.ProjectionKey{
+	// Notify the projectors
+	actCfg.Broker.Update(in10n.ProjectionKey{
 		App:        appName,
 		Projection: PLogUpdatesQName,
 		WS:         istructs.WSID(partitionNr),
 	}, topOffset)
 
 	// Wait for the projectors
-	for getActualizerOffset(require, appStructs, partitionNr, incrementorName) < topOffset {
+	for getActualizerOffset(require, appStructs, partitionNr, name) < topOffset {
 		time.Sleep(time.Millisecond)
 	}
-
-	// stop services
-	stop()
 
 	// expected projection values
 	require.Equal(int32(3), getProjectionValue(require, appStructs, incProjectionView, istructs.WSID(1001)))

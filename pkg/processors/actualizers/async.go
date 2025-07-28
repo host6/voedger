@@ -63,6 +63,8 @@ type asyncActualizer struct {
 	plogBatch                  // [50]plogEvent
 	appParts             appparts.IAppPartitions
 	actualizerErrorDelay time.Duration // 30 seconds in production, 100ms in tests
+	currentErrorDelay    time.Duration // current delay for exponential backoff
+	consecutiveErrors    int           // count of consecutive errors for backoff calculation
 }
 
 func (a *asyncActualizer) Prepare() {
@@ -87,6 +89,37 @@ func (a *asyncActualizer) Prepare() {
 	if a.conf.LogError == nil {
 		a.conf.LogError = logger.Error
 	}
+
+	// Initialize exponential backoff
+	a.currentErrorDelay = minErrorDelay
+	a.consecutiveErrors = 0
+}
+
+// calculateNextErrorDelay implements exponential backoff with a maximum cap
+func (a *asyncActualizer) calculateNextErrorDelay() time.Duration {
+	if a.consecutiveErrors == 0 {
+		a.currentErrorDelay = minErrorDelay
+		return a.currentErrorDelay
+	}
+
+	// Calculate exponential backoff: delay = minDelay * 2^(consecutiveErrors-1)
+	// Using bit shifting for power of 2: 1 << (consecutiveErrors-1)
+	multiplier := 1 << (a.consecutiveErrors - 1)
+	newDelay := time.Duration(int64(minErrorDelay) * int64(multiplier))
+
+	// Cap at maximum delay
+	if newDelay > maxErrorDelay {
+		newDelay = maxErrorDelay
+	}
+
+	a.currentErrorDelay = newDelay
+	return a.currentErrorDelay
+}
+
+// resetErrorDelay resets the exponential backoff when there's no error
+func (a *asyncActualizer) resetErrorDelay() {
+	a.consecutiveErrors = 0
+	a.currentErrorDelay = minErrorDelay
 }
 
 func (a *asyncActualizer) Run(ctx context.Context) {
@@ -101,11 +134,16 @@ func (a *asyncActualizer) Run(ctx context.Context) {
 		}
 		a.finit() // execute even if a.init() has failed
 		if err != nil {
+			a.consecutiveErrors++
+			delay := a.calculateNextErrorDelay()
 			a.conf.LogError(a.name, err)
 			select {
 			case <-ctx.Done():
-			case <-a.conf.AfterError(a.actualizerErrorDelay):
+			case <-a.conf.AfterError(delay):
 			}
+		} else {
+			// Reset exponential backoff on successful operation
+			a.resetErrorDelay()
 		}
 	}
 }
