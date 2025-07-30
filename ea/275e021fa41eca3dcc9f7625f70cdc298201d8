@@ -1,3 +1,5 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1262","branch_type":1}
 
 [AIR-1262] retry on 503 during Workspace init
+
+https://untill.atlassian.net/browse/AIR-1262
