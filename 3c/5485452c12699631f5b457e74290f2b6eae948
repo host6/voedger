@@ -1,1 +1,3 @@
 [AIR-1262] retry on 503 during Workspace init
+
+https://untill.atlassian.net/browse/AIR-1262
