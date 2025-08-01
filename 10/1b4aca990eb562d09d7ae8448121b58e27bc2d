@@ -1,1 +1,3 @@
 Resolves issue 'skip TestDirectUpdateManyTypes'
+
+Resolves #3946 skip TestDirectUpdateManyTypes
