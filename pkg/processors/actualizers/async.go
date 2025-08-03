@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	retrier "github.com/voedger/voedger/pkg/goutils/retry"
 	"github.com/voedger/voedger/pkg/state/stateprovide"
 	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/authnz"
@@ -63,6 +64,7 @@ type asyncActualizer struct {
 	plogBatch                  // [50]plogEvent
 	appParts             appparts.IAppPartitions
 	actualizerErrorDelay time.Duration // 30 seconds in production, 100ms in tests
+	retrierCfg           retrier.Config
 }
 
 func (a *asyncActualizer) Prepare() {

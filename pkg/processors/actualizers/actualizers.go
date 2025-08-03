@@ -8,10 +8,12 @@ package actualizers
 import (
 	"context"
 	"sync"
+	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/coreutils"
+	retrier "github.com/voedger/voedger/pkg/goutils/retry"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -49,7 +51,10 @@ func (a *actualizers) NewAndRun(ctx context.Context, app appdef.AppQName, part i
 		},
 		appParts:             a.appParts,
 		actualizerErrorDelay: defaultActualizerErrorDelay,
+		retrierCfg:           retrier.NewDefaultConfig(),
 	}
+	act.retrierCfg.InitialInterval = 100 * time.Millisecond
+	act.retrierCfg.MaxInterval = 30 * time.Second
 	if coreutils.IsTest() {
 		act.actualizerErrorDelay = testActualizerErrorDelay
 	}
