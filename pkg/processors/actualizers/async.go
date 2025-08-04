@@ -128,11 +128,11 @@ func (a *asyncActualizer) waitForAppDeploy(ctx context.Context) error {
 	ap, err := retrier.Retry(ctx, retrierCfg, func() (appparts.IAppPartition, error) {
 		return a.appParts.Borrow(a.conf.AppQName, a.conf.PartitionID, appparts.ProcessorKind_Actualizer)
 	})
-	if errors.Is(err, ctx.Err()) {
-		return nil // consider "context canceled" as expected error
-	}
 	if ap != nil {
 		ap.Release()
+	}
+	if errors.Is(err, ctx.Err()) {
+		return nil // consider "context canceled" as expected error
 	}
 	return err
 }
