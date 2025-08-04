@@ -64,7 +64,6 @@ type asyncActualizer struct {
 	plogBatch                  // [50]plogEvent
 	appParts             appparts.IAppPartitions
 	actualizerErrorDelay time.Duration // 30 seconds in production, 100ms in tests
-	retrierCfg           retrier.Config
 }
 
 func (a *asyncActualizer) Prepare() {
@@ -119,24 +118,28 @@ func (a *asyncActualizer) cancelChannel(e error) {
 
 func (a *asyncActualizer) waitForAppDeploy(ctx context.Context) error {
 	start := time.Now()
-	for ctx.Err() == nil {
-		ap, err := a.appParts.Borrow(a.conf.AppQName, a.conf.PartitionID, appparts.ProcessorKind_Actualizer)
-		if err == nil || errors.Is(err, appparts.ErrNotAvailableEngines) {
-			if ap != nil {
-				ap.Release()
+	retrierCfg := retrier.Config{
+		InitialInterval: borrowRetryDelay,
+		Multiplier:      1,
+		OnRetry: func(attempt int, delay time.Duration) {
+			if time.Since(start) >= initFailureErrorLogInterval {
+				logger.Error(fmt.Sprintf("app %s part %d actualizer %q: failed to init in 30 seconds", a.conf.AppQName, a.conf.PartitionID, a.projectorQName))
+				start = time.Now()
 			}
-			return nil
-		}
-		if !errors.Is(err, appparts.ErrNotFound) {
-			return err
-		}
-		if time.Since(start) >= initFailureErrorLogInterval {
-			logger.Error(fmt.Sprintf("app %s part %d actualizer %q: failed to init in 30 seconds", a.conf.AppQName, a.conf.PartitionID, a.projectorQName))
-			start = time.Now()
-		}
-		time.Sleep(borrowRetryDelay)
+		},
+		Acceptable: []error{appparts.ErrNotAvailableEngines},
+		RetryOn:    []error{appparts.ErrNotFound},
 	}
-	return nil // consider "context canceled" as expected error
+	ap, err := retrier.Retry(ctx, retrierCfg, func() (appparts.IAppPartition, error) {
+		return a.appParts.Borrow(a.conf.AppQName, a.conf.PartitionID, appparts.ProcessorKind_Actualizer)
+	})
+	if errors.Is(err, ctx.Err()) {
+		return nil // consider "context canceled" as expected error
+	}
+	if ap != nil {
+		ap.Release()
+	}
+	return err
 }
 
 func (a *asyncActualizer) init(ctx context.Context) (err error) {

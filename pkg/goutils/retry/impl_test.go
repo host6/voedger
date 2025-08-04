@@ -57,15 +57,6 @@ func TestInvalidConfig(t *testing.T) {
 			},
 		},
 		{
-			name: "zero max interval",
-			cfg: Config{
-				InitialInterval: 100 * time.Millisecond,
-				MaxInterval:     0,
-				Multiplier:      2.0,
-				JitterFactor:    0.5,
-			},
-		},
-		{
 			name: "multiplier less than 1",
 			cfg: Config{
 				InitialInterval: 100 * time.Millisecond,
