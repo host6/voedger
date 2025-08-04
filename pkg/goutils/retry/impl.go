@@ -25,7 +25,7 @@ func NewDefaultConfig() Config {
 
 // New creates a Retrier with provided Config, validating parameters.
 func New(cfg Config) (*Retrier, error) {
-	if cfg.InitialInterval <= 0 || cfg.MaxInterval < 0 ||
+	if cfg.InitialInterval <= 0 || cfg.MaxInterval < 0 || (cfg.MaxInterval == 0 && cfg.Multiplier != 1) ||
 		cfg.Multiplier < 1 || cfg.JitterFactor < 0 || cfg.JitterFactor > 1 ||
 		cfg.ResetAfter < 0 {
 		return nil, ErrInvalidConfig
