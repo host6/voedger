@@ -37,8 +37,6 @@ type BasicAsyncActualizerConfig struct {
 
 	Opts []state.StateOptFunc
 
-	// Optional. Default value: `time.After`
-	AfterError TimeAfterFunc
 	// Optional. Default value: `core-logger.Error`
 	LogError LogErrorFunc
 	// Optional.

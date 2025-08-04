@@ -306,7 +306,6 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	attempts := 0
 
 	errorsCh := make(chan string, 10)
-	chanAfterError := make(chan time.Time)
 
 	broker, cleanup := in10nmem.ProvideEx2(in10n.Quotas{
 		Channels:                2,
@@ -319,12 +318,6 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	actConf := &BasicAsyncActualizerConfig{
 		Broker: broker,
 
-		AfterError: func(d time.Duration) <-chan time.Time {
-			if d != testActualizerErrorDelay {
-				panic("unexpected pause")
-			}
-			return chanAfterError
-		},
 		LogError: func(args ...interface{}) {
 			errorsCh <- fmt.Sprint("error: ", args)
 		},
@@ -396,9 +389,6 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	projInErr := getProjectorsInError(actConf.Metrics, appName, actConf.VvmName)
 	require.NotNil(projInErr)
 	require.Equal(1.0, *projInErr)
-
-	// tick after-error interval ("30 second delay")
-	chanAfterError <- time.Now()
 
 	// Now the istructs.Projector must handle the log till the end
 	for getActualizerOffset(require, appStructs, partitionNr, name) < topOffset {

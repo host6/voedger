@@ -54,16 +54,15 @@ type (
 
 // 1 asyncActualizer per each projector per each partition
 type asyncActualizer struct {
-	conf                 AsyncActualizerConf
-	projectorQName       appdef.QName
-	pipeline             pipeline.IAsyncPipeline
-	offset               istructs.Offset
-	name                 string
-	readCtx              *asyncActualizerContextState
-	projErrState         int32 // 0 - no error, 1 - error
-	plogBatch                  // [50]plogEvent
-	appParts             appparts.IAppPartitions
-	actualizerErrorDelay time.Duration // 30 seconds in production, 100ms in tests
+	conf           AsyncActualizerConf
+	projectorQName appdef.QName
+	pipeline       pipeline.IAsyncPipeline
+	offset         istructs.Offset
+	name           string
+	readCtx        *asyncActualizerContextState
+	projErrState   int32 // 0 - no error, 1 - error
+	plogBatch            // [50]plogEvent
+	appParts       appparts.IAppPartitions
 }
 
 func (a *asyncActualizer) Prepare() {
@@ -81,10 +80,6 @@ func (a *asyncActualizer) Prepare() {
 	if a.conf.FlushPositionInterval == 0 {
 		a.conf.FlushPositionInterval = defaultFlushPositionInterval
 	}
-	if a.conf.AfterError == nil {
-		a.conf.AfterError = time.After
-	}
-
 	if a.conf.LogError == nil {
 		a.conf.LogError = logger.Error
 	}
@@ -98,10 +93,10 @@ func (a *asyncActualizer) Run(ctx context.Context) {
 	cfg := retrier.NewDefaultConfig()
 	cfg.InitialInterval = actualizerErrorDelay
 	cfg.MaxInterval = actualizerErrorDelayMax
-	cfg.OnRetry = func(_ int, _ time.Duration) {
-		a.finit()
+	cfg.OnRetry = func(_ int, _ time.Duration, err error) {
+		a.conf.LogError(a.name, err)
 	}
-	retrier.RetryErr(ctx, cfg, func() error {
+	_ = retrier.RetryErr(ctx, cfg, func() error {
 		if err = a.init(ctx); err == nil {
 			logger.Trace(a.name, "started")
 			err = a.keepReading()
@@ -109,20 +104,6 @@ func (a *asyncActualizer) Run(ctx context.Context) {
 		a.finit() // execute even if a.init() has failed
 		return err
 	})
-	for ctx.Err() == nil {
-		if err = a.init(ctx); err == nil {
-			logger.Trace(a.name, "started")
-			err = a.keepReading()
-		}
-		a.finit()
-		if err != nil {
-			a.conf.LogError(a.name, err)
-			select {
-			case <-ctx.Done():
-			case <-a.conf.AfterError(a.actualizerErrorDelay):
-			}
-		}
-	}
 }
 
 func (a *asyncActualizer) cancelChannel(e error) {
@@ -135,7 +116,7 @@ func (a *asyncActualizer) waitForAppDeploy(ctx context.Context) error {
 	retrierCfg := retrier.Config{
 		InitialInterval: borrowRetryDelay,
 		Multiplier:      1,
-		OnRetry: func(attempt int, delay time.Duration) {
+		OnRetry: func(int, time.Duration, error) {
 			if time.Since(start) >= initFailureErrorLogInterval {
 				logger.Error(fmt.Sprintf("app %s part %d actualizer %q: failed to init in 30 seconds", a.conf.AppQName, a.conf.PartitionID, a.projectorQName))
 				start = time.Now()
