@@ -24,8 +24,8 @@ const (
 	defaultBundlesLimit          = 100
 	defaultFlushInterval         = time.Millisecond * 100
 	defaultFlushPositionInterval = time.Minute
-	defaultActualizerErrorDelay  = time.Second * 30
-	testActualizerErrorDelay     = 100 * time.Millisecond // used in tests only
+	actualizerErrorDelay         = 100 * time.Millisecond
+	actualizerErrorDelayMax      = 30 * time.Second
 	n10nChannelDuration          = 100 * 365 * 24 * time.Hour
 	borrowRetryDelay             = 50 * time.Millisecond
 	initFailureErrorLogInterval  = 30 * time.Second

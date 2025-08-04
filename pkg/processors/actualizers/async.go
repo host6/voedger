@@ -95,12 +95,26 @@ func (a *asyncActualizer) Run(ctx context.Context) {
 	if err = a.waitForAppDeploy(ctx); err != nil {
 		panic(err)
 	}
-	for ctx.Err() == nil {
+	cfg := retrier.NewDefaultConfig()
+	cfg.InitialInterval = actualizerErrorDelay
+	cfg.MaxInterval = actualizerErrorDelayMax
+	cfg.OnRetry = func(_ int, _ time.Duration) {
+		a.finit()
+	}
+	retrier.RetryErr(ctx, cfg, func() error {
 		if err = a.init(ctx); err == nil {
 			logger.Trace(a.name, "started")
 			err = a.keepReading()
 		}
 		a.finit() // execute even if a.init() has failed
+		return err
+	})
+	for ctx.Err() == nil {
+		if err = a.init(ctx); err == nil {
+			logger.Trace(a.name, "started")
+			err = a.keepReading()
+		}
+		a.finit()
 		if err != nil {
 			a.conf.LogError(a.name, err)
 			select {
