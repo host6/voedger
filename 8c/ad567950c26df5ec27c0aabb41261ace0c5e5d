@@ -1,1 +1,3 @@
 Resolves issue 'golangci-lint: errros are not checked in many places'
+
+Resolves #3957 golangci-lint: errros are not checked in many places
