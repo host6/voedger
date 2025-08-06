@@ -1,1 +1,3 @@
 Resolves issue 'golangci-lint: add copyloopvar, durationcheck'
+
+Resolves #3967 golangci-lint: add copyloopvar, durationcheck
