@@ -1,3 +1,5 @@
 Resolves issue 'golangci-lint: add copyloopvar, durationcheck'
 
 Resolves #3967 golangci-lint: add copyloopvar, durationcheck
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/3967","jira_ticket_url":"","branch_type":1}
