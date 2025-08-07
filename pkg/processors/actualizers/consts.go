@@ -27,8 +27,6 @@ const (
 	actualizerErrorDelay         = 100 * time.Millisecond
 	actualizerErrorDelayMax      = 30 * time.Second
 	n10nChannelDuration          = 100 * 365 * 24 * time.Hour
-	borrowRetryDelay             = 50 * time.Millisecond
-	initFailureErrorLogInterval  = 30 * time.Second
 	DefaultIntentsLimit          = builtin.MaxCUDs * 10
 )
 
