@@ -1,3 +1,5 @@
 Resolves issue 'fix TestQueryProcessor2_Views/ACL_test'
 
 Resolves #3959 fix TestQueryProcessor2_Views/ACL_test
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/3959","jira_ticket_url":"","branch_type":1}
