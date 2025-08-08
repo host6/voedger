@@ -1,35 +1,38 @@
-# Retrier
+# retrier
 
-Go package providing retry logic with exponential backoff, full jitter, and reset capabilities.
+`retrier` is a small Go package providing configurable retry logic with exponential backoff, jitter, and reset functionality. It simplifies re-executing operations that may intermittently fail, with flexible error-handling policies.
 
 ## Usage
 
 ```go
-import "github.com/untill/retrier"
+ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+defer cancel()
 
-// Basic retry
-cfg := retrier.NewDefaultConfig()
-cfg.InitialInterval = 100 * time.Millisecond
-cfg.MaxInterval = 5 * time.Second
+initialDelay := 200 * time.Millisecond
+maxIntervaDelay := 5 * time.Second
+cfg := retrier.NewConfigExponentialBackoff(initialDelay, maxDelay)
 
-r, _ := retrier.New(cfg)
-err := r.Run(ctx, func() error {
-    return doWork()
+res, err := retrier.Retry(ctx, cfg, func() (string, error) {
+    return fetchRemoteResource()
 })
-
-// Generic helper
-result, err := retrier.Retry(ctx, cfg, func() (string, error) {
-    return fetchData()
-})
+if err != nil {
+    log.Fatalf("Operation failed: %v", err)
+}
+fmt.Println("Result:", res)
 ```
 
-## Configuration
+## Config
 
-Use `NewDefaultConfig()` for sensible defaults, then configure:
+* `InitialDelay    time.Duration`  – starting delay before first retry
+* `MaxDelay        time.Duration`  - upper bound for backoff (0 allowed only if Multiplier==1)
+* `Multiplier      float64`        – exponential growth factor (>=1)
+* `JitterFactor    float64`        – randomness factor in \[0,1]
+* `ResetAfter      time.Duration`  – duration after which backoff resets to initial
+* `OnError`                        - callback called before each retry
+* `RetryOnlyOn []error`            – retry only on listed errors and abort on any other error; empty means retry all non-context errors
+* `Acceptable []error`             – treat these errors as success and return no error
 
-- `InitialInterval`: Starting delay before first retry
-- `MaxInterval`: Maximum delay between retries
-- `Multiplier`: Factor by which delay increases (≥ 1)
-- `JitterFactor`: Randomization factor (0 to 1)
-- `ResetAfter`: Duration to reset backoff (0 = disabled)
-- `OnRetry`: Optional callback for retry attempts
+## Helper Functions
+
+* `Retry[T any](ctx context.Context, cfg Config, op func() (T, error)) (T, error)` – retries a function returning a value and error.
+* `RetryErr(ctx context.Context, cfg Config, op func() error) error` – convenience wrapper for operations that return only an error.
