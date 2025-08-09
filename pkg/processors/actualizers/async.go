@@ -86,10 +86,8 @@ func (a *asyncActualizer) Prepare() {
 }
 
 func (a *asyncActualizer) Run(ctx context.Context) {
-	cfg := retrier.NewDefaultConfig()
-	cfg.InitialInterval = actualizerErrorDelay
-	cfg.MaxInterval = actualizerErrorDelayMax
-	cfg.OnRetry = func(_ int, _ time.Duration, err error) {
+	cfg := retrier.NewConfigExponentialBackoff(actualizerErrorDelay, actualizerErrorDelayMax)
+	cfg.HandleError = func(_ int, _ time.Duration, err error) {
 		a.conf.LogError(a.name, err)
 	}
 	_ = retrier.RetryErr(ctx, cfg, func() error {

@@ -208,7 +208,7 @@ func TestExponentialBackoffBehavior(t *testing.T) {
 		return "success", nil
 	}
 
-	cfg.OnError = func(attempt int, delay time.Duration, _ error) {
+	cfg.HandleError = func(attempt int, delay time.Duration, _ error) {
 		retryDelays = append(retryDelays, delay)
 	}
 
@@ -270,7 +270,7 @@ func TestResetAfter(t *testing.T) {
 	}
 
 	// Track retry delays by using OnError callback
-	cfg.OnError = func(attempt int, delay time.Duration, _ error) {
+	cfg.HandleError = func(attempt int, delay time.Duration, _ error) {
 		retryDelays = append(retryDelays, delay)
 	}
 
@@ -315,7 +315,7 @@ func TestOnError(t *testing.T) {
 	testErr := errors.New("temporary error")
 
 	calls := 0
-	cfg.OnError = func(attempt int, delay time.Duration, err error) {
+	cfg.HandleError = func(attempt int, delay time.Duration, err error) {
 		require.Equal(err, testErr)
 		calls++
 	}
@@ -355,7 +355,7 @@ func TestMaxDelayCapping(t *testing.T) {
 		return "success", nil
 	}
 
-	cfg.OnError = func(attempt int, delay time.Duration, _ error) {
+	cfg.HandleError = func(attempt int, delay time.Duration, _ error) {
 		retryDelays = append(retryDelays, delay)
 	}
 

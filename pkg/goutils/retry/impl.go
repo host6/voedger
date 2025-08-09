@@ -86,26 +86,6 @@ func (r *Retrier) Run(ctx context.Context, fn func() error) error {
 		if err == nil {
 			return nil
 		}
-		for _, okErr := range r.cfg.Acceptable {
-			if errors.Is(err, okErr) {
-				return nil
-			}
-		}
-
-		// -------------------------------------------------------------
-		// Decide whether to retry ------------------------------------
-		// -------------------------------------------------------------
-		retriable := len(r.cfg.RetryOnlyOn) == 0 // default: retry everything
-		for _, re := range r.cfg.RetryOnlyOn {
-			if errors.Is(err, re) {
-				retriable = true
-				break
-			}
-			retriable = false
-		}
-		if !retriable {
-			return err
-		}
 
 		// -------------------------------------------------------------
 		// Back-off computation ----------------------------------------
@@ -114,15 +94,29 @@ func (r *Retrier) Run(ctx context.Context, fn func() error) error {
 		delay := r.NextDelay()
 
 		// Callback *always* fires for observability
-		if r.cfg.OnError != nil {
-			r.cfg.OnError(attempt, delay, err)
+		action := DoRetry
+		if r.cfg.HandleError != nil {
+			action = r.cfg.HandleError(attempt, delay, err)
 		}
 
-		// If the context was cancelled during computation or callback, abort now
+		switch action {
+		case Accept:
+			return nil
+		case Abort:
+			return err
+		case DoRetry:
+			// continue below
+		default:
+			// defensive: treat unknown action as Abort
+			return err
+		}
+
+		// context might have been cancelled while in HandleError
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return ctxErr
 		}
 
+		// wait for back-off or cancellation
 		select {
 		case <-time.After(delay):
 		case <-ctx.Done():
