@@ -1,1 +1,3 @@
 Resolves issue 'QPv2: do not emit system fields in query result'
+
+Resolves #3983 QPv2: do not emit system fields in query result
