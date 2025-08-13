@@ -1,3 +1,5 @@
 Resolves issue 'QPv2: do not emit system fields in query result'
 
 Resolves #3983 QPv2: do not emit system fields in query result
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/3983","jira_ticket_url":"","branch_type":2}
