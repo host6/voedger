@@ -1,1 +1,3 @@
 Resolves issue 'QPv2: error 500 on invalid `keys` query constraint'
+
+Resolves #3975 QPv2: error 500 on invalid `keys` query constraint
