@@ -1,3 +1,5 @@
 Resolves issue 'Eliminate IService from IActualizersService and ISchedulresService'
 
 Resolves #4007 Eliminate IService from IActualizersService and ISchedulresService
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4007","jira_ticket_url":"","branch_type":1}
