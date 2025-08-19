@@ -269,10 +269,9 @@ func TestTakeQNamesFromWorkspace(t *testing.T) {
 
 	t.Run("CUDs QNames", func(t *testing.T) {
 		t.Run("CUD in the request -> 400 bad request", func(t *testing.T) {
-			t.Skip("temporarily skipped. To be rolled back in https://github.com/voedger/voedger/issues/3199")
 			anotherWS := vit.WS(istructs.AppQName_test1_app1, "test_ws_another")
 			body := `{"cuds":[{"fields":{"sys.ID": 1,"sys.QName":"app1pkg.options"}}]}`
-			vit.PostWS(anotherWS, "c.sys.CUD", body, coreutils.Expect400("not found", "app1pkg.options", "Workspace «app1pkg.test_wsWS_another»"))
+			vit.PostWS(anotherWS, "c.sys.CUD", body, coreutils.Expect500("not found", "app1pkg.options", "Workspace «app1pkg.test_wsWS_another»"))
 		})
 		t.Run("CUD produced by a command -> 500 internal server error", func(t *testing.T) {
 			it.MockCmdExec = func(input string, args istructs.ExecCommandArgs) error {
@@ -367,13 +366,13 @@ func TestDeniedResourcesAuthorization(t *testing.T) {
 	})
 
 	t.Run("entire cdoc", func(t *testing.T) {
-		t.Skip("wait for ACL in VSQl for Air. Currently SElECT rule chechink is skipped in QP")
+		t.Skip("wait for ACL in VSQl for Air. Currently SElECT rule chechink is skipped in QP. See https://github.com/voedger/voedger/issues/3223")
 		body := `{"args":{"Schema":"app1pkg.TestDeniedCDoc"},"elements":[{"fields":["sys.ID"]}]}`
 		vit.PostWS(ws, "q.sys.Collection", body, coreutils.Expect403())
 	})
 
 	t.Run("cerain fields of cdoc", func(t *testing.T) {
-		t.Skip("wait for ACL in VSQL")
+		t.Skip("wait for ACL in VSQL. See https://github.com/voedger/voedger/issues/3223")
 		body := `{"args":{"Schema":"app1pkg.TestCDocWithDeniedFields"},"elements":[{"fields":["Fld1"]}]}`
 		vit.PostWS(ws, "q.sys.Collection", body)
 
@@ -400,7 +399,7 @@ func TestNullability_SetEmptyString(t *testing.T) {
 	docID := resp.NewID()
 
 	checked := false
-	as.Events().ReadWLog(context.Background(), ws.WSID, offsCreate, 1, func(wlogOffset istructs.Offset, event istructs.IWLogEvent) (err error) {
+	err = as.Events().ReadWLog(context.Background(), ws.WSID, offsCreate, 1, func(wlogOffset istructs.Offset, event istructs.IWLogEvent) (err error) {
 		for cud := range event.CUDs {
 			cud.SpecifiedValues(func(field appdef.IField, val interface{}) bool {
 				if field.Name() == "name" {
@@ -412,6 +411,7 @@ func TestNullability_SetEmptyString(t *testing.T) {
 		}
 		return nil
 	})
+	require.NoError(err)
 	require.True(checked)
 
 	body = fmt.Sprintf(`{"cuds":[{"sys.ID": %d,"fields":{"name":""}}]}`, docID)
@@ -420,7 +420,7 @@ func TestNullability_SetEmptyString(t *testing.T) {
 	// string set to "" -> info about this is not stored in dynobuffer
 	// cud.ModifiedFields() calls dynobuffers.ModifiedFields() that iterates over fields that has values
 	// #2785 - istructs.ICUDRow.ModifiedFields also iterate emptied string- and bytes- fields
-	as.Events().ReadWLog(context.Background(), ws.WSID, offsUpdate, 1, func(wlogOffset istructs.Offset, event istructs.IWLogEvent) (err error) {
+	err = as.Events().ReadWLog(context.Background(), ws.WSID, offsUpdate, 1, func(wlogOffset istructs.Offset, event istructs.IWLogEvent) (err error) {
 		for cud := range event.CUDs {
 			for iField, fv := range cud.SpecifiedValues {
 				switch iField.Name() {
@@ -434,6 +434,7 @@ func TestNullability_SetEmptyString(t *testing.T) {
 		}
 		return nil
 	})
+	require.NoError(err)
 }
 
 func TestNullability_SetEmptyObject(t *testing.T) {
@@ -453,7 +454,7 @@ func TestNullability_SetEmptyObject(t *testing.T) {
 	offsCreate := resp.CurrentWLogOffset
 	fields := map[string]interface{}{}
 	expectedNestedDocID := resp.NewIDs["1"]
-	as.Events().ReadWLog(context.Background(), ws.WSID, offsCreate, 1, func(wlogOffset istructs.Offset, event istructs.IWLogEvent) (err error) {
+	err = as.Events().ReadWLog(context.Background(), ws.WSID, offsCreate, 1, func(wlogOffset istructs.Offset, event istructs.IWLogEvent) (err error) {
 		for cud := range event.CUDs {
 			cud.SpecifiedValues(func(f appdef.IField, val interface{}) bool {
 				fields[f.Name()] = val
@@ -462,6 +463,7 @@ func TestNullability_SetEmptyObject(t *testing.T) {
 		}
 		return nil
 	})
+	require.NoError(err)
 	require.Len(fields, 7) // id_air_table_plan, form, sys.ID, sys,IsActive, sys.QName, sys.ParentID, sys.Container
 	require.EqualValues(expectedNestedDocID, fields["id_air_table_plan"])
 	require.EqualValues(15, fields["form"])

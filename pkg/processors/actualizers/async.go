@@ -53,15 +53,16 @@ type (
 
 // 1 asyncActualizer per each projector per each partition
 type asyncActualizer struct {
-	conf           AsyncActualizerConf
-	projectorQName appdef.QName
-	pipeline       pipeline.IAsyncPipeline
-	offset         istructs.Offset
-	name           string
-	readCtx        *asyncActualizerContextState
-	projErrState   int32 // 0 - no error, 1 - error
-	plogBatch            // [50]plogEvent
-	appParts       appparts.IAppPartitions
+	conf                 AsyncActualizerConf
+	projectorQName       appdef.QName
+	pipeline             pipeline.IAsyncPipeline
+	offset               istructs.Offset
+	name                 string
+	readCtx              *asyncActualizerContextState
+	projErrState         int32 // 0 - no error, 1 - error
+	plogBatch                  // [50]plogEvent
+	appParts             appparts.IAppPartitions
+	actualizerErrorDelay time.Duration // 30 seconds in production, 100ms in tests
 }
 
 func (a *asyncActualizer) Prepare() {
@@ -89,12 +90,9 @@ func (a *asyncActualizer) Prepare() {
 }
 
 func (a *asyncActualizer) Run(ctx context.Context) {
-	var err error
-	if err = a.waitForAppDeploy(ctx); err != nil {
-		panic(err)
-	}
 	for ctx.Err() == nil {
-		if err = a.init(ctx); err == nil {
+		err := a.init(ctx)
+		if err == nil {
 			logger.Trace(a.name, "started")
 			err = a.keepReading()
 		}
@@ -103,7 +101,7 @@ func (a *asyncActualizer) Run(ctx context.Context) {
 			a.conf.LogError(a.name, err)
 			select {
 			case <-ctx.Done():
-			case <-a.conf.AfterError(actualizerErrorDelay):
+			case <-a.conf.AfterError(a.actualizerErrorDelay):
 			}
 		}
 	}
@@ -112,28 +110,6 @@ func (a *asyncActualizer) Run(ctx context.Context) {
 func (a *asyncActualizer) cancelChannel(e error) {
 	a.readCtx.cancelWithError(e)
 	a.conf.Broker.WatchChannel(a.readCtx.ctx, a.conf.channel, func(projection in10n.ProjectionKey, offset istructs.Offset) {})
-}
-
-func (a *asyncActualizer) waitForAppDeploy(ctx context.Context) error {
-	start := time.Now()
-	for ctx.Err() == nil {
-		ap, err := a.appParts.Borrow(a.conf.AppQName, a.conf.PartitionID, appparts.ProcessorKind_Actualizer)
-		if err == nil || errors.Is(err, appparts.ErrNotAvailableEngines) {
-			if ap != nil {
-				ap.Release()
-			}
-			return nil
-		}
-		if !errors.Is(err, appparts.ErrNotFound) {
-			return err
-		}
-		if time.Since(start) >= initFailureErrorLogInterval {
-			logger.Error(fmt.Sprintf("app %s part %d actualizer %q: failed to init in 30 seconds", a.conf.AppQName, a.conf.PartitionID, a.projectorQName))
-			start = time.Now()
-		}
-		time.Sleep(borrowRetryDelay)
-	}
-	return nil // consider "context canceled" as expected error
 }
 
 func (a *asyncActualizer) init(ctx context.Context) (err error) {
@@ -364,7 +340,7 @@ func (a *asyncActualizer) readPlogToOffset(ctx context.Context, tillOffset istru
 			}
 		}
 		if len(*batch) > 0 {
-			//nolint: suppress error if at least one event was read
+			//nolint suppress error if at least one event was read
 			return nil
 		}
 		return err

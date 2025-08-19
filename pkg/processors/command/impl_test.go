@@ -114,8 +114,9 @@ func TestBasicUsage(t *testing.T) {
 		require.Equal(projectionKey, projection)
 		check <- 1
 	})
-	app.n10nBroker.Subscribe(channelID, projectionKey)
-	defer app.n10nBroker.Unsubscribe(channelID, projectionKey)
+	err = app.n10nBroker.Subscribe(channelID, projectionKey)
+	require.NoError(err)
+	defer func() { require.NoError(app.n10nBroker.Unsubscribe(channelID, projectionKey)) }()
 
 	t.Run("basic usage", func(t *testing.T) {
 		// command processor works through ibus.SendResponse -> we need a sender -> let's test using ibus.SendRequest2()
@@ -507,7 +508,6 @@ func TestErrors(t *testing.T) {
 }
 
 func TestAuthnz(t *testing.T) {
-	t.Skip("temporarily skipped. To be rolled back in https://github.com/voedger/voedger/issues/3199")
 	require := require.New(t)
 
 	qNameTestDeniedCDoc := appdef.NewQName("app1pkg", "TestDeniedCDoc") // the same in core/iauthnzimpl
@@ -603,7 +603,7 @@ func TestBasicUsage_FuncWithRawArg(t *testing.T) {
 		wsb.AddRole(iauthnz.QNameRoleEveryone)
 		wsb.AddRole(iauthnz.QNameRoleSystem)
 		cfg.Resources.Add(istructsmem.NewCommandFunction(testCmdQName, func(args istructs.ExecCommandArgs) (err error) {
-			require.EqualValues("custom content", args.ArgumentObject.AsString(processors.Field_RawObject_Body))
+			require.Equal("custom content", args.ArgumentObject.AsString(processors.Field_RawObject_Body))
 			close(ch)
 			return
 		}))

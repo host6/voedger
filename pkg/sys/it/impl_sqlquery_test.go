@@ -324,8 +324,8 @@ func TestSqlQuery_records(t *testing.T) {
 		body = fmt.Sprintf(`{"args":{"Query":"select name, sys.IsActive from app1pkg.payments where id in (%d,%d)"}, "elements":[{"fields":["Result"]}]}`, eftID, cashID)
 		resp := vit.PostWS(ws, "q.sys.SqlQuery", body)
 
-		require.Equal(`{"name":"EFT","sys.IsActive":true}`, resp.SectionRow()[0])
-		require.Equal(`{"name":"Cash","sys.IsActive":true}`, resp.SectionRow(1)[0])
+		require.JSONEq(`{"name":"EFT","sys.IsActive":true}`, resp.SectionRow()[0].(string))
+		require.JSONEq(`{"name":"Cash","sys.IsActive":true}`, resp.SectionRow(1)[0].(string))
 	})
 
 	t.Run("errors", func(t *testing.T) {
@@ -356,7 +356,7 @@ func TestSqlQuery_records(t *testing.T) {
 		body = `{"args":{"Query":"select sys.QName from app1pkg.test_ws"},"elements":[{"fields":["Result"]}]}`
 		restaurant := vit.PostWS(ws, "q.sys.SqlQuery", body).SectionRow(0)
 
-		require.Equal(`{"sys.QName":"app1pkg.test_ws"}`, restaurant[0])
+		require.JSONEq(`{"sys.QName":"app1pkg.test_ws"}`, restaurant[0].(string))
 	})
 }
 
@@ -583,7 +583,8 @@ func TestReadODocs(t *testing.T) {
 			{"sys.ID":4,"sys.ParentID":1, "orecord1IntFld": 45, "orecord2": [
 				{"sys.ID":5, "sys.ParentID":4, "orecord2IntFld": 46}
 			]}
-		]}
+		]},
+		"unloggedArgs":{"sys.ID":6}
 	}`
 	resp := vit.Func(fmt.Sprintf("api/v2/apps/test1/app1/workspaces/%d/commands/app1pkg.CmdODocOne", ws.WSID), body,
 		coreutils.WithMethod(http.MethodPost),
@@ -593,7 +594,7 @@ func TestReadODocs(t *testing.T) {
 	odoc1ORec11ID := resp.NewIDs["2"]
 	odoc1ORec12ID := resp.NewIDs["4"]
 
-	body = `{"args":{"sys.ID": 1,"odocIntFld": 47}}`
+	body = `{"args":{"sys.ID": 1,"odocIntFld": 47},"unloggedArgs":{"sys.ID":2}}`
 	resp = vit.Func(fmt.Sprintf("api/v2/apps/test1/app1/workspaces/%d/commands/app1pkg.CmdODocOne", ws.WSID), body,
 		coreutils.WithMethod(http.MethodPost),
 		coreutils.WithAuthorizeBy(ws.Owner.Token),
@@ -601,19 +602,19 @@ func TestReadODocs(t *testing.T) {
 	odoc2ID := resp.NewID()
 
 	t.Run("odoc", func(t *testing.T) {
-		res := vit.SqlQuery(ws, "select * from app1pkg.odoc1.%d", odoc1ID)
+		res := vit.SQLQuery(ws, "select * from app1pkg.odoc1.%d", odoc1ID)
 		require.EqualValues(odoc1ID, res["sys.ID"])
 		require.EqualValues(42, res["odocIntFld"])
 	})
 
 	t.Run("orecord", func(t *testing.T) {
-		res := vit.SqlQuery(ws, "select * from app1pkg.orecord1.%d", odoc1ORec11ID)
+		res := vit.SQLQuery(ws, "select * from app1pkg.orecord1.%d", odoc1ORec11ID)
 		require.EqualValues(odoc1ORec11ID, res["sys.ID"])
 		require.EqualValues(43, res["orecord1IntFld"])
 	})
 
 	t.Run("odocs", func(t *testing.T) {
-		res := vit.SqlQueryRows(ws, "select * from app1pkg.odoc1 where id in(%d, %d)", odoc1ID, odoc2ID)
+		res := vit.SQLQueryRows(ws, "select * from app1pkg.odoc1 where id in(%d, %d)", odoc1ID, odoc2ID)
 		require.Len(res, 2)
 		require.EqualValues(odoc1ID, res[0]["sys.ID"])
 		require.EqualValues(42, res[0]["odocIntFld"])
@@ -622,13 +623,24 @@ func TestReadODocs(t *testing.T) {
 	})
 
 	t.Run("orecords", func(t *testing.T) {
-		res := vit.SqlQueryRows(ws, "select * from app1pkg.orecord1 where id in(%d, %d)", odoc1ORec11ID, odoc1ORec12ID)
+		res := vit.SQLQueryRows(ws, "select * from app1pkg.orecord1 where id in(%d, %d)", odoc1ORec11ID, odoc1ORec12ID)
 		require.Len(res, 2)
 		require.EqualValues(odoc1ORec11ID, res[0]["sys.ID"])
 		require.EqualValues(43, res[0]["orecord1IntFld"])
 		require.EqualValues(odoc1ORec12ID, res[1]["sys.ID"])
 		require.EqualValues(45, res[1]["orecord1IntFld"])
 	})
+}
+
+// https://github.com/voedger/voedger/issues/3913
+func TestQNameFieldConditions(t *testing.T) {
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+
+	// just expecting no errors on condition on field with qname type
+	body := `{"args":{"Query":"select * from app1pkg.ViewWithQName where IntFld = 42 and QName = 'app1pkg.category'"},"elements":[{"fields":["Result"]}]}`
+	vit.PostWS(ws, "q.sys.SqlQuery", body)
 }
 
 func findPLogOffsetByWLogOffset(t *testing.T, vit *it.VIT, ws *it.AppWorkspace, wLogOffset istructs.Offset) istructs.Offset {

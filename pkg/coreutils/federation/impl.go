@@ -14,7 +14,6 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
@@ -32,22 +31,24 @@ func (f *implIFederation) post(relativeURL string, body string, optFuncs ...core
 }
 
 func (f *implIFederation) postReader(relativeURL string, bodyReader io.Reader, optFuncs ...coreutils.ReqOptFunc) (*coreutils.HTTPResponse, error) {
-	optFuncs = append(optFuncs, coreutils.WithMethod(http.MethodPost))
+	optFuncs = append(optFuncs, coreutils.WithDefaultMethod(http.MethodPost))
 	return f.reqReader(relativeURL, bodyReader, optFuncs...)
 }
 
 func (f *implIFederation) get(relativeURL string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.HTTPResponse, error) {
-	optFuncs = append(optFuncs, coreutils.WithMethod(http.MethodGet))
+	optFuncs = append(optFuncs, coreutils.WithDefaultMethod(http.MethodGet))
 	return f.req(relativeURL, "", optFuncs...)
 }
 
 func (f *implIFederation) reqReader(relativeURL string, bodyReader io.Reader, optFuncs ...coreutils.ReqOptFunc) (*coreutils.HTTPResponse, error) {
 	url := f.federationURL().String() + "/" + relativeURL
+	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
 	return f.httpClient.ReqReader(url, bodyReader, optFuncs...)
 }
 
 func (f *implIFederation) req(relativeURL string, body string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.HTTPResponse, error) {
 	url := f.federationURL().String() + "/" + relativeURL
+	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
 	return f.httpClient.Req(url, body, optFuncs...)
 }
 
@@ -171,24 +172,26 @@ func (f *implIFederation) N10NUpdate(key in10n.ProjectionKey, val int64, optFunc
 func (f *implIFederation) GET(relativeURL string, body string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.HTTPResponse, error) {
 	optFuncs = append(optFuncs, coreutils.WithMethod(http.MethodGet))
 	url := f.federationURL().String() + "/" + relativeURL
+	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
 	return f.httpClient.Req(url, body, optFuncs...)
 }
 
 func (f *implIFederation) Func(relativeURL string, body string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.FuncResponse, error) {
 	httpResp, err := f.post(relativeURL, body, optFuncs...)
-	return f.httpRespToFuncResp(httpResp, err)
+	return HTTPRespToFuncResp(httpResp, err)
 }
 
 func (f *implIFederation) Query(relativeURL string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.FuncResponse, error) {
 	httpResp, err := f.get(relativeURL, optFuncs...)
-	return f.httpRespToFuncResp(httpResp, err)
+	return HTTPRespToFuncResp(httpResp, err)
 }
 
 func (f *implIFederation) AdminFunc(relativeURL string, body string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.FuncResponse, error) {
 	optFuncs = append(optFuncs, coreutils.WithMethod(http.MethodPost))
 	url := fmt.Sprintf("http://127.0.0.1:%d/%s", f.adminPortGetter(), relativeURL)
+	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
 	httpResp, err := f.httpClient.Req(url, body, optFuncs...)
-	return f.httpRespToFuncResp(httpResp, err)
+	return HTTPRespToFuncResp(httpResp, err)
 }
 
 func getFuncError(httpResp *coreutils.HTTPResponse) (funcError coreutils.FuncError, err error) {
@@ -231,50 +234,6 @@ func getFuncError(httpResp *coreutils.HTTPResponse) (funcError coreutils.FuncErr
 		}
 	}
 	return funcError, nil
-}
-
-func (f *implIFederation) httpRespToFuncResp(httpResp *coreutils.HTTPResponse, httpRespErr error) (res *coreutils.FuncResponse, err error) {
-	isUnexpectedCode := errors.Is(httpRespErr, coreutils.ErrUnexpectedStatusCode)
-	if httpRespErr != nil && !isUnexpectedCode {
-		return nil, httpRespErr
-	}
-	if httpResp == nil {
-		return nil, nil
-	}
-	if isUnexpectedCode {
-		funcError, err := getFuncError(httpResp)
-		if err != nil {
-			return nil, err
-		}
-		return nil, funcError
-	}
-	res = &coreutils.FuncResponse{
-		CommandResponse: coreutils.CommandResponse{
-			NewIDs:    map[string]istructs.RecordID{},
-			CmdResult: map[string]interface{}{},
-		},
-		HTTPResponse: httpResp,
-	}
-	if len(httpResp.Body) == 0 {
-		return res, nil
-	}
-	if strings.HasPrefix(httpResp.HTTPResp.Request.URL.Path, "/api/v2/") {
-		// TODO: eliminate this after https://github.com/voedger/voedger/issues/1313
-		if httpResp.HTTPResp.Header.Get(coreutils.ContentType) == coreutils.ContentType_ApplicationJSON {
-			if err = json.Unmarshal([]byte(httpResp.Body), &res.QPv2Response); err == nil {
-				err = json.Unmarshal([]byte(httpResp.Body), &res.CommandResponse)
-			}
-		}
-	} else {
-		err = json.Unmarshal([]byte(httpResp.Body), &res)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("IFederation: failed to unmarshal response body to FuncResponse: %w. Body:\n%s", err, httpResp.Body)
-	}
-	if res.SysError.HTTPStatus > 0 && res.ExpectedSysErrorCode() > 0 && res.ExpectedSysErrorCode() != res.SysError.HTTPStatus {
-		return nil, fmt.Errorf("sys.Error actual status %d, expected %v: %s", res.SysError.HTTPStatus, res.ExpectedSysErrorCode(), res.SysError.Message)
-	}
-	return res, nil
 }
 
 func (f *implIFederation) URLStr() string {
@@ -336,6 +295,17 @@ func (f *implIFederation) N10NSubscribe(projectionKey in10n.ProjectionKey) (offs
 		waitForDone()
 	}
 	return
+}
+
+func (f *implIFederation) dummy() {}
+
+func (f *implIFederation) WithRetry() IFederationWithRetry {
+	return &implIFederation{
+		httpClient:         f.httpClient,
+		federationURL:      f.federationURL,
+		adminPortGetter:    f.adminPortGetter,
+		defaultReqOptFuncs: []coreutils.ReqOptFunc{coreutils.WithRetryOn503()},
+	}
 }
 
 func (f *implIFederationForQP) QueryNoRetry(relativeURL string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.FuncResponse, error) {

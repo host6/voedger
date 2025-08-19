@@ -7,6 +7,7 @@ package coreutils
 import (
 	"errors"
 	"net/http"
+	"reflect"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -27,10 +28,13 @@ func TestBasicUsage_SysError(t *testing.T) {
 		require.Empty(sysError.Data)
 		require.Empty(sysError.QName)
 		require.Equal("test", sysError.Error())
-		require.Equal(`{"sys.Error":{"HTTPStatus":500,"Message":"test"}}`, sysError.ToJSON_APIV1())
+		require.JSONEq(`{"sys.Error":{"HTTPStatus":500,"Message":"test"}}`, sysError.ToJSON_APIV1())
 	})
 
 	t.Run("nil on nil", func(t *testing.T) {
+		var expectedEmpty SysError
+		actualEmpty := WrapSysErrorToExact(nil, http.StatusInternalServerError)
+		require.True(reflect.DeepEqual(expectedEmpty, actualEmpty))
 		require.NoError(WrapSysError(nil, http.StatusInternalServerError))
 	})
 
@@ -52,7 +56,12 @@ func TestBasicUsage_SysError(t *testing.T) {
 			Message:    "test",
 			Data:       "data",
 		}
-		require.Equal(`{"sys.Error":{"HTTPStatus":200,"Message":"test","QName":"my.test","Data":"data"}}`, err.ToJSON_APIV1())
+		t.Run("APIv1", func(t *testing.T) {
+			require.JSONEq(`{"sys.Error":{"HTTPStatus":200,"Message":"test","QName":"my.test","Data":"data"}}`, err.ToJSON_APIV1())
+		})
+		t.Run("APIv2", func(t *testing.T) {
+			require.JSONEq(`{"status":200,"message":"test","qname":"my.test","data":"data"}`, err.ToJSON_APIV2())
+		})
 	})
 
 	t.Run("NewSysError", func(t *testing.T) {
