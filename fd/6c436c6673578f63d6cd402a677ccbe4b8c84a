@@ -1,3 +1,5 @@
 Resolves issue 'fix TestClientDisconnect_FailedToWriteResponse()'
 
 Resolves #3406 fix TestClientDisconnect_FailedToWriteResponse()
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/3406","jira_ticket_url":"","branch_type":1}
