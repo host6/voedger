@@ -451,6 +451,7 @@ func TestRestartPreservingStorage(t *testing.T, cfg *VITConfig, testBeforeRestar
 		defer vit.TearDown()
 		testBeforeRestart(t, vit)
 	}()
+	time.Sleep(10 * time.Second)
 	vit := NewVIT(t, cfg)
 	defer vit.TearDown()
 	testAfterRestart(t, vit)

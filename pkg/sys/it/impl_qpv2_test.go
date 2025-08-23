@@ -122,7 +122,7 @@ func prepareDailyIdx(t *testing.T, vit *it.VIT, ws *it.AppWorkspace) (resultOffs
 	resp := vit.PostWS(ws, "c.sys.CUD", cuds.MustToJSON())
 	resultOffsetOfCUD := resp.CurrentWLogOffset
 	// wait for the offset because server could send previous offset. It is guaranteed that the expected offset will eventually arrive
-	waitForOffset(t, resultOffsetOfCUD, offsetsChan)
+	waitForOffsets(t, []istructs.Offset{resultOffsetOfCUD}, offsetsChan)
 	unsubscribe()
 	return resultOffsetOfCUD, resp.NewIDs
 }
@@ -447,7 +447,7 @@ func TestQueryProcessor2_Include(t *testing.T) {
 		},
 	}
 	offset := vit.PostWS(ws, "c.sys.CUD", cuds.MustToJSON()).CurrentWLogOffset
-	waitForOffset(t, offset, offsetsChan)
+	waitForOffsets(t, []istructs.Offset{offset}, offsetsChan)
 	unsubscribe()
 
 	cuds = coreutils.CUDs{

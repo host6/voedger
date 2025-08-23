@@ -39,7 +39,7 @@ func TestBasicUsage_n10n_APIv1(t *testing.T) {
 	// force projection update
 	body := `{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.category","name":"Awesome food"}}]}`
 	resultOffsetOfCUD := vit.PostWS(ws, "c.sys.CUD", body).CurrentWLogOffset
-	waitForOffset(t, resultOffsetOfCUD, offsetsChan)
+	waitForOffsets(t, []istructs.Offset{resultOffsetOfCUD}, offsetsChan)
 	unsubscribe()
 
 	_, offsetsChanOpened := <-offsetsChan
@@ -83,9 +83,8 @@ func TestBasicUsage_n10n_APIv2(t *testing.T) {
 	body = `{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.Daily","Year":42}}]}`
 	resultOffsetOfDailyCUD := vit.PostWS(ws, "c.sys.CUD", body).CurrentWLogOffset
 
-	// read events
-	waitForOffset(t, resultOffsetOfCategoryCUD, offsetsChan)
-	waitForOffset(t, resultOffsetOfDailyCUD, offsetsChan)
+	// read events (order not guaranteed):
+	waitForOffsets(t, []istructs.Offset{resultOffsetOfCategoryCUD, resultOffsetOfDailyCUD}, offsetsChan)
 
 	// unsubscribe
 	// [~server.n10n/it.Unsubscribe~impl]
@@ -117,14 +116,65 @@ func TestBasicUsage_n10n_APIv2(t *testing.T) {
 	waitForDone()
 }
 
-func waitForOffset(t *testing.T, expectedOffset istructs.Offset, offsetCh federation.OffsetsChan) {
+// func waitForOffset(t *testing.T, expectedOffset istructs.Offset, offsetCh federation.OffsetsChan) {
+// 	t.Helper()
+// 	start := time.Now()
+// 	timeout := 10 * time.Second
+// 	for {
+// 		select {
+// 		case actualOffset, ok := <-offsetCh:
+// 			if !ok {
+// 				t.Fatalf("offset channel closed while waiting for offset %d", expectedOffset)
+// 				return
+// 			}
+// 			if actualOffset == expectedOffset {
+// 				return
+// 			}
+// 			if time.Since(start) > timeout {
+// 				t.Fatalf("timeout waiting for offset %d, last received: %d, elapsed: %v", expectedOffset, actualOffset, time.Since(start))
+// 				return
+// 			}
+// 		case <-time.After(timeout):
+// 			t.Fatalf("timeout waiting for offset %d, no offsets received, elapsed: %v", expectedOffset, time.Since(start))
+// 			return
+// 		}
+// 	}
+// }
+
+func waitForOffsets(t *testing.T, expected []istructs.Offset, offsetCh federation.OffsetsChan) {
+	t.Helper()
+	remaining := make(map[istructs.Offset]struct{}, len(expected))
+	for _, off := range expected {
+		remaining[off] = struct{}{}
+	}
 	start := time.Now()
-	for actualOffset := range offsetCh {
-		if actualOffset == expectedOffset {
+	timeout := 10 * time.Second
+	for len(remaining) > 0 {
+		select {
+		case actualOffset, ok := <-offsetCh:
+			if !ok {
+				t.Fatalf("offset channel closed while waiting for offsets %v", expected)
+				return
+			}
+			if _, ok := remaining[actualOffset]; ok {
+				delete(remaining, actualOffset)
+			}
+			if time.Since(start) > timeout {
+				// collect still-missing offsets
+				missing := make([]istructs.Offset, 0, len(remaining))
+				for off := range remaining {
+					missing = append(missing, off)
+				}
+				t.Fatalf("timeout waiting for offsets %v, missing: %v, last received: %d, elapsed: %v", expected, missing, actualOffset, time.Since(start))
+				return
+			}
+		case <-time.After(timeout):
+			missing := make([]istructs.Offset, 0, len(remaining))
+			for off := range remaining {
+				missing = append(missing, off)
+			}
+			t.Fatalf("timeout waiting for offsets %v, missing: %v, elapsed: %v", expected, missing, time.Since(start))
 			return
-		}
-		if time.Since(start) > 10*time.Second {
-			t.Fatal()
 		}
 	}
 }
@@ -446,9 +496,8 @@ func TestN10NSubscribeToExtraView(t *testing.T) {
 	body = `{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.Daily","Year":42}}]}`
 	resultOffsetOfDailyCUD := vit.PostWS(ws, "c.sys.CUD", body).CurrentWLogOffset
 
-	// read events, ensure we're receiving events for the view we're additionally subscribed to
-	waitForOffset(t, resultOffsetOfCategoryCUD, offsetsChan)
-	waitForOffset(t, resultOffsetOfDailyCUD, offsetsChan)
+	// read events, ensure we're receiving events for the view we're additionally subscribed to (order not guaranteed)
+	waitForOffsets(t, []istructs.Offset{resultOffsetOfCategoryCUD, resultOffsetOfDailyCUD}, offsetsChan)
 
 	// close the initial connection
 	// SSE listener channel should be closed after that
