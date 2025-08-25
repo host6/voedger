@@ -6,6 +6,7 @@
 package federation
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -44,7 +45,7 @@ func TestFederationFunc(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	federationURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	require.NoError(err)
-	federation, cleanup := New(func() *url.URL {
+	federation, cleanup := New(context.Background(), func() *url.URL {
 		return federationURL
 	}, coreutils.NilAdminPortGetter)
 	defer cleanup()
