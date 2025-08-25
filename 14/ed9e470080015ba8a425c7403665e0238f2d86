@@ -1,1 +1,3 @@
 Resolves issue 'deadlock is possible on federation request during VVM shutdown'
+
+Resolves #4023 deadlock is possible on federation request during VVM shutdown
