@@ -1,1 +1,3 @@
 Resolves issue 'real error is ignored in federation query with `WithDiscardResponse()` option'
+
+Resolves #4026 real error is ignored in federation query with `WithDiscardResponse()` option
