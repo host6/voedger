@@ -60,29 +60,29 @@ func applyLeaveWorkspace(time timeu.ITime, federation federation.IFederation, to
 			}
 
 			//Update subject
+			// Note: We now always process the response to check for business logic errors in "sys.Error"
 			if _, err = federation.Func(
 				fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 				fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"sys.IsActive":false}}]}`, svCDocSubject.AsRecordID(appdef.SystemField_ID)),
-				coreutils.WithAuthorizeBy(token),
-				coreutils.WithDiscardResponse()); err != nil {
+				coreutils.WithAuthorizeBy(token)); err != nil {
 				return err
 			}
 
 			//Deactivate joined workspace
+			// Note: We now always process the response to check for business logic errors in "sys.Error"
 			if _, err = federation.Func(
 				fmt.Sprintf("api/%s/%d/c.sys.DeactivateJoinedWorkspace", appQName, svCDocInvite.AsInt64(field_InviteeProfileWSID)),
 				fmt.Sprintf(`{"args":{"InvitingWorkspaceWSID":%d}}`, event.Workspace()),
-				coreutils.WithAuthorizeBy(token),
-				coreutils.WithDiscardResponse()); err != nil {
+				coreutils.WithAuthorizeBy(token)); err != nil {
 				return err
 			}
 
 			//Update invite
+			// Note: We now always process the response to check for business logic errors in "sys.Error"
 			if _, err = federation.Func(
 				fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 				fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"State":%d,"Updated":%d}}]}`, rec.ID(), State_Left, time.Now().UnixMilli()),
-				coreutils.WithAuthorizeBy(token),
-				coreutils.WithDiscardResponse()); err != nil {
+				coreutils.WithAuthorizeBy(token)); err != nil {
 				return err
 			}
 		}

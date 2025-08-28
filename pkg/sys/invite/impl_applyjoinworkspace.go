@@ -82,12 +82,12 @@ func applyJoinWorkspace(time timeu.ITime, federation federation.IFederation, tok
 		if err != nil {
 			return
 		}
+		// Note: We now always process the response to check for business logic errors in "sys.Error"
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CreateJoinedWorkspace", appQName, svCDocInvite.AsInt64(field_InviteeProfileWSID)),
 			fmt.Sprintf(`{"args":{"Roles":"%s","InvitingWorkspaceWSID":%d,"WSName":%q}}`,
 				svCDocInvite.AsString(Field_Roles), event.Workspace(), svCDocWorkspaceDescriptor.AsString(authnz.Field_WSName)),
 			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse(),
 		)
 		if err != nil {
 			return
@@ -145,11 +145,11 @@ func applyJoinWorkspace(time timeu.ITime, federation federation.IFederation, tok
 			body = fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"State":%d,"Updated":%d}}]}`,
 				svCDocInvite.AsRecordID(appdef.SystemField_ID), State_Joined, time.Now().UnixMilli())
 		}
+		// Note: We now always process the response to check for business logic errors in "sys.Error"
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			body,
-			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse())
+			coreutils.WithAuthorizeBy(token))
 
 		return err
 	}

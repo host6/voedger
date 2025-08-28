@@ -164,20 +164,6 @@ func TestHTTP(t *testing.T) {
 			},
 			"/orig",
 		},
-		{
-			"discard response",
-			[]ReqOptFunc{WithDiscardResponse()},
-			func() {
-				handler = func(w http.ResponseWriter, _ *http.Request) {
-					_, err := w.Write([]byte("should be discarded"))
-					require.NoError(err)
-				}
-			},
-			func(t *testing.T, resp *HTTPResponse, req *http.Request) {
-				require.Nil(resp)
-			},
-			"",
-		},
 	}
 
 	for _, tc := range testCases {

@@ -51,11 +51,6 @@ func (f *implIFederation) reqReader(relativeURL string, bodyReader io.Reader, op
 		return nil, err
 	}
 
-	// Handle discarded response (httpResp will be nil)
-	if httpResp == nil {
-		return nil, nil
-	}
-
 	// Apply high-level federation logic
 	return f.processResponse(httpResp, url, optFuncs...)
 }
@@ -68,11 +63,6 @@ func (f *implIFederation) req(relativeURL string, body string, optFuncs ...coreu
 	httpResp, err := f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
 	if err != nil {
 		return nil, err
-	}
-
-	// Handle discarded response (httpResp will be nil)
-	if httpResp == nil {
-		return nil, nil
 	}
 
 	// Apply high-level federation logic
@@ -118,7 +108,7 @@ func (f *implIFederation) extractReqOpts(httpResp *coreutils.HTTPResponse) *fede
 
 	return &federationReqOpts{
 		expectedHTTPCodes:     expectedCodes,
-		expectedErrorContains: httpResp.ExpectedErrorContains(),
+		expectedErrorContains: httpResp.ExpectedError(),
 		skipRetryOn503:        true, // Federation default
 	}
 }
@@ -315,7 +305,7 @@ func (f *implIFederation) ReadTempBLOB(appQName appdef.AppQName, wsid istructs.W
 
 func (f *implIFederation) N10NUpdate(key in10n.ProjectionKey, val int64, optFuncs ...coreutils.ReqOptFunc) error {
 	body := fmt.Sprintf(`{"App": "%s","Projection": "%s","WS": %d}`, key.App, key.Projection, key.WS)
-	optFuncs = append(optFuncs, coreutils.WithDiscardResponse())
+	// Note: We now always process the response to check for business logic errors
 	_, err := f.post(fmt.Sprintf("n10n/update/%d", val), body, optFuncs...)
 	return err
 }
@@ -329,11 +319,6 @@ func (f *implIFederation) GET(relativeURL string, body string, optFuncs ...coreu
 	httpResp, err := f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
 	if err != nil {
 		return nil, err
-	}
-
-	// Handle discarded response (httpResp will be nil)
-	if httpResp == nil {
-		return nil, nil
 	}
 
 	// Apply high-level federation logic
@@ -359,11 +344,6 @@ func (f *implIFederation) AdminFunc(relativeURL string, body string, optFuncs ..
 	httpResp, err := f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
 	if err != nil {
 		return HTTPRespToFuncResp(httpResp, err)
-	}
-
-	// Handle discarded response (httpResp will be nil)
-	if httpResp == nil {
-		return HTTPRespToFuncResp(nil, nil)
 	}
 
 	// Apply high-level federation logic
@@ -462,7 +442,8 @@ func (f *implIFederation) N10NSubscribe(projectionKey in10n.ProjectionKey) (offs
 		`, channelID, projectionKey.App, projectionKey.Projection, projectionKey.WS)
 		params := url.Values{}
 		params.Add("payload", body)
-		_, err := f.get("n10n/unsubscribe?"+params.Encode(), coreutils.WithDiscardResponse())
+		// Note: We now always process the response to check for business logic errors
+		_, err := f.get("n10n/unsubscribe?" + params.Encode())
 		if err != nil {
 			logger.Error("unsubscribe failed", err.Error())
 		}

@@ -35,7 +35,7 @@ func NewHTTPError(httpStatus int, err error) SysError {
 	return NewHTTPErrorf(httpStatus, err.Error())
 }
 
-// WithResponseHandler, WithLongPolling and WithDiscardResponse are mutual exclusive
+// WithResponseHandler and WithLongPolling are mutual exclusive
 func WithResponseHandler(responseHandler func(httpResp *http.Response)) ReqOptFunc {
 	return func(ro *reqOpts) {
 		ro.responseHandler = responseHandler
@@ -48,26 +48,24 @@ func withBodyReader(bodyReader io.Reader) ReqOptFunc {
 	}
 }
 
-// WithLongPolling, WithResponseHandler and WithDiscardResponse are mutual exclusive
+// WithLongPolling and WithResponseHandler are mutual exclusive
 func WithLongPolling() ReqOptFunc {
 	return func(ro *reqOpts) {
 		ro.responseHandler = func(resp *http.Response) {
-			if !slices.Contains(ro.expectedHTTPCodes, resp.StatusCode) {
+			// Use default expected codes if none are set
+			expectedCodes := ro.expectedHTTPCodes
+			if len(expectedCodes) == 0 {
+				expectedCodes = []int{http.StatusOK, http.StatusCreated}
+			}
+
+			if !slices.Contains(expectedCodes, resp.StatusCode) {
 				body, err := readBody(resp)
 				if err != nil {
 					panic("failed to Read response body in custom response handler: " + err.Error())
 				}
-				panic(fmt.Sprintf("actual status code %d, expected %v. Body: %s", resp.StatusCode, ro.expectedHTTPCodes, body))
+				panic(fmt.Sprintf("actual status code %d, expected %v. Body: %s", resp.StatusCode, expectedCodes, body))
 			}
 		}
-	}
-}
-
-// WithDiscardResponse, WithResponseHandler and WithLongPolling are mutual exclusive
-// causes FederationReq() to return nil for *HTTPResponse
-func WithDiscardResponse() ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.discardResp = true
 	}
 }
 
@@ -237,7 +235,6 @@ type reqOpts struct {
 	expectedErrorContains []string
 	responseHandler       func(httpResp *http.Response) // used if no errors and an expected status code is received
 	relativeURL           string
-	discardResp           bool
 	expectedSysErrorCode  int
 	retriersOnErrors      []retrier
 	bodyReader            io.Reader
@@ -308,9 +305,6 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 
 	// Validate mutually exclusive options
 	mutualExclusiveOpts := 0
-	if opts.discardResp {
-		mutualExclusiveOpts++
-	}
 	if opts.expectedSysErrorCode > 0 {
 		mutualExclusiveOpts++
 	}
@@ -395,12 +389,6 @@ func (c *implIHTTPClient) handleResponse(resp *http.Response, opts *reqOpts) (*H
 		defer resp.Body.Close()
 	}
 
-	// Handle discard response option
-	if opts.discardResp {
-		err := discardRespBody(resp)
-		return nil, err // Return nil to indicate discarded response
-	}
-
 	// Handle custom response handler
 	if opts.responseHandler != nil {
 		opts.responseHandler(resp)
@@ -450,7 +438,7 @@ func (resp *HTTPResponse) ExpectedHTTPCodes() []int {
 	return resp.expectedHTTPCodes
 }
 
-func (resp *HTTPResponse) ExpectedErrorContains() []string {
+func (resp *HTTPResponse) ExpectedError() []string {
 	return resp.expectedErrorContains
 }
 
@@ -494,17 +482,6 @@ func (resp *HTTPResponse) RequireContainsError(t *testing.T, messagePart string)
 func readBody(resp *http.Response) (string, error) {
 	respBody, err := io.ReadAll(resp.Body)
 	return string(respBody), err
-}
-
-func discardRespBody(resp *http.Response) error {
-	_, err := io.Copy(io.Discard, resp.Body)
-	if err != nil {
-		// https://github.com/voedger/voedger/issues/1694
-		if !IsWSAEError(err, WSAECONNRESET) {
-			return fmt.Errorf("failed to discard response body: %w", err)
-		}
-	}
-	return nil
 }
 
 func (resp *FuncResponse) Len() int {

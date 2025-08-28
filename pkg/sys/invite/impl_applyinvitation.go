@@ -86,7 +86,7 @@ func applyInvitationProjector(time timeu.ITime, federation federation.IFederatio
 		if err != nil {
 			return err
 		}
-		
+
 		pwd := svAppSecretsStorage.AsString("")
 		skbSendMail.PutString(sys.Storage_SendMail_Field_Password, pwd)
 
@@ -102,11 +102,11 @@ func applyInvitationProjector(time timeu.ITime, federation federation.IFederatio
 		if err != nil {
 			return
 		}
+		// Note: We now always process the response to check for business logic errors in "sys.Error"
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"State":%d,"VerificationCode":"%s","Updated":%d}}]}`, svViewInviteIndex.AsRecordID(field_InviteID), State_Invited, verificationCode, time.Now().UnixMilli()),
-			coreutils.WithAuthorizeBy(authToken),
-			coreutils.WithDiscardResponse())
+			coreutils.WithAuthorizeBy(authToken))
 
 		return err
 	}

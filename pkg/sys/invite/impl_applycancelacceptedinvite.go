@@ -55,31 +55,31 @@ func applyCancelAcceptedInvite(time timeu.ITime, federation federation.IFederati
 		}
 
 		// Update subject
+		// Note: We now always process the response to check for business logic errors in "sys.Error"
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"sys.IsActive":false}}]}`, svCDocSubject.AsRecordID(appdef.SystemField_ID)),
-			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse())
+			coreutils.WithAuthorizeBy(token))
 		if err != nil {
 			return
 		}
 
 		// Deactivate joined workspace
+		// Note: We now always process the response to check for business logic errors in "sys.Error"
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.DeactivateJoinedWorkspace", appQName, svCDocInvite.AsInt64(field_InviteeProfileWSID)),
 			fmt.Sprintf(`{"args":{"InvitingWorkspaceWSID":%d}}`, event.Workspace()),
-			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse())
+			coreutils.WithAuthorizeBy(token))
 		if err != nil {
 			return
 		}
 
 		// Update invite
+		// Note: We now always process the response to check for business logic errors in "sys.Error"
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"State":%d,"Updated":%d}}]}`, event.ArgumentObject().AsRecordID(field_InviteID), State_Cancelled, time.Now().UnixMilli()),
-			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse())
+			coreutils.WithAuthorizeBy(token))
 
 		return err
 	}

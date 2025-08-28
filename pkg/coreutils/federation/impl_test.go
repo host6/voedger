@@ -228,18 +228,6 @@ func TestFederationFunc(t *testing.T) {
 		require.NoError(err)
 	})
 
-	t.Run("discard response", func(t *testing.T) {
-		handler = func(w http.ResponseWriter, r *http.Request) {
-			_, err := io.ReadAll(r.Body)
-			require.NoError(err)
-			w.WriteHeader(http.StatusOK)
-			_, err = w.Write([]byte(`{"sections":[{"type":"","elements":[[[["Hello", "world"]]],[[["next"]]]]}]}`))
-			require.NoError(err)
-		}
-		resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, coreutils.WithDiscardResponse())
-		require.NoError(err)
-		require.Nil(resp)
-	})
 	t.Run("context cancel during retry on 503", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		federation, cleanup := New(ctx, func() *url.URL {
