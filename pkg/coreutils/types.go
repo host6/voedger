@@ -25,10 +25,11 @@ type EmbedFS interface {
 }
 
 type HTTPResponse struct {
-	Body                 string
-	HTTPResp             *http.Response
-	expectedSysErrorCode int
-	expectedHTTPCodes    []int
+	Body                  string
+	HTTPResp              *http.Response
+	expectedSysErrorCode  int
+	expectedHTTPCodes     []int
+	expectedErrorContains []string
 }
 
 type ReqOptFunc func(opts *reqOpts)

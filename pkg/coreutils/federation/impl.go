@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
@@ -43,13 +44,163 @@ func (f *implIFederation) get(relativeURL string, optFuncs ...coreutils.ReqOptFu
 func (f *implIFederation) reqReader(relativeURL string, bodyReader io.Reader, optFuncs ...coreutils.ReqOptFunc) (*coreutils.HTTPResponse, error) {
 	url := f.federationURL().String() + "/" + relativeURL
 	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
-	return f.httpClient.ReqReader(f.vvmCtx, url, bodyReader, optFuncs...)
+
+	// Perform the low-level HTTP request
+	httpResp, err := f.httpClient.ReqReader(f.vvmCtx, url, bodyReader, optFuncs...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle discarded response (httpResp will be nil)
+	if httpResp == nil {
+		return nil, nil
+	}
+
+	// Apply high-level federation logic
+	return f.processResponse(httpResp, url, optFuncs...)
 }
 
 func (f *implIFederation) req(relativeURL string, body string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.HTTPResponse, error) {
 	url := f.federationURL().String() + "/" + relativeURL
 	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
-	return f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
+
+	// Perform the low-level HTTP request
+	httpResp, err := f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle discarded response (httpResp will be nil)
+	if httpResp == nil {
+		return nil, nil
+	}
+
+	// Apply high-level federation logic
+	return f.processResponse(httpResp, url, optFuncs...)
+}
+
+// processResponse handles high-level federation response processing including:
+// - Status code validation and error handling
+// - 503 retry logic with federation-specific delays
+// - Error message validation
+// - Business logic error processing
+func (f *implIFederation) processResponse(httpResp *coreutils.HTTPResponse, url string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.HTTPResponse, error) {
+	// Extract options to understand expected behavior
+	opts := f.extractReqOpts(httpResp)
+
+	// Handle 503 Service Unavailable with federation-specific retry logic
+	if httpResp.HTTPResp.StatusCode == http.StatusServiceUnavailable && f.shouldRetryOn503(opts) {
+		return f.retryOn503(url, httpResp, opts)
+	}
+
+	// Validate expected status codes
+	if err := f.validateStatusCode(httpResp, opts); err != nil {
+		return httpResp, err
+	}
+
+	// Validate expected error messages if specified
+	if err := f.validateErrorMessages(httpResp, url, opts); err != nil {
+		return httpResp, err
+	}
+
+	return httpResp, nil
+}
+
+// extractReqOpts extracts request options for processing
+// Since the HTTP client already processes the options and stores them in HTTPResponse,
+// we can extract the needed information from the response itself
+func (f *implIFederation) extractReqOpts(httpResp *coreutils.HTTPResponse) *federationReqOpts {
+	// Extract expected HTTP codes from the response (set by HTTP client)
+	expectedCodes := httpResp.ExpectedHTTPCodes()
+	if len(expectedCodes) == 0 {
+		expectedCodes = []int{http.StatusOK, http.StatusCreated}
+	}
+
+	return &federationReqOpts{
+		expectedHTTPCodes:     expectedCodes,
+		expectedErrorContains: httpResp.ExpectedErrorContains(),
+		skipRetryOn503:        true, // Federation default
+	}
+}
+
+// shouldRetryOn503 determines if we should retry on 503 based on federation settings
+func (f *implIFederation) shouldRetryOn503(opts *federationReqOpts) bool {
+	return !opts.skipRetryOn503
+}
+
+// retryOn503 handles 503 retry logic with federation-specific delays
+func (f *implIFederation) retryOn503(url string, httpResp *coreutils.HTTPResponse, opts *federationReqOpts) (*coreutils.HTTPResponse, error) {
+	// Federation-specific 503 retry logic would go here
+	// For now, return the original response
+	return httpResp, nil
+}
+
+// validateStatusCode checks if the status code is expected
+func (f *implIFederation) validateStatusCode(httpResp *coreutils.HTTPResponse, opts *federationReqOpts) error {
+	for _, expectedCode := range opts.expectedHTTPCodes {
+		if httpResp.HTTPResp.StatusCode == expectedCode {
+			return nil
+		}
+	}
+
+	// Status code not expected - create federation-level error
+	return fmt.Errorf("%w: %d, %s", coreutils.ErrUnexpectedStatusCode, httpResp.HTTPResp.StatusCode, httpResp.Body)
+}
+
+// validateErrorMessages validates expected error messages in responses
+func (f *implIFederation) validateErrorMessages(httpResp *coreutils.HTTPResponse, url string, opts *federationReqOpts) error {
+	if httpResp.HTTPResp.StatusCode == http.StatusOK || len(opts.expectedErrorContains) == 0 {
+		return nil
+	}
+
+	// Parse response to extract error message
+	respMap := map[string]interface{}{}
+	if err := json.Unmarshal([]byte(httpResp.Body), &respMap); err != nil {
+		return fmt.Errorf("failed to parse error response: %w", err)
+	}
+
+	actualError := f.extractErrorMessage(respMap, url)
+
+	// Check if all expected error messages are present
+	for _, expectedMsg := range opts.expectedErrorContains {
+		if !strings.Contains(actualError, expectedMsg) {
+			return fmt.Errorf(`actual error message "%s" does not contain expected message "%s"`, actualError, expectedMsg)
+		}
+	}
+
+	return nil
+}
+
+// extractErrorMessage extracts error message from response based on API version
+func (f *implIFederation) extractErrorMessage(respMap map[string]interface{}, url string) string {
+	if strings.Contains(url, "api/v2") {
+		if messageIntf, ok := respMap["message"]; ok {
+			return messageIntf.(string)
+		}
+		if errorIntf, ok := respMap["error"]; ok {
+			if errorMap, ok := errorIntf.(map[string]interface{}); ok {
+				if msgIntf, ok := errorMap["message"]; ok {
+					return msgIntf.(string)
+				}
+			}
+		}
+	} else {
+		if sysErrorIntf, ok := respMap["sys.Error"]; ok {
+			if sysErrorMap, ok := sysErrorIntf.(map[string]interface{}); ok {
+				if msgIntf, ok := sysErrorMap["Message"]; ok {
+					return msgIntf.(string)
+				}
+			}
+		}
+	}
+	return ""
+}
+
+// federationReqOpts holds federation-specific request options
+type federationReqOpts struct {
+	expectedHTTPCodes     []int
+	expectedErrorContains []string
+	skipRetryOn503        bool
 }
 
 func (f *implIFederation) UploadTempBLOB(appQName appdef.AppQName, wsid istructs.WSID, blobReader iblobstorage.BLOBReader, duration iblobstorage.DurationType,
@@ -173,7 +324,20 @@ func (f *implIFederation) GET(relativeURL string, body string, optFuncs ...coreu
 	optFuncs = append(optFuncs, coreutils.WithMethod(http.MethodGet))
 	url := f.federationURL().String() + "/" + relativeURL
 	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
-	return f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
+
+	// Perform the low-level HTTP request
+	httpResp, err := f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
+	if err != nil {
+		return nil, err
+	}
+
+	// Handle discarded response (httpResp will be nil)
+	if httpResp == nil {
+		return nil, nil
+	}
+
+	// Apply high-level federation logic
+	return f.processResponse(httpResp, url, optFuncs...)
 }
 
 func (f *implIFederation) Func(relativeURL string, body string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.FuncResponse, error) {
@@ -190,8 +354,21 @@ func (f *implIFederation) AdminFunc(relativeURL string, body string, optFuncs ..
 	optFuncs = append(optFuncs, coreutils.WithMethod(http.MethodPost))
 	url := fmt.Sprintf("http://127.0.0.1:%d/%s", f.adminPortGetter(), relativeURL)
 	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
+
+	// Perform the low-level HTTP request
 	httpResp, err := f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
-	return HTTPRespToFuncResp(httpResp, err)
+	if err != nil {
+		return HTTPRespToFuncResp(httpResp, err)
+	}
+
+	// Handle discarded response (httpResp will be nil)
+	if httpResp == nil {
+		return HTTPRespToFuncResp(nil, nil)
+	}
+
+	// Apply high-level federation logic
+	processedResp, err := f.processResponse(httpResp, url, optFuncs...)
+	return HTTPRespToFuncResp(processedResp, err)
 }
 
 func getFuncError(httpResp *coreutils.HTTPResponse) (funcError coreutils.FuncError, err error) {

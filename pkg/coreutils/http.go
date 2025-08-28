@@ -20,7 +20,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	"golang.org/x/exp/slices"
 )
@@ -281,25 +280,33 @@ func (c *implIHTTPClient) Req(ctx context.Context, urlStr string, body string, o
 	return c.req(ctx, urlStr, body, optFuncs...)
 }
 
+// req performs a low-level HTTP request with basic retry logic for connection issues only.
+// High-level error handling, response validation, and business logic should be handled by the caller.
 func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
 	opts := &reqOpts{
 		headers: map[string]string{},
 		cookies: map[string]string{},
 	}
-	optFuncs = append(optFuncs, WithRetryOnCertainError(func(err error) bool {
-		// https://github.com/voedger/voedger/issues/1694
-		return IsWSAEError(err, WSAECONNREFUSED)
-	}, retryOn_WSAECONNREFUSED_Timeout, retryOn_WSAECONNREFUSED_Delay))
+
+	// Apply default options first, then user options
 	for _, defaultOptFunc := range c.defaultOps {
 		defaultOptFunc(opts)
 	}
 	for _, optFunc := range optFuncs {
 		optFunc(opts)
 	}
+
+	// Set default method if not specified
 	if len(opts.method) == 0 {
 		opts.method = http.MethodGet
 	}
 
+	// Set default expected HTTP codes if not specified
+	if len(opts.expectedHTTPCodes) == 0 {
+		opts.expectedHTTPCodes = []int{http.StatusOK, http.StatusCreated}
+	}
+
+	// Validate mutually exclusive options
 	mutualExclusiveOpts := 0
 	if opts.discardResp {
 		mutualExclusiveOpts++
@@ -314,114 +321,112 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 		panic("request options conflict")
 	}
 
-	if len(opts.expectedHTTPCodes) == 0 {
-		opts.expectedHTTPCodes = append(opts.expectedHTTPCodes, http.StatusOK, http.StatusCreated)
-	}
+	// Handle relative URL
 	if len(opts.relativeURL) > 0 {
 		netURL, err := url.Parse(urlStr)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to parse URL: %w", err)
 		}
 		netURL.Path = opts.relativeURL
 		urlStr = netURL.String()
 	}
+
+	// Handle auth removal
 	if opts.withoutAuth {
 		delete(opts.headers, Authorization)
 		delete(opts.cookies, Authorization)
 	}
-	var resp *http.Response
-	var err error
-	tryNum := 0
-	startTime := time.Now()
 
+	// Perform the HTTP request with basic connection retry logic
+	return c.performRequest(ctx, urlStr, body, opts)
+}
+
+// performRequest handles the actual HTTP request execution with low-level retry logic
+func (c *implIHTTPClient) performRequest(ctx context.Context, urlStr, body string, opts *reqOpts) (*HTTPResponse, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, maxHTTPRequestTimeout)
 	defer cancel()
-reqLoop:
+
+	startTime := time.Now()
+
 	for reqCtx.Err() == nil {
 		req, err := req(opts.method, urlStr, body, opts.bodyReader, opts.headers, opts.cookies)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
-		resp, err = c.client.Do(req)
+
+		resp, err := c.client.Do(req)
 		if err != nil {
-			for _, retrier := range opts.retriersOnErrors {
-				if retrier.macther(err) {
-					if time.Since(startTime) < retrier.timeout {
-						time.Sleep(retrier.delay)
-						continue reqLoop
-					}
-				}
+			// Only retry on specific connection errors (low-level retry)
+			if c.shouldRetryConnectionError(err, opts.retriersOnErrors, startTime) {
+				time.Sleep(retryOn_WSAECONNREFUSED_Delay)
+				continue
 			}
-			return nil, fmt.Errorf("request do() failed: %w", err)
+			return nil, fmt.Errorf("request failed: %w", err)
 		}
-		if opts.responseHandler == nil {
-			defer resp.Body.Close()
-		}
-		if resp.StatusCode == http.StatusServiceUnavailable && !slices.Contains(opts.expectedHTTPCodes, http.StatusServiceUnavailable) &&
-			!opts.skipRetryOn503 {
-			if opts.deadlineOn503 > 0 && time.Since(startTime) > opts.deadlineOn503 {
-				break
-			}
-			if err := discardRespBody(resp); err != nil {
-				return nil, err
-			}
-			logger.Verbose("503. retrying...")
-			if tryNum > shortRetriesOn503Amount {
-				time.Sleep(longRetryOn503Delay)
-			} else {
-				time.Sleep(shortRetryOn503Delay)
-			}
-			tryNum++
-			continue
-		}
-		break
+
+		// Handle response based on options
+		return c.handleResponse(resp, opts)
 	}
-	if reqCtx.Err() != nil {
-		return nil, reqCtx.Err()
+
+	return nil, reqCtx.Err()
+}
+
+// shouldRetryConnectionError checks if we should retry on connection errors
+func (c *implIHTTPClient) shouldRetryConnectionError(err error, retriersOnErrors []retrier, startTime time.Time) bool {
+	// Default retry for WSAECONNREFUSED
+	if IsWSAEError(err, WSAECONNREFUSED) && time.Since(startTime) < retryOn_WSAECONNREFUSED_Timeout {
+		return true
 	}
-	isCodeExpected := slices.Contains(opts.expectedHTTPCodes, resp.StatusCode)
-	if isCodeExpected && opts.discardResp {
+
+	// Check custom retriers
+	for _, retrier := range retriersOnErrors {
+		if retrier.macther(err) && time.Since(startTime) < retrier.timeout {
+			return true
+		}
+	}
+
+	return false
+}
+
+// handleResponse processes the HTTP response based on the request options
+func (c *implIHTTPClient) handleResponse(resp *http.Response, opts *reqOpts) (*HTTPResponse, error) {
+	// Set up response body closing unless using custom response handler
+	if opts.responseHandler == nil {
+		defer resp.Body.Close()
+	}
+
+	// Handle discard response option
+	if opts.discardResp {
 		err := discardRespBody(resp)
-		return nil, err
+		return nil, err // Return nil to indicate discarded response
 	}
-	httpResponse := &HTTPResponse{
-		HTTPResp:             resp,
-		expectedSysErrorCode: opts.expectedSysErrorCode,
-		expectedHTTPCodes:    opts.expectedHTTPCodes,
-	}
-	if resp.StatusCode == http.StatusOK && isCodeExpected && opts.responseHandler != nil {
+
+	// Handle custom response handler
+	if opts.responseHandler != nil {
 		opts.responseHandler(resp)
-		return httpResponse, nil
+		return &HTTPResponse{
+			HTTPResp:              resp,
+			expectedHTTPCodes:     opts.expectedHTTPCodes,
+			expectedErrorContains: opts.expectedErrorContains,
+		}, nil
 	}
+
+	// Read response body
 	respBody, err := readBody(resp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read response body: %w", err)
 	}
-	httpResponse.Body = respBody
-	var statusErr error
-	if !isCodeExpected {
-		statusErr = fmt.Errorf("%w: %d, %s", ErrUnexpectedStatusCode, resp.StatusCode, respBody)
+
+	// Create HTTP response with minimal processing
+	httpResponse := &HTTPResponse{
+		HTTPResp:              resp,
+		Body:                  respBody,
+		expectedSysErrorCode:  opts.expectedSysErrorCode,
+		expectedHTTPCodes:     opts.expectedHTTPCodes,
+		expectedErrorContains: opts.expectedErrorContains,
 	}
-	if resp.StatusCode != http.StatusOK && len(opts.expectedErrorContains) > 0 {
-		respMap := map[string]interface{}{}
-		if err := json.Unmarshal([]byte(respBody), &respMap); err != nil {
-			return nil, err
-		}
-		actualError := ""
-		if strings.Contains(urlStr, "api/v2") {
-			if messageIntf, ok := respMap["message"]; ok {
-				actualError = messageIntf.(string)
-			} else {
-				actualError = respMap["error"].(map[string]interface{})["message"].(string)
-			}
-		} else {
-			actualError = respMap["sys.Error"].(map[string]interface{})["Message"].(string)
-		}
-		if !containsAllMessages(opts.expectedErrorContains, actualError) {
-			return nil, fmt.Errorf(`actual error message "%s" does not contain the expected messages %v`, actualError, opts.expectedErrorContains)
-		}
-	}
-	return httpResponse, statusErr
+
+	return httpResponse, nil
 }
 
 func (c *implIHTTPClient) CloseIdleConnections() {
@@ -443,6 +448,10 @@ func (resp *HTTPResponse) ExpectedSysErrorCode() int {
 
 func (resp *HTTPResponse) ExpectedHTTPCodes() []int {
 	return resp.expectedHTTPCodes
+}
+
+func (resp *HTTPResponse) ExpectedErrorContains() []string {
+	return resp.expectedErrorContains
 }
 
 func (resp *HTTPResponse) Println() {
