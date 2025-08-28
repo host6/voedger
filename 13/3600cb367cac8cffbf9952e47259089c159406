@@ -1,3 +1,5 @@
 Resolves issue 'real error is ignored in federation query with `WithDiscardResponse()` option'
 
 Resolves #4026 real error is ignored in federation query with `WithDiscardResponse()` option
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4026","jira_ticket_url":"","branch_type":1}
