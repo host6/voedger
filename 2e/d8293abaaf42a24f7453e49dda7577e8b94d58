@@ -1,3 +1,5 @@
 Resolves issue 'http: deny response discarding on GET requests'
 
 Resolves #4032 http: deny response discarding on GET requests
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4032","jira_ticket_url":"","branch_type":2}
