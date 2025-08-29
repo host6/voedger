@@ -1,1 +1,3 @@
 Resolves issue 'eliminate coreutils.FuncError'
+
+Resolves #4030 eliminate coreutils.FuncError
