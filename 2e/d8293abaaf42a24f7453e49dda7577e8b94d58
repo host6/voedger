@@ -1,1 +1,3 @@
 Resolves issue 'http: deny response discarding on GET requests'
+
+Resolves #4032 http: deny response discarding on GET requests
