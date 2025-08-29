@@ -37,7 +37,6 @@ type ReqOptFunc func(opts *reqOpts)
 type CommandResponse struct {
 	NewIDs            map[string]istructs.RecordID
 	CurrentWLogOffset istructs.Offset
-	SysError          SysError
 	CmdResult         map[string]interface{}
 }
 
@@ -59,11 +58,7 @@ type FuncResponse struct {
 		Elements [][][][]interface{} `json:"elements"`
 	} `json:"sections"`
 	QPv2Response QPv2Response // TODO: eliminate this after https://github.com/voedger/voedger/issues/1313
-}
-
-type FuncError struct {
-	SysError
-	ExpectedHTTPCodes []int
+	SysError     SysError     `json:"-"`
 }
 
 type IHTTPClient interface {
@@ -156,12 +151,6 @@ func (cr *CommandResponse) UnmarshalJSON(data []byte) error {
 		}
 	} else if raw, ok = m["currentWLogOffset"]; ok {
 		if err := json.Unmarshal(raw, &cr.CurrentWLogOffset); err != nil {
-			return err
-		}
-	}
-
-	if raw, ok := m["sys.Error"]; ok {
-		if err := json.Unmarshal(raw, &cr.SysError); err != nil {
 			return err
 		}
 	}

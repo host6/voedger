@@ -45,8 +45,8 @@ func GetCommandResponse(ctx context.Context, requestSender IRequestSender, req R
 		}
 	}
 	if *responseErr != nil {
-		cmdResp.SysError = coreutils.WrapSysErrorToExact(*responseErr, http.StatusInternalServerError)
-		return responseMeta, cmdResp, nil
+		// cmdResp.SysError = coreutils.WrapSysErrorToExact(*responseErr, http.StatusInternalServerError)
+		return responseMeta, cmdResp, coreutils.WrapSysErrorToExact(*responseErr, http.StatusInternalServerError)
 	}
 	if err = json.Unmarshal([]byte(body), &cmdResp); err != nil {
 		// notest

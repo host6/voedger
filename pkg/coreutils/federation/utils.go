@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -74,19 +75,28 @@ func ListenSSEEvents(ctx context.Context, body io.Reader) (offsetsChan OffsetsCh
 }
 
 func HTTPRespToFuncResp(httpResp *coreutils.HTTPResponse, httpRespErr error) (res *coreutils.FuncResponse, err error) {
-	isUnexpectedCode := errors.Is(httpRespErr, coreutils.ErrUnexpectedStatusCode)
-	if httpRespErr != nil && !isUnexpectedCode {
+	isHTTPUnexpectedCode := errors.Is(httpRespErr, coreutils.ErrUnexpectedStatusCode)
+	if httpRespErr != nil && !isHTTPUnexpectedCode {
 		return nil, httpRespErr
 	}
 	if httpResp == nil {
 		return nil, nil
 	}
-	if isUnexpectedCode {
-		funcError, err := getFuncError(httpResp)
-		if err != nil {
-			return nil, err
+
+	sysError, hasSysError, err := getSysError(httpResp)
+	if err != nil {
+		return nil, err
+	}
+	if isHTTPUnexpectedCode {
+		if hasSysError {
+			return nil, fmt.Errorf("status %d, expected %v. sys.Error: %w", httpResp.HTTPResp.StatusCode, httpResp.ExpectedHTTPCodes(), sysError)
 		}
-		return nil, funcError
+		return nil, fmt.Errorf("status %d, expected %v", httpResp.HTTPResp.StatusCode, httpResp.ExpectedHTTPCodes())
+	}
+	if hasSysError {
+		if !slices.Contains(httpResp.ExpectedHTTPCodes(), sysError.HTTPStatus) {
+			return nil, fmt.Errorf("sys.Error: %w, expected status %v", sysError, httpResp.ExpectedHTTPCodes())
+		}
 	}
 	res = &coreutils.FuncResponse{
 		CommandResponse: coreutils.CommandResponse{
@@ -94,6 +104,7 @@ func HTTPRespToFuncResp(httpResp *coreutils.HTTPResponse, httpRespErr error) (re
 			CmdResult: map[string]interface{}{},
 		},
 		HTTPResponse: httpResp,
+		SysError:     sysError,
 	}
 	if len(httpResp.Body) == 0 {
 		return res, nil
@@ -109,10 +120,8 @@ func HTTPRespToFuncResp(httpResp *coreutils.HTTPResponse, httpRespErr error) (re
 		err = json.Unmarshal([]byte(httpResp.Body), &res)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("IFederation: failed to unmarshal response body to FuncResponse: %w. Body:\n%s", err, httpResp.Body)
-	}
-	if res.SysError.HTTPStatus > 0 && res.ExpectedSysErrorCode() > 0 && res.ExpectedSysErrorCode() != res.SysError.HTTPStatus {
-		return nil, fmt.Errorf("sys.Error actual status %d, expected %v: %s", res.SysError.HTTPStatus, res.ExpectedSysErrorCode(), res.SysError.Message)
+		// notest: checked already in getSysError
+		return nil, fmt.Errorf("failed to unmarshal response body: %w. Body:\n%s", err, httpResp.Body)
 	}
 	return res, nil
 }

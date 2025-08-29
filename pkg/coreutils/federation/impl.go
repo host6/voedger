@@ -69,11 +69,7 @@ func (f *implIFederation) UploadTempBLOB(appQName appdef.AppQName, wsid istructs
 		return "", err
 	}
 	if !slices.Contains(resp.ExpectedHTTPCodes(), resp.HTTPResp.StatusCode) {
-		funcErr, err := getFuncError(resp)
-		if err != nil {
-			return "", err
-		}
-		return "", funcErr
+		return "", fmt.Errorf("status %d, expected %v", resp.HTTPResp.StatusCode, resp.ExpectedHTTPCodes())
 	}
 	if resp.HTTPResp.StatusCode != http.StatusOK && resp.HTTPResp.StatusCode != http.StatusCreated {
 		return "", nil
@@ -99,11 +95,7 @@ func (f *implIFederation) UploadBLOB(appQName appdef.AppQName, wsid istructs.WSI
 		return istructs.NullRecordID, err
 	}
 	if !slices.Contains(resp.ExpectedHTTPCodes(), resp.HTTPResp.StatusCode) {
-		funcErr, err := getFuncError(resp)
-		if err != nil {
-			return istructs.NullRecordID, err
-		}
-		return istructs.NullRecordID, funcErr
+		return istructs.NullRecordID, fmt.Errorf("status %d, expected %v", resp.HTTPResp.StatusCode, resp.ExpectedHTTPCodes())
 	}
 	if resp.HTTPResp.StatusCode != http.StatusCreated {
 		return istructs.NullRecordID, nil
@@ -194,21 +186,19 @@ func (f *implIFederation) AdminFunc(relativeURL string, body string, optFuncs ..
 	return HTTPRespToFuncResp(httpResp, err)
 }
 
-func getFuncError(httpResp *coreutils.HTTPResponse) (funcError coreutils.FuncError, err error) {
-	funcError = coreutils.FuncError{
-		SysError: coreutils.SysError{
-			HTTPStatus: httpResp.HTTPResp.StatusCode,
-		},
-		ExpectedHTTPCodes: httpResp.ExpectedHTTPCodes(),
+func getSysError(httpResp *coreutils.HTTPResponse) (sysError coreutils.SysError, hasSysError bool, err error) {
+	sysError = coreutils.SysError{
+		HTTPStatus: httpResp.HTTPResp.StatusCode,
 	}
 	if len(httpResp.Body) == 0 || httpResp.HTTPResp.StatusCode == http.StatusOK {
-		return funcError, nil
+		return sysError, false, nil
 	}
 	m := map[string]interface{}{}
 	if err := json.Unmarshal([]byte(httpResp.Body), &m); err != nil {
-		return funcError, fmt.Errorf("IFederation: failed to unmarshal response body to FuncErr: %w. Body:\n%s", err, httpResp.Body)
+		return sysError, false, fmt.Errorf("failed to unmarshal response body: %w. Body:\n%s", err, httpResp.Body)
 	}
-	sysErrorIntf, hasSysError := m["sys.Error"]
+	var sysErrorIntf interface{}
+	sysErrorIntf, hasSysError = m["sys.Error"]
 	if hasSysError {
 		sysErrorMap := sysErrorIntf.(map[string]interface{})
 		errQNameStr, ok := sysErrorMap["QName"].(string)
@@ -217,23 +207,25 @@ func getFuncError(httpResp *coreutils.HTTPResponse) (funcError coreutils.FuncErr
 			if err != nil {
 				errQName = appdef.NewQName("<err>", sysErrorMap["QName"].(string))
 			}
-			funcError.SysError.QName = errQName
+			sysError.QName = errQName
 		}
-		funcError.HTTPStatus = int(sysErrorMap["HTTPStatus"].(float64))
-		funcError.Message = sysErrorMap["Message"].(string)
-		funcError.Data, _ = sysErrorMap["Data"].(string)
+		sysError.HTTPStatus = int(sysErrorMap["HTTPStatus"].(float64))
+		sysError.Message = sysErrorMap["Message"].(string)
+		sysError.Data, _ = sysErrorMap["Data"].(string)
 	} else {
 		if apiV2QueryError, ok := m["error"]; ok {
 			m = apiV2QueryError.(map[string]interface{})
 		}
 		if commonErrorStatusIntf, ok := m["status"]; ok {
-			funcError.SysError.HTTPStatus = int(commonErrorStatusIntf.(float64))
+			hasSysError = true
+			sysError.HTTPStatus = int(commonErrorStatusIntf.(float64))
 		}
 		if commonErrorMessageIntf, ok := m["message"]; ok {
-			funcError.SysError.Message = commonErrorMessageIntf.(string)
+			hasSysError = true
+			sysError.Message = commonErrorMessageIntf.(string)
 		}
 	}
-	return funcError, nil
+	return sysError, hasSysError, nil
 }
 
 func (f *implIFederation) URLStr() string {
