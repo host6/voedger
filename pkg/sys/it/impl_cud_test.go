@@ -13,6 +13,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	it "github.com/voedger/voedger/pkg/vit"
@@ -299,10 +300,10 @@ func TestRefIntegrity(t *testing.T) {
 
 		t.Run("ref to unexisting -> 400 bad request", func(t *testing.T) {
 			body = fmt.Sprintf(`{"cuds":[{"fields":{"sys.ID": 2,"sys.QName":"app1pkg.cdoc2","field1": %d}}]}`, istructs.NonExistingRecordID)
-			vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect400RefIntegrity_Existence())
+			vit.PostWS(ws, "c.sys.CUD", body, federation.Expect400RefIntegrity_Existence())
 
 			body = fmt.Sprintf(`{"cuds":[{"fields":{"sys.ID": 2,"sys.QName":"app1pkg.cdoc2","field2": %d}}]}`, istructs.NonExistingRecordID)
-			vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect400RefIntegrity_Existence())
+			vit.PostWS(ws, "c.sys.CUD", body, federation.Expect400RefIntegrity_Existence())
 		})
 
 		t.Run("ref to existing, allowed QName", func(t *testing.T) {
@@ -318,7 +319,7 @@ func TestRefIntegrity(t *testing.T) {
 
 		t.Run("ref to existing wrong QName -> 400 bad request", func(t *testing.T) {
 			body = fmt.Sprintf(`{"cuds":[{"fields":{"sys.ID": 2,"sys.QName":"app1pkg.cdoc2","field2": %d}}]}`, idOption)
-			vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect400RefIntegrity_QName())
+			vit.PostWS(ws, "c.sys.CUD", body, federation.Expect400RefIntegrity_QName())
 		})
 	})
 
@@ -374,12 +375,12 @@ func testArgsRefIntegrity(t *testing.T, vit *it.VIT, ws *it.AppWorkspace, app ap
 
 			t.Run("wrong QName CDoc-> 400 bad request", func(t *testing.T) {
 				body := fmt.Sprintf(urlTemplate, fmt.Sprintf(`"refToODoc1":%d`, idCDoc))
-				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, coreutils.Expect400RefIntegrity_QName()).Println()
+				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, federation.Expect400RefIntegrity_QName()).Println()
 			})
 
 			t.Run("wrong QName ORecord -> 400 bad request", func(t *testing.T) {
 				body := fmt.Sprintf(urlTemplate, fmt.Sprintf(`"refToODoc1":%d`, idOrecord1))
-				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, coreutils.Expect400RefIntegrity_QName()).Println()
+				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, federation.Expect400RefIntegrity_QName()).Println()
 			})
 		})
 		t.Run("ORecord", func(t *testing.T) {
@@ -395,17 +396,17 @@ func testArgsRefIntegrity(t *testing.T, vit *it.VIT, ws *it.AppWorkspace, app ap
 
 			t.Run("wrong QName CDoc -> 400 bad request", func(t *testing.T) {
 				body := fmt.Sprintf(urlTemplate, fmt.Sprintf(`"refToORecord1":%d`, idCDoc))
-				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, coreutils.Expect400RefIntegrity_QName()).Println()
+				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, federation.Expect400RefIntegrity_QName()).Println()
 			})
 
 			t.Run("wrong QName ODoc ORecord1 -> 400 bad request", func(t *testing.T) {
 				body := fmt.Sprintf(urlTemplate, fmt.Sprintf(`"refToORecord1":%d`, idOdoc1))
-				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, coreutils.Expect400RefIntegrity_QName()).Println()
+				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, federation.Expect400RefIntegrity_QName()).Println()
 			})
 
 			t.Run("wrong QName ODoc ORecord2 -> 400 bad request", func(t *testing.T) {
 				body := fmt.Sprintf(urlTemplate, fmt.Sprintf(`"refToORecord2":%d`, idOdoc1))
-				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, coreutils.Expect400RefIntegrity_QName()).Println()
+				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, federation.Expect400RefIntegrity_QName()).Println()
 			})
 		})
 		t.Run("Any", func(t *testing.T) {
@@ -423,7 +424,7 @@ func testArgsRefIntegrity(t *testing.T, vit *it.VIT, ws *it.AppWorkspace, app ap
 			})
 			t.Run("wrong QName -> 400 bad request", func(t *testing.T) {
 				body := fmt.Sprintf(urlTemplate, fmt.Sprintf(`"refToCDoc1":%d`, idOdoc1))
-				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, coreutils.Expect400RefIntegrity_QName())
+				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, federation.Expect400RefIntegrity_QName())
 			})
 		})
 
@@ -437,7 +438,7 @@ func testArgsRefIntegrity(t *testing.T, vit *it.VIT, ws *it.AppWorkspace, app ap
 			})
 			t.Run("wrong QName -> 400 bad request", func(t *testing.T) {
 				body := fmt.Sprintf(urlTemplate, fmt.Sprintf(`"refToCDoc1OrODoc1":%d`, idOrecord1))
-				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, coreutils.Expect400RefIntegrity_QName())
+				vit.PostWS(ws, "c.app1pkg.CmdODocTwo", body, federation.Expect400RefIntegrity_QName())
 			})
 		})
 	})

@@ -52,9 +52,31 @@ func (f *implIFederation) reqReader(relativeURL string, bodyReader io.Reader, op
 	return f.httpClient.ReqReader(f.vvmCtx, url, bodyReader, optFuncs...)
 }
 
+type fedOpts struct {
+	coreutils.IReqOpts
+	expectedMessages []string
+}
+
+func Expect400RefIntegrity_Existence() coreutils.ReqOptFunc {
+	return func(opts coreutils.IReqOpts) {
+		opts.Append(coreutils.Expect400())
+		opts.(*fedOpts).expectedMessages = append(opts.(*fedOpts).expectedMessages, "referential integrity violation", "does not exist")
+	}
+}
+
+func Expect400RefIntegrity_QName() coreutils.ReqOptFunc {
+	return func(opts coreutils.IReqOpts) {
+		opts.Append(coreutils.Expect400())
+		opts.(*fedOpts).expectedMessages = append(opts.(*fedOpts).expectedMessages, "referential integrity violation", "QNames are only allowed")
+	}
+}
+
 func (f *implIFederation) reqURL(url string, body string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.HTTPResponse, error) {
 	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
-	optFuncs = append(optFuncs, coreutils.WithOptsValidator(coreutils.DenyGETAndDiscardResponse))
+	optFuncs = append(optFuncs, coreutils.WithOptsValidator(coreutils.DenyGETAndDiscardResponse)) // to prevent discarding possible sys.Error
+	optFuncs = append(optFuncs, coreutils.WithCustomOptsProvider(func(opts coreutils.IReqOpts) coreutils.IReqOpts {
+		return &fedOpts{IReqOpts: opts}
+	}))
 	return f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
 }
 
@@ -74,7 +96,7 @@ func (f *implIFederation) UploadTempBLOB(appQName appdef.AppQName, wsid istructs
 	if err != nil {
 		return "", err
 	}
-	if !slices.Contains(resp.ExpectedHTTPCodes(), resp.HTTPResp.StatusCode) {
+	if !slices.Contains(resp.Opts.ExpectedHTTPCodes(), resp.HTTPResp.StatusCode) {
 		sysErr, err := getSysError(resp)
 		if err != nil {
 			return "", err
@@ -104,7 +126,7 @@ func (f *implIFederation) UploadBLOB(appQName appdef.AppQName, wsid istructs.WSI
 	if err != nil {
 		return istructs.NullRecordID, err
 	}
-	if !slices.Contains(resp.ExpectedHTTPCodes(), resp.HTTPResp.StatusCode) {
+	if !slices.Contains(resp.Opts.ExpectedHTTPCodes(), resp.HTTPResp.StatusCode) {
 		sysErr, err := getSysError(resp)
 		if err != nil {
 			return istructs.NullRecordID, err
@@ -188,8 +210,7 @@ func (f *implIFederation) Query(relativeURL string, optFuncs ...coreutils.ReqOpt
 func (f *implIFederation) AdminFunc(relativeURL string, body string, optFuncs ...coreutils.ReqOptFunc) (*coreutils.FuncResponse, error) {
 	optFuncs = append(optFuncs, coreutils.WithMethod(http.MethodPost))
 	url := fmt.Sprintf("http://127.0.0.1:%d/%s", f.adminPortGetter(), relativeURL)
-	optFuncs = append(f.defaultReqOptFuncs, optFuncs...)
-	httpResp, err := f.httpClient.Req(f.vvmCtx, url, body, optFuncs...)
+	httpResp, err := f.reqURL(url, body, optFuncs...)
 	return HTTPRespToFuncResp(httpResp, err)
 }
 

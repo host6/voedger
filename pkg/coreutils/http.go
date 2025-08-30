@@ -38,27 +38,27 @@ func NewHTTPError(httpStatus int, err error) SysError {
 
 // WithResponseHandler, WithLongPolling and WithDiscardResponse are mutual exclusive
 func WithResponseHandler(responseHandler func(httpResp *http.Response)) ReqOptFunc {
-	return func(ro *reqOpts) {
-		ro.responseHandler = responseHandler
+	return func(opts IReqOpts) {
+		opts.httpOpts().responseHandler = responseHandler
 	}
 }
 
 func withBodyReader(bodyReader io.Reader) ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.bodyReader = bodyReader
+	return func(opts IReqOpts) {
+		opts.httpOpts().bodyReader = bodyReader
 	}
 }
 
 // WithLongPolling, WithResponseHandler and WithDiscardResponse are mutual exclusive
 func WithLongPolling() ReqOptFunc {
-	return func(ro *reqOpts) {
-		ro.responseHandler = func(resp *http.Response) {
-			if !slices.Contains(ro.expectedHTTPCodes, resp.StatusCode) {
+	return func(opts IReqOpts) {
+		opts.httpOpts().responseHandler = func(resp *http.Response) {
+			if !slices.Contains(opts.httpOpts().expectedHTTPCodes, resp.StatusCode) {
 				body, err := readBody(resp)
 				if err != nil {
 					panic("failed to Read response body in custom response handler: " + err.Error())
 				}
-				panic(fmt.Sprintf("actual status code %d, expected %v. Body: %s", resp.StatusCode, ro.expectedHTTPCodes, body))
+				panic(fmt.Sprintf("actual status code %d, expected %v. Body: %s", resp.StatusCode, opts.httpOpts().expectedHTTPCodes, body))
 			}
 		}
 	}
@@ -67,50 +67,49 @@ func WithLongPolling() ReqOptFunc {
 // WithDiscardResponse, WithResponseHandler and WithLongPolling are mutual exclusive
 // causes FederationReq() to return nil for *HTTPResponse
 func WithDiscardResponse() ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.discardResp = true
+	return func(opts IReqOpts) {
+		opts.httpOpts().discardResp = true
 	}
 }
 
 func WithoutAuth() ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.withoutAuth = true
+	return func(opts IReqOpts) {
+		opts.httpOpts().withoutAuth = true
 	}
 }
 
 func WithCookies(cookiesPairs ...string) ReqOptFunc {
-	return func(po *reqOpts) {
+	return func(opts IReqOpts) {
 		for i := 0; i < len(cookiesPairs); i += 2 {
-			po.cookies[cookiesPairs[i]] = cookiesPairs[i+1]
+			opts.httpOpts().cookies[cookiesPairs[i]] = cookiesPairs[i+1]
 		}
 	}
 }
 
 func WithHeaders(headersPairs ...string) ReqOptFunc {
-	return func(po *reqOpts) {
+	return func(opts IReqOpts) {
 		for i := 0; i < len(headersPairs); i += 2 {
-			po.headers[headersPairs[i]] = headersPairs[i+1]
+			opts.httpOpts().headers[headersPairs[i]] = headersPairs[i+1]
 		}
 	}
 }
 
-func WithExpectedCode(expectedHTTPCode int, expectErrorContains ...string) ReqOptFunc {
-	return func(po *reqOpts) {
-		po.expectedHTTPCodes = append(po.expectedHTTPCodes, expectedHTTPCode)
-		po.expectedErrorContains = append(po.expectedErrorContains, expectErrorContains...)
+func WithExpectedCode(expectedHTTPCode int) ReqOptFunc {
+	return func(opts IReqOpts) {
+		opts.httpOpts().expectedHTTPCodes = append(opts.httpOpts().expectedHTTPCodes, expectedHTTPCode)
 	}
 }
 
 // has priority over WithAuthorizeByIfNot
 func WithAuthorizeBy(principalToken string) ReqOptFunc {
-	return func(po *reqOpts) {
-		po.headers[Authorization] = BearerPrefix + principalToken
+	return func(opts IReqOpts) {
+		opts.httpOpts().headers[Authorization] = BearerPrefix + principalToken
 	}
 }
 
 func WithRetryOnCertainError(errMatcher func(err error) bool, timeout time.Duration, retryDelay time.Duration) ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.retriersOnErrors = append(opts.retriersOnErrors, retrier{
+	return func(opts IReqOpts) {
+		opts.httpOpts().retriersOnErrors = append(opts.httpOpts().retriersOnErrors, retrier{
 			macther: errMatcher,
 			timeout: timeout,
 			delay:   retryDelay,
@@ -123,97 +122,89 @@ func WithRetryOnAnyError(timeout time.Duration, retryDelay time.Duration) ReqOpt
 }
 
 func WithDeadlineOn503(deadline time.Duration) ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.deadlineOn503 = deadline
+	return func(opts IReqOpts) {
+		opts.httpOpts().deadlineOn503 = deadline
 	}
 }
 
 func WithRetryOn503() ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.skipRetryOn503 = false
+	return func(opts IReqOpts) {
+		opts.httpOpts().skipRetryOn503 = false
 	}
 }
 
 func WithSkipRetryOn503() ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.skipRetryOn503 = true
+	return func(opts IReqOpts) {
+		opts.httpOpts().skipRetryOn503 = true
 	}
 }
 
 func WithDefaultAuthorize(principalToken string) ReqOptFunc {
-	return func(po *reqOpts) {
-		if _, ok := po.headers[Authorization]; !ok {
-			po.headers[Authorization] = BearerPrefix + principalToken
+	return func(opts IReqOpts) {
+		if _, ok := opts.httpOpts().headers[Authorization]; !ok {
+			opts.httpOpts().headers[Authorization] = BearerPrefix + principalToken
 		}
 	}
 }
 
 func WithRelativeURL(relativeURL string) ReqOptFunc {
-	return func(ro *reqOpts) {
-		ro.relativeURL = relativeURL
+	return func(opts IReqOpts) {
+		opts.httpOpts().relativeURL = relativeURL
 	}
 }
 
 func WithDefaultMethod(m string) ReqOptFunc {
-	return func(opts *reqOpts) {
-		if len(opts.method) == 0 {
-			opts.method = m
+	return func(opts IReqOpts) {
+		if len(opts.httpOpts().method) == 0 {
+			opts.httpOpts().method = m
 		}
 	}
 }
 
 func WithMethod(m string) ReqOptFunc {
-	return func(po *reqOpts) {
-		po.method = m
+	return func(opts IReqOpts) {
+		opts.httpOpts().method = m
 	}
 }
 
-func Expect204(expectErrorContains ...string) ReqOptFunc {
-	return WithExpectedCode(http.StatusNoContent, expectErrorContains...)
+func Expect204() ReqOptFunc {
+	return WithExpectedCode(http.StatusNoContent)
 }
 
-func Expect409(expected ...string) ReqOptFunc {
-	return WithExpectedCode(http.StatusConflict, expected...)
+func Expect409() ReqOptFunc {
+	return WithExpectedCode(http.StatusConflict)
 }
 
-func Expect404(expected ...string) ReqOptFunc {
-	return WithExpectedCode(http.StatusNotFound, expected...)
+func Expect404() ReqOptFunc {
+	return WithExpectedCode(http.StatusNotFound)
 }
 
 func Expect401() ReqOptFunc {
 	return WithExpectedCode(http.StatusUnauthorized)
 }
 
-func Expect403(expectedMessages ...string) ReqOptFunc {
-	return WithExpectedCode(http.StatusForbidden, expectedMessages...)
+func Expect403() ReqOptFunc {
+	return WithExpectedCode(http.StatusForbidden)
 }
 
-func Expect400(expectErrorContains ...string) ReqOptFunc {
-	return WithExpectedCode(http.StatusBadRequest, expectErrorContains...)
+func Expect400() ReqOptFunc {
+	return WithExpectedCode(http.StatusBadRequest)
 }
 
-func Expect405(expectErrorContains ...string) ReqOptFunc {
-	return WithExpectedCode(http.StatusMethodNotAllowed, expectErrorContains...)
+func Expect405() ReqOptFunc {
+	return WithExpectedCode(http.StatusMethodNotAllowed)
 }
 
-func Expect423(expectErrorContains ...string) ReqOptFunc {
-	return WithExpectedCode(http.StatusLocked, expectErrorContains...)
-}
-
-func Expect400RefIntegrity_Existence() ReqOptFunc {
-	return WithExpectedCode(http.StatusBadRequest, "referential integrity violation", "does not exist")
-}
-
-func Expect400RefIntegrity_QName() ReqOptFunc {
-	return WithExpectedCode(http.StatusBadRequest, "referential integrity violation", "QNames are only allowed")
+func Expect423() ReqOptFunc {
+	return WithExpectedCode(http.StatusLocked)
 }
 
 func Expect429() ReqOptFunc {
 	return WithExpectedCode(http.StatusTooManyRequests)
 }
 
-func Expect500(expectErrorContains ...string) ReqOptFunc {
-	return WithExpectedCode(http.StatusInternalServerError, expectErrorContains...)
+func Expect500() ReqOptFunc {
+	return WithExpectedCode(http.StatusInternalServerError)
 }
 
 func Expect503() ReqOptFunc {
@@ -225,33 +216,34 @@ func Expect410() ReqOptFunc {
 }
 
 func ExpectSysError500() ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.expectedSysErrorCode = http.StatusInternalServerError
+	return func(opts IReqOpts) {
+		opts.httpOpts().expectedSysErrorCode = http.StatusInternalServerError
 	}
 }
 
-func WithOptsValidator(validator func(*reqOpts) (panicMessage string)) ReqOptFunc {
-	return func(opts *reqOpts) {
-		opts.validators = append(opts.validators, validator)
+func WithOptsValidator(validator func(IReqOpts) (panicMessage string)) ReqOptFunc {
+	return func(opts IReqOpts) {
+		opts.httpOpts().validators = append(opts.httpOpts().validators, validator)
 	}
 }
 
 type reqOpts struct {
-	method                string
-	headers               map[string]string
-	cookies               map[string]string
-	expectedHTTPCodes     []int
-	expectedErrorContains []string
-	responseHandler       func(httpResp *http.Response) // used if no errors and an expected status code is received
-	relativeURL           string
-	discardResp           bool
-	expectedSysErrorCode  int
-	retriersOnErrors      []retrier
-	bodyReader            io.Reader
-	withoutAuth           bool
-	skipRetryOn503        bool
-	deadlineOn503         time.Duration
-	validators            []func(*reqOpts) (panicMessage string)
+	method               string
+	headers              map[string]string
+	cookies              map[string]string
+	expectedHTTPCodes    []int
+	responseHandler      func(httpResp *http.Response) // used if no errors and an expected status code is received
+	relativeURL          string
+	discardResp          bool
+	expectedSysErrorCode int
+	retriersOnErrors     []retrier
+	bodyReader           io.Reader
+	withoutAuth          bool
+	skipRetryOn503       bool
+	deadlineOn503        time.Duration
+	customOptsProvider   func(IReqOpts) IReqOpts
+	appendedOpts         []ReqOptFunc
+	validators           []func(IReqOpts) (panicMessage string)
 }
 
 // body and bodyReader are mutual exclusive
@@ -288,15 +280,16 @@ func (c *implIHTTPClient) Req(ctx context.Context, urlStr string, body string, o
 	return c.req(ctx, urlStr, body, optFuncs...)
 }
 
-func mutualExclusiveOptsValidator(opts *reqOpts) (panicMessage string) {
+func mutualExclusiveOptsValidator(opts IReqOpts) (panicMessage string) {
 	mutualExclusiveOpts := 0
-	if opts.discardResp {
+	o := opts.httpOpts()
+	if o.discardResp {
 		mutualExclusiveOpts++
 	}
-	if opts.expectedSysErrorCode > 0 {
+	if o.expectedSysErrorCode > 0 {
 		mutualExclusiveOpts++
 	}
-	if opts.responseHandler != nil {
+	if o.responseHandler != nil {
 		mutualExclusiveOpts++
 	}
 	if mutualExclusiveOpts > 1 {
@@ -305,11 +298,23 @@ func mutualExclusiveOptsValidator(opts *reqOpts) (panicMessage string) {
 	return ""
 }
 
+func (opts *reqOpts) Append(opt ReqOptFunc) {
+	opts.appendedOpts = append(opts.appendedOpts, opt)
+}
+
+func (opts *reqOpts) ExpectedHTTPCodes() []int {
+	return opts.expectedHTTPCodes
+}
+
+func (opts *reqOpts) httpOpts() *reqOpts {
+	return opts
+}
+
 func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
 	opts := &reqOpts{
 		headers: map[string]string{},
 		cookies: map[string]string{},
-		validators: []func(*reqOpts) (panicMessage string){
+		validators: []func(IReqOpts) (panicMessage string){
 			mutualExclusiveOptsValidator,
 		},
 	}
@@ -320,8 +325,9 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 	for _, defaultOptFunc := range c.defaultOps {
 		defaultOptFunc(opts)
 	}
+	var iOpts IReqOpts = opts
 	for _, optFunc := range optFuncs {
-		optFunc(opts)
+		optFunc(iOpts)
 	}
 	if len(opts.method) == 0 {
 		opts.method = http.MethodGet
@@ -341,6 +347,9 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 	if opts.withoutAuth {
 		delete(opts.headers, Authorization)
 		delete(opts.cookies, Authorization)
+	}
+	if opts.customOptsProvider != nil {
+		iOpts = opts.customOptsProvider(iOpts)
 	}
 	for _, v := range opts.validators {
 		if panicMessage := v(opts); len(panicMessage) > 0 {
@@ -403,9 +412,8 @@ reqLoop:
 		return nil, err
 	}
 	httpResponse := &HTTPResponse{
-		HTTPResp:             resp,
-		expectedSysErrorCode: opts.expectedSysErrorCode,
-		expectedHTTPCodes:    opts.expectedHTTPCodes,
+		HTTPResp: resp,
+		Opts:     iOpts,
 	}
 	if resp.StatusCode == http.StatusOK && isCodeExpected && opts.responseHandler != nil {
 		opts.responseHandler(resp)
@@ -420,25 +428,25 @@ reqLoop:
 	if !isCodeExpected {
 		statusErr = fmt.Errorf("%w: %d, %s", ErrUnexpectedStatusCode, resp.StatusCode, respBody)
 	}
-	if resp.StatusCode != http.StatusOK && len(opts.expectedErrorContains) > 0 {
-		respMap := map[string]interface{}{}
-		if err := json.Unmarshal([]byte(respBody), &respMap); err != nil {
-			return nil, err
-		}
-		actualError := ""
-		if strings.Contains(urlStr, "api/v2") {
-			if messageIntf, ok := respMap["message"]; ok {
-				actualError = messageIntf.(string)
-			} else {
-				actualError = respMap["error"].(map[string]interface{})["message"].(string)
-			}
-		} else {
-			actualError = respMap["sys.Error"].(map[string]interface{})["Message"].(string)
-		}
-		if !containsAllMessages(opts.expectedErrorContains, actualError) {
-			return nil, fmt.Errorf(`actual error message "%s" does not contain the expected messages %v`, actualError, opts.expectedErrorContains)
-		}
-	}
+	// if resp.StatusCode != http.StatusOK && len(opts.expectedErrorContains) > 0 {
+	// 	respMap := map[string]interface{}{}
+	// 	if err := json.Unmarshal([]byte(respBody), &respMap); err != nil {
+	// 		return nil, err
+	// 	}
+	// 	actualError := ""
+	// 	if strings.Contains(urlStr, "api/v2") {
+	// 		if messageIntf, ok := respMap["message"]; ok {
+	// 			actualError = messageIntf.(string)
+	// 		} else {
+	// 			actualError = respMap["error"].(map[string]interface{})["message"].(string)
+	// 		}
+	// 	} else {
+	// 		actualError = respMap["sys.Error"].(map[string]interface{})["Message"].(string)
+	// 	}
+	// 	if !containsAllMessages(opts.expectedErrorContains, actualError) {
+	// 		return nil, fmt.Errorf(`actual error message "%s" does not contain the expected messages %v`, actualError, opts.expectedErrorContains)
+	// 	}
+	// }
 	return httpResponse, statusErr
 }
 
@@ -453,14 +461,6 @@ func containsAllMessages(strs []string, toFind string) bool {
 		}
 	}
 	return true
-}
-
-func (resp *HTTPResponse) ExpectedSysErrorCode() int {
-	return resp.expectedSysErrorCode
-}
-
-func (resp *HTTPResponse) ExpectedHTTPCodes() []int {
-	return resp.expectedHTTPCodes
 }
 
 func (resp *HTTPResponse) Println() {
@@ -575,8 +575,8 @@ func NewIHTTPClient(defaultOpts ...ReqOptFunc) (client IHTTPClient, clenup func(
 	return client, client.CloseIdleConnections
 }
 
-func DenyGETAndDiscardResponse(opts *reqOpts) (panicMessage string) {
-	if opts.discardResp && opts.method == http.MethodGet {
+func DenyGETAndDiscardResponse(opts IReqOpts) (panicMessage string) {
+	if opts.httpOpts().discardResp && opts.httpOpts().method == http.MethodGet {
 		return "WithDiscardResponse is denied on GET method"
 	}
 	return ""

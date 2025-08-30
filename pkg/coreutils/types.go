@@ -25,13 +25,24 @@ type EmbedFS interface {
 }
 
 type HTTPResponse struct {
-	Body                 string
-	HTTPResp             *http.Response
-	expectedSysErrorCode int
-	expectedHTTPCodes    []int
+	Body     string
+	HTTPResp *http.Response
+	Opts     IReqOpts
 }
 
-type ReqOptFunc func(opts *reqOpts)
+type IReqOpts interface {
+	Append(ReqOptFunc)
+	ExpectedHTTPCodes() []int
+	httpOpts() *reqOpts
+}
+
+func WithCustomOptsProvider(prov func(internalOpts IReqOpts) (customOpts IReqOpts)) ReqOptFunc {
+	return func(opts IReqOpts) {
+		opts.httpOpts().customOptsProvider = prov
+	}
+}
+
+type ReqOptFunc func(opts IReqOpts)
 
 // implements json.Unmarshaler
 type CommandResponse struct {

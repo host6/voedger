@@ -87,10 +87,10 @@ func HTTPRespToFuncResp(httpResp *coreutils.HTTPResponse, httpRespErr error) (re
 		if err != nil {
 			return nil, err
 		}
-		if len(httpResp.ExpectedHTTPCodes()) == 1 && httpResp.ExpectedHTTPCodes()[0] == http.StatusOK {
+		if len(httpResp.Opts.ExpectedHTTPCodes()) == 1 && httpResp.Opts.ExpectedHTTPCodes()[0] == http.StatusOK {
 			return nil, fmt.Errorf("status %d: %w", httpResp.HTTPResp.StatusCode, sysError)
 		}
-		return nil, fmt.Errorf("status %d, expected %v: %w", httpResp.HTTPResp.StatusCode, httpResp.ExpectedHTTPCodes(), sysError)
+		return nil, fmt.Errorf("status %d, expected %v: %w", httpResp.HTTPResp.StatusCode, httpResp.Opts.ExpectedHTTPCodes(), sysError)
 	}
 	res = &coreutils.FuncResponse{
 		CommandResponse: coreutils.CommandResponse{
