@@ -1,3 +1,5 @@
 Resolves issue 'move SysError from Command response to Func response'
 
 Resolves #4039 move SysError from Command response to Func response
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4039","jira_ticket_url":"","branch_type":1}
