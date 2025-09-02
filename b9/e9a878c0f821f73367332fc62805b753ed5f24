@@ -1,1 +1,3 @@
 Resolves issue 'fix TestISequencer_FlushPermanentlyFails'
+
+Resolves #4038 fix TestISequencer_FlushPermanentlyFails
