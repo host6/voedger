@@ -1,0 +1,1 @@
+Resolves issue 'abstractions leak: high-level `sys.Error` is checked by low-level `IHTTPClient`'
