@@ -1,3 +1,5 @@
 Resolves issue 'abstractions leak: high-level `sys.Error` is checked by low-level `IHTTPClient`'
 
 Resolves #4027 abstractions leak: high-level `sys.Error` is checked by low-level `IHTTPClient`
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4027","jira_ticket_url":"","branch_type":2}
