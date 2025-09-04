@@ -1,1 +1,3 @@
 Resolves issue 'fix TestSchedulersWaitTimeout'
+
+Resolves #4046 fix TestSchedulersWaitTimeout
