@@ -1,3 +1,5 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1485","branch_type":1}
 
 [AIR-1485] voedger: deny `WithSkipRetryOn503` with `WithMaxRetryDurationOn503`
+
+https://untill.atlassian.net/browse/AIR-1485
