@@ -1,1 +1,3 @@
 Resolves issue 'fix `panic: send timeout expired`'
+
+Resolves #4051 fix `panic: send timeout expired`
