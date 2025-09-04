@@ -1,3 +1,5 @@
 Resolves issue 'fix `panic: send timeout expired`'
 
 Resolves #4051 fix `panic: send timeout expired`
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4051","jira_ticket_url":"","branch_type":2}
