@@ -1,1 +1,3 @@
 Resolves issue 'get rid of `IsTest()` usage in router on defining the Admin endpoint port'
+
+Resolves #4068 get rid of `IsTest()` usage in router on defining the Admin endpoint port
