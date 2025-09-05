@@ -1,3 +1,5 @@
 Resolves issue 'get rid of `IsTest()` usage in router on defining the Admin endpoint port'
 
 Resolves #4068 get rid of `IsTest()` usage in router on defining the Admin endpoint port
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4068","jira_ticket_url":"","branch_type":2}
