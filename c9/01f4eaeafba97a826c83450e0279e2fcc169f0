@@ -1,1 +1,3 @@
 Resolves issue 'get rid of `IsTest()` in app stroge provider'
+
+Resolves #4063 get rid of `IsTest()` in app stroge provider
