@@ -1,3 +1,5 @@
 Resolves issue 'get rid of `IsTest()` in `coreutils.ServerAddress()`'
 
 Resolves #4077 get rid of `IsTest()` in `coreutils.ServerAddress()`
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4077","jira_ticket_url":"","branch_type":1}
