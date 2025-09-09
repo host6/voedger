@@ -1,3 +1,5 @@
 Resolves issue '`FuncResponse.UnmarshalJSON()`: eliminate `HTTPResponse` field check'
 
 Resolves #4074 `FuncResponse.UnmarshalJSON()`: eliminate `HTTPResponse` field check
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4074","jira_ticket_url":"","branch_type":1}
