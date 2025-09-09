@@ -1,1 +1,3 @@
 Resolves issue '`FuncResponse.UnmarshalJSON()`: eliminate `HTTPResponse` field check'
+
+Resolves #4074 `FuncResponse.UnmarshalJSON()`: eliminate `HTTPResponse` field check
