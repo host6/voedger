@@ -1,1 +1,3 @@
 Resolves issue 'get rid of `IsTest()` in `coreutils.ServerAddress()`'
+
+Resolves #4077 get rid of `IsTest()` in `coreutils.ServerAddress()`
