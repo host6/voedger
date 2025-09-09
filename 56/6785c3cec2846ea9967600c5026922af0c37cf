@@ -1,3 +1,5 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1503","branch_type":1}
 
 [AIR-1503] coreutils/http.go: move to goutils
+
+https://untill.atlassian.net/browse/AIR-1503
