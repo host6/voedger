@@ -1,3 +1,5 @@
 Resolves issue 'VVM: provide address to listen instead of just port'
 
 Resolves #4081 VVM: provide address to listen instead of just port
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4081","jira_ticket_url":"","branch_type":1}
