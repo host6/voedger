@@ -1,1 +1,3 @@
 Resolves issue 'get rid of `it.TestServicePort`'
+
+Resolves #4078 get rid of `it.TestServicePort`
