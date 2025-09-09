@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/netip"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
@@ -28,7 +29,7 @@ import (
 func Provide(rp RouterParams, broker in10n.IN10nBroker, blobRequestHandler blobprocessor.IRequestHandler, autocertCache autocert.Cache,
 	requestSender bus.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces, iTokens itokens.ITokens,
 	federation federation.IFederation, appTokensFactory payloads.IAppTokensFactory) (httpSrv IHTTPService, acmeSrv IACMEService, adminSrv IAdminService) {
-	httpServ := getHTTPService("HTTP server", coreutils.ServerAddress(rp.Port), rp, broker, blobRequestHandler,
+	httpServ := getHTTPService("HTTP server", rp.ListenAddr, rp, broker, blobRequestHandler,
 		requestSender, numsAppsWorkspaces, iTokens, federation, appTokensFactory)
 	adminEndpoint := fmt.Sprintf("%s:%d", coreutils.LocalhostIP, rp.AdminPort)
 	adminSrv = getHTTPService("Admin HTTP server", adminEndpoint, RouterParams{
@@ -37,7 +38,12 @@ func Provide(rp RouterParams, broker in10n.IN10nBroker, blobRequestHandler blobp
 		ConnectionsLimit: rp.ConnectionsLimit,
 	}, broker, nil, requestSender, numsAppsWorkspaces, iTokens, federation, appTokensFactory)
 
-	if rp.Port != HTTPSPort {
+	addrPort, err := netip.ParseAddrPort(rp.ListenAddr)
+	if err != nil {
+		// notest
+		panic(err)
+	}
+	if addrPort.Port() != HTTPSPort {
 		return httpServ, nil, adminSrv
 	}
 	crtMgr := &autocert.Manager{

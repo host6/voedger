@@ -27,7 +27,7 @@ import (
 )
 
 type RouterParams struct {
-	Port                 int
+	ListenAddr           string
 	AdminPort            int
 	WriteTimeout         int
 	ReadTimeout          int

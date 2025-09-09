@@ -435,7 +435,7 @@ func startRouter(t *testing.T, router *testRouter, rp RouterParams, sendTimeout 
 
 func setUp(t *testing.T, requestHandler bus.RequestHandler, sendTimeout bus.SendTimeout) *testRouter {
 	rp := RouterParams{
-		Port:             0,
+		ListenAddr:       coreutils.ServerAddress(0),
 		WriteTimeout:     DefaultRouterWriteTimeout,
 		ReadTimeout:      DefaultRouterReadTimeout,
 		ConnectionsLimit: DefaultConnectionsLimit,
