@@ -1,39 +1,55 @@
 # goutils
 Golang utilities
 
-## AI Promt to Create a Brief README.md
-
+## AI Prompt to Create a Brief README.md
 
 ````
-Write a brief README.md file for httpu Go package following these requirements:
+You are an AI system specialized in analyzing Go packages and generating concise developer documentation. Your task is to **write a brief `README.md` file** for the specified package. Follow the instructions **strictly** and do not add extra sections, filler text, or assumptions beyond what can be inferred from the package code and tests.
 
-1. **Package Description**: Write a concise description (1-2 sentences) explaining what the package does and its primary purpose
+## Requirements
 
-2. **Problem Statement**: Include a brief "Problem" or "Why" section that explains what problem this package solves or why it exists (1-2 sentences)
+1. **Package Description**
+   Write a concise (1–2 sentences) description explaining what the package does and its primary purpose. Focus on the conceptual role, not implementation details.
 
-3. **Features Section**: List the main features/capabilities in bullet points, focusing on fundamental capabilities rather than exact implementation details. Keep each point under 72 characters per line
+2. **Problem Statement ("Why")**
+   Provide a short (1–2 sentences) explanation of the problem this package solves or why it exists. Make sure this is conceptually distinct from the description (avoid repeating wording).
 
-4. **Platform-Specific Logic**: If the package contains platform-specific code (build tags, OS-specific imports, different implementations for different platforms), add a "Platform Support" or "Compatibility" section noting this. If no platform-specific logic, no need for this section. Avoid phrases that tells that some platform-specific capabilities is missing
+3. **Features Section**
+   Use bullet points to list the fundamental capabilities (not implementation details).
 
-5. **Basic Usage Link**: If there is a `*_test.go` file containing a test function with "Basic" or "Usage" in its name (like `TestBasicUsage`, `TestUsage`, `ExampleBasic`, etc.), include a "Basic Usage" section with a link to that test file
+   * Each feature line ≤72 characters
+   * Each feature: **2–3 word name** + short description
+   * No trailing periods
 
-6. **Line Length**: Ensure all lines are maximum 72 characters long
+4. **Platform-Specific Logic**
+   If the code has platform-specific behavior (e.g. build tags, OS-specific imports), add a `## Platform Support` section describing it.
 
-7. **Structure**: Use this format:
+   * If none exists, omit this section
+   * Never phrase things as "unsupported" or "missing"
+
+5. **Basic Usage Link**
+   If a `*_test.go` file has a function like `TestBasicUsage`, `TestUsage`, or `ExampleBasic`, add a `## Basic Usage` section with a markdown link to that test file.
+
+6. **Line Length**
+   All lines must wrap at ≤72 characters.
+
+7. **README Structure**
+   Follow this exact markdown format:
+
    ```markdown
    # Package Name
 
-   Brief description of what the package does.
+   Brief description.
 
    ## Problem
 
-   Brief explanation of what problem this solves.
+   Brief explanation.
 
    ## Features
 
-   - **Basic Fundamental Capability 2 name 1-2 words** - Brief Capability 1 description
-   - **Basic Fundamental Capability 2 name 1-2 words** - Brief Capability 2 description
-   - **Basic Fundamental Capability 3 name 1-2 words** - Brief Capability 3 description
+   - **Feature name** - Short description
+   - **Feature name** - Short description
+   - **Feature name** - Short description
 
    ## Platform Support
 
@@ -44,19 +60,20 @@ Write a brief README.md file for httpu Go package following these requirements:
    See [basic usage example](path/to/test_file.go)
    ```
 
-8. **Style Guidelines**:
-   - Use sentence capitalization for headings and list items
-   - No periods at the end of list items
-   - Add empty lines before lists
-   - Keep descriptions focused and avoid unnecessary details
-   - Focus on what developers need to know conceptually
+8. **Style Guidelines**
 
-Analyze the package structure, exported functions/types, test files, and any build tags or platform-specific code to determine the content. Focus on the fundamental value proposition rather than implementation specifics.
+   * Use sentence capitalization for headings and list items
+   * No periods at end of list items
+   * Add empty lines before lists
+   * Keep text concise and conceptual
+   * Prioritize developer-facing value over internal details
 
-Notes about requirements 1 and 2:
+## AI-Specific Instructions
 
-- They must be conceptually distinct:
-  - Description: What the package is and does (value and scope)
-  - Problem: Why it exists; pain points without this package
-- Avoid repeating key phrases or sentences across both sections
+* **Analyze before writing**: Inspect exported types/functions, tests, and build tags to infer purpose, features, and usage.
+* **Avoid repetition**: Ensure description and problem statement are conceptually distinct.
+* **Do not invent**: Only include features/usage/platform notes if clearly present.
+* **Optimize for clarity**: Developers should quickly understand why the package exists and what it offers.
+* **Strict format compliance**: Produce only the README.md content in the requested structure, no extra commentary.
+
 ````
