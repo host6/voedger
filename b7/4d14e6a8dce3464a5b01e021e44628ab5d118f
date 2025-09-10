@@ -1,3 +1,5 @@
 Resolves issue 'create state options as a ready-to-use struct instead of build from options'
 
 Resolves #4087 create state options as a ready-to-use struct instead of build from options
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4087","jira_ticket_url":"","branch_type":2}
