@@ -1,3 +1,5 @@
 Resolves issue 'use EmailMessage everywhere, not just in smtptest'
 
 Resolves #4091 use EmailMessage everywhere, not just in smtptest
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4091","jira_ticket_url":"","branch_type":1}
