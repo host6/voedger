@@ -1,1 +1,3 @@
 Resolves issue 'get rid of `IsTest()` in VVM default config'
+
+Resolves #4096 get rid of `IsTest()` in VVM default config
