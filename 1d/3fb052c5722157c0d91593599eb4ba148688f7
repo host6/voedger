@@ -1,3 +1,5 @@
 Resolves issue 'get rid of `IsTest()` in VVM default config'
 
 Resolves #4096 get rid of `IsTest()` in VVM default config
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4096","jira_ticket_url":"","branch_type":1}
