@@ -1,1 +1,3 @@
 Resolves issue 'use EmailMessage everywhere, not just in smtptest'
+
+Resolves #4091 use EmailMessage everywhere, not just in smtptest
