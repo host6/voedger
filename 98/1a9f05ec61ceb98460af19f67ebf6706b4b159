@@ -1,1 +1,3 @@
 Resolves issue 'relocate int<->string conversion funcs to goutils/strconvu'
+
+Resolves #4100 relocate int<->string conversion funcs to goutils/strconvu
