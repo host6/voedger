@@ -1,1 +1,3 @@
 Resolves issue 'goutils/strconvu: implement and use `ParseUint`, eliminate unclear `BitSize64` and `DecimalBase` consts'
+
+Resolves #4106 goutils/strconvu: implement and use `ParseUint`, eliminate unclear `BitSize64` and `DecimalBase` consts
