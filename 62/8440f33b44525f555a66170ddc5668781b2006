@@ -1,3 +1,5 @@
 Resolves issue 'goutils/strconvu: implement and use `ParseUint`, eliminate unclear `BitSize64` and `DecimalBase` consts'
 
 Resolves #4106 goutils/strconvu: implement and use `ParseUint`, eliminate unclear `BitSize64` and `DecimalBase` consts
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4106","jira_ticket_url":"","branch_type":2}
