@@ -1,1 +1,3 @@
 Resolves issue 'rename strconvu.StringToUint8->ParseUint8'
+
+Resolves #4114 rename strconvu.StringToUint8->ParseUint8
