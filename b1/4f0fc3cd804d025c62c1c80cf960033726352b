@@ -1,1 +1,3 @@
 Resolves issue 'get rid of `IsTest()` on schemas cache in VVMAppsBuilder'
+
+Resolves #4121 get rid of `IsTest()` on schemas cache in VVMAppsBuilder
