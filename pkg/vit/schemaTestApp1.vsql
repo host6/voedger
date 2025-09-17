@@ -802,8 +802,13 @@ ALTERABLE WORKSPACE test_wsWS (
 	GRANT EXECUTE ON QUERY QryVoid TO sys.WorkspaceOwner;
 
 	GRANT SELECT ON TABLE DocWithBLOB TO sys.WorkspaceOwner;
-	GRANT SELECT ON TABLE Country TO sys.WorkspaceOwner;
 	GRANT SELECT ON TABLE ODocWithBLOB TO sys.WorkspaceOwner;
+
+	GRANT SELECT ON TABLE Client TO sys.WorkspaceOwner;
+	GRANT SELECT ON TABLE Wallet TO sys.WorkspaceOwner;
+	GRANT SELECT ON TABLE Country TO sys.WorkspaceOwner;
+	GRANT SELECT ON TABLE Capabilities TO sys.WorkspaceOwner;
+	GRANT SELECT ON TABLE Currency TO sys.WorkspaceOwner;
 
 	GRANT SELECT, INSERT, UPDATE ON TABLE DocActivateDenied TO sys.WorkspaceOwner;
 	GRANT SELECT, INSERT, UPDATE ON TABLE DocDeactivateDenied TO sys.WorkspaceOwner;

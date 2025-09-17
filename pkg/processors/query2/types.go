@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -523,6 +524,9 @@ type include struct {
 	records                istructs.IRecords
 	viewRecords            istructs.IViewRecords
 	cdoc                   bool
+	roles                  []appdef.QName
+	appPart                appparts.IAppPartition
+	iWorkspace             appdef.IWorkspace
 }
 
 func newInclude(qw *queryWork, cdoc bool) (o pipeline.IAsyncOperator) {
@@ -533,6 +537,9 @@ func newInclude(qw *queryWork, cdoc bool) (o pipeline.IAsyncOperator) {
 		records:                qw.appStructs.Records(),
 		viewRecords:            qw.appStructs.ViewRecords(),
 		cdoc:                   cdoc,
+		roles:                  qw.roles,
+		appPart:                qw.appPart,
+		iWorkspace:             qw.iWorkspace,
 	}
 	for _, s := range qw.queryParams.Constraints.Include {
 		i.refFieldsAndContainers = append(i.refFieldsAndContainers, strings.Split(s, "."))
@@ -565,9 +572,17 @@ func (i include) fill(parent map[string]interface{}, refFieldsAndContainers []st
 		return nil
 	}
 
-	err = i.checkField(parent, refFieldsAndContainers[0], refFieldOrContainerExpression)
+	qNameToCheckOpFrom, err := i.checkField(parent, refFieldsAndContainers[0], refFieldOrContainerExpression)
 	if err != nil {
 		return
+	}
+
+	ok, err := i.appPart.IsOperationAllowed(i.iWorkspace, appdef.OperationKind_Select, qNameToCheckOpFrom, []appdef.FieldName{refFieldsAndContainers[0]}, i.roles)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return coreutils.NewHTTPErrorf(http.StatusForbidden)
 	}
 
 	if id, ok := parent[appdef.SystemField_ID].(istructs.RecordID); ok {
@@ -661,21 +676,21 @@ func (i include) getRelations(ctx context.Context, work pipeline.IWorkpiece) (re
 	})
 	return
 }
-func (i include) checkField(parent map[string]interface{}, refFieldOrContainer string, refFieldOrContainerExpression []string) (err error) {
+func (i include) checkField(parent map[string]interface{}, refFieldOrContainer string, refFieldOrContainerExpression []string) (qNameToCheckOpFrom appdef.QName, err error) {
 	iType := i.ad.Type(parent[appdef.SystemField_QName].(appdef.QName))
 	if withFields, ok := iType.(appdef.IWithFields); ok {
 		for _, field := range withFields.RefFields() {
 			if field.Name() == refFieldOrContainer {
-				return nil
+				return iType.QName(), nil
 			}
 		}
 	}
 	if withContainers, ok := iType.(appdef.IWithContainers); ok {
-		for _, field := range withContainers.Containers() {
-			if field.Name() == refFieldOrContainer {
-				return nil
+		for _, container := range withContainers.Containers() {
+			if container.Name() == refFieldOrContainer {
+				return container.QName(), nil
 			}
 		}
 	}
-	return fmt.Errorf("field expression - '%s', '%s' - %w", strings.Join(refFieldOrContainerExpression, "."), refFieldOrContainer, errUnexpectedField)
+	return appdef.NullQName, fmt.Errorf("field expression - '%s', '%s' - %w", strings.Join(refFieldOrContainerExpression, "."), refFieldOrContainer, errUnexpectedField)
 }
