@@ -1,1 +1,3 @@
 Resolves issue 'eliminate `coreutils.IsTest()`'
+
+Resolves #4128 eliminate `coreutils.IsTest()`
