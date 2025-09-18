@@ -1,3 +1,5 @@
 Resolves issue 'eliminate `coreutils.IsTest()`'
 
 Resolves #4128 eliminate `coreutils.IsTest()`
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4128","jira_ticket_url":"","branch_type":1}
