@@ -28,8 +28,10 @@ import (
 	"github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
+	"github.com/voedger/voedger/pkg/parser"
 	"github.com/voedger/voedger/pkg/registry"
 	"github.com/voedger/voedger/pkg/sys/authnz"
+	"github.com/voedger/voedger/pkg/vit/internal"
 	"github.com/voedger/voedger/pkg/vvm"
 )
 
@@ -409,21 +411,21 @@ func NewLogin(name, pwd string, appQName appdef.AppQName, subjectKind istructs.S
 
 func TestDeadline() time.Time {
 	deadline := time.Now().Add(5 * time.Second)
-	if coreutils.IsDebug() {
+	if internal.IsDebug() {
 		deadline = deadline.Add(time.Hour)
 	}
 	return deadline
 }
 
 func getTestEmailsAwaitingTimeout() time.Duration {
-	if coreutils.IsDebug() {
+	if internal.IsDebug() {
 		return math.MaxInt
 	}
 	return testEmailsAwaitingTimeout
 }
 
 func getWorkspaceInitAwaitTimeout() time.Duration {
-	if coreutils.IsDebug() {
+	if internal.IsDebug() {
 		// so long for Test_Race_RestaurantIntenseUsage with -race
 		return math.MaxInt
 	}
@@ -456,4 +458,22 @@ func TestRestartPreservingStorage(t *testing.T, cfg *VITConfig, testBeforeRestar
 	vit := NewVIT(t, cfg)
 	defer vit.TearDown()
 	testAfterRestart(t, vit)
+}
+
+func (c *implISchemasCache_sysApps) Get(appQName appdef.AppQName) *parser.AppSchemaAST {
+	if !appQName.IsSys() {
+		return nil
+	}
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	return c.schemas[appQName]
+}
+
+func (c *implISchemasCache_sysApps) Put(appQName appdef.AppQName, schema *parser.AppSchemaAST) {
+	if !appQName.IsSys() {
+		return
+	}
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	c.schemas[appQName] = schema
 }
