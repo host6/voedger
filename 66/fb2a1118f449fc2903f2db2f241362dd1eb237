@@ -1,3 +1,5 @@
 Resolves issue 'rate counter from vsql is always zero'
 
 Resolves #4135 rate counter from vsql is always zero
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4135","jira_ticket_url":"","branch_type":1}
