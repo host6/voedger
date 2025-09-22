@@ -18,14 +18,16 @@ import (
 	"github.com/voedger/voedger/pkg/appdef/builder"
 	"github.com/voedger/voedger/pkg/appdef/filter"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/coreutils"
 	wsdescutil "github.com/voedger/voedger/pkg/coreutils/testwsdesc"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/in10nmem"
 	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/isecretsimpl"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
@@ -61,7 +63,7 @@ var newWorkspaceCmd = appdef.NewQName("sys", "NewWorkspace")
 func TestBasicUsage_SynchronousActualizer(t *testing.T) {
 	require := require.New(t)
 
-	appParts, appStructs, start, stop := deployTestApp(
+	appParts, appStructs, stop := deployTestApp(
 		istructs.AppQName_test1_app1, 1, false,
 		testWorkspace, testWorkspaceDescriptor,
 		func(wsb appdef.IWorkspaceBuilder) {
@@ -81,25 +83,25 @@ func TestBasicUsage_SynchronousActualizer(t *testing.T) {
 		},
 		&BasicAsyncActualizerConfig{})
 
-	createWS(appStructs, istructs.WSID(1001), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(1))
-	createWS(appStructs, istructs.WSID(1002), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(1))
+	idGen := istructsmem.NewIDGenerator()
+	createWS(appStructs, istructs.WSID(1001), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(1), idGen)
+	createWS(appStructs, istructs.WSID(1002), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(2), idGen)
 
 	appParts.DeployAppPartitions(istructs.AppQName_test1_app1, []istructs.PartitionID{1})
 
-	start()
 	defer stop()
 
 	t.Run("Emulate the command processor", func(t *testing.T) {
 		proc := cmdProcMock{appParts}
 
-		proc.TestEvent(1001)
-		proc.TestEvent(1001)
-		proc.TestEvent(1002)
-		proc.TestEvent(1001)
-		proc.TestEvent(1001)
-		proc.TestEvent(1001)
-		proc.TestEvent(1002)
-		proc.TestEvent(1002)
+		require.NoError(proc.TestEvent(1001))
+		require.NoError(proc.TestEvent(1001))
+		require.NoError(proc.TestEvent(1002))
+		require.NoError(proc.TestEvent(1001))
+		require.NoError(proc.TestEvent(1001))
+		require.NoError(proc.TestEvent(1001))
+		require.NoError(proc.TestEvent(1002))
+		require.NoError(proc.TestEvent(1002))
 	})
 
 	// now read the projection values in workspaces
@@ -199,9 +201,9 @@ func deployTestApp(
 ) (
 	appParts appparts.IAppPartitions,
 	appStructs istructs.IAppStructs,
-	start, stop func(),
+	stop func(),
 ) {
-	appParts, _, appStructs, start, stop = deployTestAppEx(
+	appParts, appStructs, stop = deployTestAppEx(
 		appName,
 		appPartsCount,
 		cachedStorage,
@@ -211,7 +213,7 @@ func deployTestApp(
 		prepareAppCfg,
 		actualizerCfg,
 	)
-	return appParts, appStructs, start, stop
+	return appParts, appStructs, stop
 }
 
 func deployTestAppEx(
@@ -224,10 +226,10 @@ func deployTestAppEx(
 	actualizerCfg *BasicAsyncActualizerConfig,
 ) (
 	appParts appparts.IAppPartitions,
-	actualizers IActualizersService,
 	appStructs istructs.IAppStructs,
-	start, stop func(),
+	stop func(),
 ) {
+	actualizerCfg.RetryDelay = RetryDelay(100 * time.Millisecond)
 	adb := builder.New()
 	adb.AddPackage("test", "test.com/test")
 
@@ -282,13 +284,13 @@ func deployTestAppEx(
 	if cachedStorage {
 		storageProvider = istoragecache.Provide(
 			1000000,
-			istorageimpl.Provide(mem.Provide(coreutils.MockTime)),
+			istorageimpl.Provide(mem.Provide(testingu.MockTime)),
 			metrics,
 			vvmName,
-			coreutils.MockTime,
+			testingu.MockTime,
 		)
 	} else {
-		storageProvider = istorageimpl.Provide(mem.Provide(coreutils.MockTime))
+		storageProvider = istorageimpl.Provide(mem.Provide(testingu.MockTime))
 	}
 
 	var (
@@ -302,7 +304,7 @@ func deployTestAppEx(
 			ChannelsPerSubject:      10,
 			Subscriptions:           1000,
 			SubscriptionsPerSubject: 10,
-		}, coreutils.NewITime())
+		}, timeu.NewITime())
 		actualizerCfg.Broker = n10nBroker
 	} else {
 		n10nBroker = actualizerCfg.Broker
@@ -312,7 +314,8 @@ func deployTestAppEx(
 		cfgs,
 		iratesce.TestBucketsFactory,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
-		storageProvider)
+		storageProvider,
+		isequencer.SequencesTrustLevel_0)
 
 	appStructs, err = appStructsProvider.BuiltIn(appName)
 	if err != nil {
@@ -328,7 +331,7 @@ func deployTestAppEx(
 		secretReader = actualizerCfg.SecretReader
 	}
 
-	actualizers = ProvideActualizers(*actualizerCfg)
+	actualizers := ProvideActualizers(*actualizerCfg)
 
 	appParts, appPartsCleanup, err := appparts.New2(
 		vvmCtx,
@@ -350,26 +353,19 @@ func deployTestAppEx(
 
 	appParts.DeployApp(appName, nil, appDef, appPartsCount, appparts.PoolSize(10, 10, 10, 0), cfg.NumAppWorkspaces())
 
-	start = func() {
-		if err := actualizers.Prepare(struct{}{}); err != nil {
-			panic(err)
-		}
-		actualizers.RunEx(vvmCtx, func() {})
-	}
-
 	stop = func() {
 		vvmCancel()
-		actualizers.Stop()
 		appPartsCleanup()
 		if n10cleanup != nil {
 			n10cleanup()
 		}
 	}
 
-	return appParts, actualizers, appStructs, start, stop
+	return appParts, appStructs, stop
 }
 
-func createWS(appStructs istructs.IAppStructs, ws istructs.WSID, wsKind, wsDescriptorKind appdef.QName, partition istructs.PartitionID, offset istructs.Offset) {
+func createWS(appStructs istructs.IAppStructs, ws istructs.WSID, wsKind, wsDescriptorKind appdef.QName, partition istructs.PartitionID, offset istructs.Offset,
+	idGen istructs.IIDGenerator) {
 	now := time.Now()
 	// Create workspace
 	rebWs := appStructs.Events().GetNewRawEventBuilder(istructs.NewRawEventBuilderParams{
@@ -390,17 +386,19 @@ func createWS(appStructs istructs.IAppStructs, ws istructs.WSID, wsKind, wsDescr
 	if err != nil {
 		panic(err)
 	}
-	wsEvent, err := appStructs.Events().PutPlog(rawWsEvent, nil, istructsmem.NewIDGenerator())
+	wsEvent, err := appStructs.Events().PutPlog(rawWsEvent, nil, idGen)
 	if err != nil {
 		panic(err)
 	}
-	appStructs.Records().Apply(wsEvent)
+	if err = appStructs.Records().Apply(wsEvent); err != nil {
+		panic(err)
+	}
 }
 
 func Test_ErrorInSyncActualizer(t *testing.T) {
 	require := require.New(t)
 
-	appParts, appStructs, start, stop := deployTestApp(
+	appParts, appStructs, stop := deployTestApp(
 		istructs.AppQName_test1_app1, 1, false,
 		testWorkspace, testWorkspaceDescriptor,
 		func(wsb appdef.IWorkspaceBuilder) {
@@ -420,13 +418,13 @@ func Test_ErrorInSyncActualizer(t *testing.T) {
 		},
 		&BasicAsyncActualizerConfig{})
 
-	createWS(appStructs, istructs.WSID(1001), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(1))
-	createWS(appStructs, istructs.WSID(1002), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(1))
-	createWS(appStructs, istructs.WSID(1099), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(1))
+	idGen := istructsmem.NewIDGenerator()
+	createWS(appStructs, istructs.WSID(1001), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(1), idGen)
+	createWS(appStructs, istructs.WSID(1002), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(2), idGen)
+	createWS(appStructs, istructs.WSID(1099), testWorkspace, testWorkspaceDescriptor, istructs.PartitionID(1), istructs.Offset(3), idGen)
 
 	appParts.DeployAppPartitions(istructs.AppQName_test1_app1, []istructs.PartitionID{1})
 
-	start()
 	defer stop()
 
 	t.Run("Emulate the command processor", func(t *testing.T) {

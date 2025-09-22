@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"net/http"
 	"runtime/debug"
-	"strconv"
 
 	"github.com/blastrain/vitess-sqlparser/sqlparser"
 
@@ -18,9 +17,10 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
-	"github.com/voedger/voedger/pkg/coreutils/utils"
 	"github.com/voedger/voedger/pkg/dml"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -88,7 +88,7 @@ func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.I
 			logger.Info(fmt.Sprintf("forwarding query to %s/%d", targetAppQName, targetWSID))
 			body := fmt.Sprintf(`{"args":{"Query":%q},"elements":[{"fields":["Result"]}]}`, op.VSQLWithoutAppAndWSID)
 			resp, err := federation.Func(fmt.Sprintf("api/%s/%d/q.sys.SqlQuery", targetAppQName, targetWSID),
-				body, coreutils.WithAuthorizeBy(tokenForTargetApp))
+				body, httpu.WithAuthorizeBy(tokenForTargetApp))
 			if err != nil {
 				return err
 			}
@@ -100,7 +100,6 @@ func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.I
 			}
 			return nil
 		}
-
 		stmt, err := sqlparser.Parse(op.CleanSQL)
 		if err != nil {
 			return err
@@ -131,6 +130,12 @@ func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.I
 
 		table := s.From[0].(*sqlparser.AliasedTableExpr).Expr.(sqlparser.TableName)
 		source := appdef.NewQName(table.Qualifier.String(), table.Name.String())
+		if source.Entity() == "blob" {
+			// FIXME: eliminate this hack
+			// sys.BLOB translates to sys.blob by vitess-sqlparser
+			// https://github.com/voedger/voedger/issues/3708
+			source = appdef.NewQName(appdef.SysPackage, "BLOB")
+		}
 
 		kind := appStructs.AppDef().Type(source).Kind()
 		if _, ok := appStructs.AppDef().Type(source).(appdef.IStructure); ok {
@@ -162,11 +167,7 @@ func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.I
 				return errors.New("ID must not be specified on select from view")
 			}
 			return readViewRecords(ctx, wsID, appdef.NewQName(table.Qualifier.String(), table.Name.String()), whereExpr, appStructs, f, callback)
-		case appdef.TypeKind_CDoc:
-			fallthrough
-		case appdef.TypeKind_CRecord:
-			fallthrough
-		case appdef.TypeKind_WDoc:
+		case appdef.TypeKind_CDoc, appdef.TypeKind_CRecord, appdef.TypeKind_WDoc, appdef.TypeKind_ODoc, appdef.TypeKind_ORecord:
 			return coreutils.WrapSysError(readRecords(wsID, source, whereExpr, appStructs, f, callback, istructs.RecordID(op.EntityID)),
 				http.StatusBadRequest)
 		default:
@@ -209,7 +210,7 @@ func lim(limit *sqlparser.Limit) (int, error) {
 	if limit == nil {
 		return DefaultLimit, nil
 	}
-	v, err := parseInt64(limit.Rowcount.(*sqlparser.SQLVal).Val)
+	v, err := strconvu.ParseInt64(string(limit.Rowcount.(*sqlparser.SQLVal).Val))
 	if err != nil {
 		return 0, err
 	}
@@ -233,7 +234,7 @@ func offs(expr sqlparser.Expr, simpleOffset istructs.Offset) (istructs.Offset, b
 		if simpleOffset > 0 {
 			return 0, false, errors.New("both .Offset and 'where offset ...' clause can not be provided in one query")
 		}
-		v, e := parseUint64(r.Right.(*sqlparser.SQLVal).Val)
+		v, e := strconvu.ParseUint64(string(r.Right.(*sqlparser.SQLVal).Val))
 		if e != nil {
 			return 0, false, e
 		}
@@ -259,14 +260,6 @@ func offs(expr sqlparser.Expr, simpleOffset istructs.Offset) (istructs.Offset, b
 		return 0, false, fmt.Errorf("unsupported expression: %T", r)
 	}
 	return o, eq, nil
-}
-
-func parseInt64(bb []byte) (int64, error) {
-	return strconv.ParseInt(string(bb), utils.DecimalBase, utils.BitSize64)
-}
-
-func parseUint64(bb []byte) (uint64, error) {
-	return strconv.ParseUint(string(bb), utils.DecimalBase, utils.BitSize64)
 }
 
 func getFilter(f func(string) bool) coreutils.MapperOpt {

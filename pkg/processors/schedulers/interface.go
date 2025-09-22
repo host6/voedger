@@ -8,15 +8,13 @@ import (
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
-	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/state"
 )
@@ -33,16 +31,15 @@ type BasicSchedulerConfig struct {
 	Metrics      imetrics.IMetrics
 	Broker       in10n.IN10nBroker
 	Federation   federation.IFederation
-	Time         coreutils.ITime
+	Time         timeu.ITime
 
-	Opts []state.StateOptFunc
+	stateOpts state.StateOpts
 
-	// Optional. Default value: `time.After`
-	AfterError TimeAfterFunc
 	// Optional. Default value: `core-logger.Error`
 	LogError LogErrorFunc
 	//IntentsLimit top limit per event, optional, default value is 100
 	IntentsLimit int
+	EmailSender  state.IEmailSender
 }
 
 type SchedulerConfig struct {
@@ -52,9 +49,4 @@ type SchedulerConfig struct {
 	Workspace istructs.WSID
 	AppWSIdx  istructs.AppWorkspaceNumber
 	Partition istructs.PartitionID // ?
-}
-
-type ISchedulersService interface {
-	pipeline.IServiceEx
-	appparts.ISchedulerRunner
 }

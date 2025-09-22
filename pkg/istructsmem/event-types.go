@@ -55,6 +55,9 @@ type eventType struct {
 
 	// cache supports
 	objcache.RefCounter
+
+	// read from db -> true, event is created by Builder -> false
+	isStored bool
 }
 
 // Returns new empty event
@@ -161,7 +164,7 @@ func (ev *eventType) loadFromBytes(in []byte) (err error) {
 	buf := bytes.NewBuffer(in)
 	var codec byte
 	if codec, err = utils.ReadByte(buf); err != nil {
-		return fmt.Errorf("error read codec version: %w", err)
+		return enrichError(err, "error read codec version")
 	}
 	switch codec {
 	case codec_RawDynoBuffer, codec_RDB_1, codec_RDB_2:
@@ -470,7 +473,7 @@ func (cud *cudType) regenerateIDsPlan(generator istructs.IIDGenerator) (newIDs n
 		id := rec.ID()
 		if !id.IsRaw() {
 			// storage IDs are allowed for sync events
-			generator.UpdateOnSync(id, rec.typ)
+			generator.UpdateOnSync(id)
 			continue
 		}
 
@@ -481,7 +484,7 @@ func (cud *cudType) regenerateIDsPlan(generator istructs.IIDGenerator) (newIDs n
 				return nil, err
 			}
 		} else {
-			if storeID, err = generator.NextID(id, rec.typ); err != nil {
+			if storeID, err = generator.NextID(id); err != nil {
 				return nil, err
 			}
 		}
@@ -649,7 +652,7 @@ func (upd *updateRecType) build() (err error) {
 	}
 
 	userChanges := false
-	upd.changes.dyB.IterateFields(nil, func(name string, newData interface{}) bool {
+	upd.changes.dyB.IterateFields(nil, func(name string, newData any) bool {
 		upd.result.dyB.Set(name, newData)
 		userChanges = true
 		return true
@@ -730,6 +733,21 @@ func (o *objectType) clear() {
 	o.child = make([]*objectType, 0)
 }
 
+// Finds object within object hierarchy by visit function.
+// visit function should return true if object is found
+// If object is found then returns it, otherwise returns nil.
+func (o *objectType) find(visit func(*objectType) bool) *objectType {
+	if visit(o) {
+		return o
+	}
+	for _, c := range o.child {
+		if found := c.find(visit); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
 // forEach applies cb function to element and all it children recursive
 func (o *objectType) forEach(cb func(c *objectType) error) (err error) {
 	if err = cb(o); err == nil {
@@ -768,7 +786,7 @@ func (o *objectType) regenerateIDs(generator istructs.IIDGenerator) (err error) 
 	err = o.forEach(
 		func(c *objectType) error {
 			if id := c.ID(); id.IsRaw() {
-				storeID, err := generator.NextID(id, c.typ)
+				storeID, err := generator.NextID(id)
 				if err != nil {
 					return err
 				}
@@ -912,7 +930,7 @@ func (o *objectType) FillFromJSON(data map[string]any) {
 			o.PutChars(n, fv)
 		case bool:
 			o.PutBool(n, fv)
-		case []interface{}:
+		case []any:
 			// e.g. "order_item": [<2 children>]
 			cont := o.typ.(appdef.IWithContainers).Container(n)
 			if cont == nil {

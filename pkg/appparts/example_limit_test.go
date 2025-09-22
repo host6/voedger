@@ -14,8 +14,9 @@ import (
 	"github.com/voedger/voedger/pkg/appdef/builder"
 	"github.com/voedger/voedger/pkg/appdef/filter"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/iratesce"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	"github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -33,6 +34,8 @@ func ExampleIAppPartition_IsLimitExceeded() {
 
 		wsName := appdef.NewQName("test", "workspace")
 		wsb := adb.AddWorkspace(wsName)
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 		_ = wsb.AddCommand(cmd1Name)
 		_ = wsb.AddCommand(cmd2Name)
 
@@ -62,15 +65,16 @@ func ExampleIAppPartition_IsLimitExceeded() {
 	appConfigs := istructsmem.AppConfigsType{}
 	appConfigs.AddBuiltInAppConfig(istructs.AppQName_test1_app1, adb).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-	appStructs := istructsmem.Provide(
+	appStructsProvider := istructsmem.Provide(
 		appConfigs,
 		iratesce.TestBucketsFactory,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
-		provider.Provide(mem.Provide(coreutils.MockTime), ""))
+		provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0)
 
-	appParts, cleanupParts, err := appparts.New2(
-		context.Background(),
-		appStructs,
+	vvmCtx, cancel := context.WithCancel(context.Background())
+	appParts, cleanup, err := appparts.New2(
+		vvmCtx,
+		appStructsProvider,
 		appparts.NullSyncActualizerFactory,
 		appparts.NullActualizerRunner,
 		appparts.NullSchedulerRunner,
@@ -80,8 +84,10 @@ func ExampleIAppPartition_IsLimitExceeded() {
 	if err != nil {
 		panic(err)
 	}
-	defer cleanupParts()
-
+	defer func() {
+		cancel()
+		cleanup()
+	}()
 	appParts.DeployApp(istructs.AppQName_test1_app1, nil, app, 1, appparts.PoolSize(1, 1, 1, 1), istructs.DefaultNumAppWorkspaces)
 	appParts.DeployAppPartitions(istructs.AppQName_test1_app1, []istructs.PartitionID{1})
 
@@ -104,7 +110,7 @@ func ExampleIAppPartition_IsLimitExceeded() {
 
 	fmt.Println(partition.IsLimitExceeded(cmd2Name, appdef.OperationKind_Execute, 1, `addr1`)) // Exceeded WS
 
-	coreutils.MockTime.Add(time.Minute) // Wait for the next minute
+	testingu.MockTime.Add(time.Minute) // Wait for the next minute
 
 	// check limits is respawned
 	fmt.Println(partition.IsLimitExceeded(cmd1Name, appdef.OperationKind_Execute, 1, `addr1`))

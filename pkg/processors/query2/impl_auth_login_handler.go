@@ -13,28 +13,29 @@ import (
 
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/sys/authnz"
 )
 
-// [~server.apiv2.auth/cmp.authLoginHandler~impl]
+// [~server.authnz/cmp.authLoginHandler~impl]
 func authLoginHandler() apiPathHandler {
 	return apiPathHandler{
 		exec: func(ctx context.Context, qw *queryWork) (err error) {
 
 			args := coreutils.MapObject(qw.msg.QueryParams().Argument)
-			login, _, err := args.AsString("Login")
+			login, _, err := args.AsString(fieldLogin)
 			if err != nil {
 				return coreutils.NewHTTPError(http.StatusBadRequest, err)
 			}
-			password, _, err := args.AsString("Password")
+			password, _, err := args.AsString(fieldPassword)
 			if err != nil {
 				return coreutils.NewHTTPError(http.StatusBadRequest, err)
 			}
 
 			pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, login, istructs.CurrentClusterID())
 
-			url := fmt.Sprintf(`api/v2/apps/%s/%s/workspaces/%d/queries/registry.IssuePrincipalToken?arg=%s`,
+			url := fmt.Sprintf(`api/v2/apps/%s/%s/workspaces/%d/queries/registry.IssuePrincipalToken?args=%s`,
 				istructs.SysOwner, istructs.AppQName_sys_registry.Name(), pseudoWSID,
 				url.QueryEscape(fmt.Sprintf(`{"Login":"%s", "Password":"%s", "AppName": "%s"}`, login, password, qw.msg.AppQName())))
 			resp, err := qw.federation.Query(url)
@@ -52,13 +53,17 @@ func authLoginHandler() apiPathHandler {
 				return errors.New("the login profile is created with an error: " + wsError)
 			}
 
-			expiresIn := authnz.DefaultPrincipalTokenExpiration.Seconds()
+			if wsid == 0 {
+				return coreutils.NewHTTPError(http.StatusConflict, fmt.Errorf("profile workspace is not yet ready, try again later"))
+			}
+
+			expiresInSeconds := authnz.DefaultPrincipalTokenExpiration.Seconds()
 			json := fmt.Sprintf(`{
-				"PrincipalToken": "%s",
-				"ExpiresIn": %d,
-				"WSID": %d
-			}`, token, int(expiresIn), int(wsid))
-			return qw.msg.Responder().Respond(bus.ResponseMeta{ContentType: coreutils.ContentType_ApplicationJSON, StatusCode: http.StatusOK}, json)
+				"%s": "%s",
+				"%s": %d,
+				"%s": %d
+			}`, fieldPrincipalToken, token, fieldExpiresInSeconds, int(expiresInSeconds), fieldProfileWSID, int(wsid))
+			return qw.msg.Responder().Respond(bus.ResponseMeta{ContentType: httpu.ContentType_ApplicationJSON, StatusCode: http.StatusOK}, json)
 		},
 	}
 }

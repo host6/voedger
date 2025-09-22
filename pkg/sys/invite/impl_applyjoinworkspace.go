@@ -8,9 +8,10 @@ import (
 	"fmt"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -19,14 +20,14 @@ import (
 	"github.com/voedger/voedger/pkg/sys/collection"
 )
 
-func asyncProjectorApplyJoinWorkspace(time coreutils.ITime, federation federation.IFederation, tokens itokens.ITokens) istructs.Projector {
+func asyncProjectorApplyJoinWorkspace(time timeu.ITime, federation federation.IFederation, tokens itokens.ITokens) istructs.Projector {
 	return istructs.Projector{
 		Name: qNameAPApplyJoinWorkspace,
 		Func: applyJoinWorkspace(time, federation, tokens),
 	}
 }
 
-func applyJoinWorkspace(time coreutils.ITime, federation federation.IFederation, tokens itokens.ITokens) func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
+func applyJoinWorkspace(time timeu.ITime, federation federation.IFederation, tokens itokens.ITokens) func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
 	return func(event istructs.IPLogEvent, s istructs.IState, intents istructs.IIntents) (err error) {
 		// it is AFTER EXECUTE ON (InitiateJoinWorkspace) so no doc checking here
 		skbCDocInvite, err := s.KeyBuilder(sys.Storage_Record, qNameCDocInvite)
@@ -41,10 +42,12 @@ func applyJoinWorkspace(time coreutils.ITime, federation federation.IFederation,
 
 		login := svCDocInvite.AsString(Field_Login)
 		subjectExistsByActualLogin := false
-		subjectExistsByLogin, existingSubjectID, err := SubjectExistsByLogin(login, s) // for backward compatibility
+		existingSubjectID, err := SubjectExistsByLogin(login, s) // for backward compatibility
+		subjectExistsByLogin := existingSubjectID > 0
 		if err == nil && !subjectExistsByLogin {
 			login = svCDocInvite.AsString(field_ActualLogin)
-			subjectExistsByActualLogin, existingSubjectID, err = SubjectExistsByLogin(login, s)
+			existingSubjectID, err = SubjectExistsByLogin(login, s)
+			subjectExistsByActualLogin = existingSubjectID > 0
 		}
 		if err != nil {
 			// notest
@@ -83,8 +86,8 @@ func applyJoinWorkspace(time coreutils.ITime, federation federation.IFederation,
 			fmt.Sprintf("api/%s/%d/c.sys.CreateJoinedWorkspace", appQName, svCDocInvite.AsInt64(field_InviteeProfileWSID)),
 			fmt.Sprintf(`{"args":{"Roles":"%s","InvitingWorkspaceWSID":%d,"WSName":%q}}`,
 				svCDocInvite.AsString(Field_Roles), event.Workspace(), svCDocWorkspaceDescriptor.AsString(authnz.Field_WSName)),
-			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse(),
+			httpu.WithAuthorizeBy(token),
+			httpu.WithDiscardResponse(),
 		)
 		if err != nil {
 			return
@@ -128,7 +131,7 @@ func applyJoinWorkspace(time coreutils.ITime, federation federation.IFederation,
 		resp, err := federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			body,
-			coreutils.WithAuthorizeBy(token))
+			httpu.WithAuthorizeBy(token))
 		if err != nil {
 			return
 		}
@@ -145,8 +148,8 @@ func applyJoinWorkspace(time coreutils.ITime, federation federation.IFederation,
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			body,
-			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse())
+			httpu.WithAuthorizeBy(token),
+			httpu.WithDiscardResponse())
 
 		return err
 	}

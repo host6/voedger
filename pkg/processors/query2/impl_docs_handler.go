@@ -6,12 +6,13 @@ package query2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/pipeline"
@@ -31,36 +32,23 @@ func docsHandler() apiPathHandler {
 	}
 }
 func docsSetRequestType(ctx context.Context, qw *queryWork) error {
-	switch qw.iWorkspace {
-	case nil:
-		// workspace is dummy
-		if qw.iQuery = appdef.Query(qw.appStructs.AppDef().Type, qw.msg.QName()); qw.iQuery == nil {
-			if qw.iDoc = appdef.CDoc(qw.appStructs.AppDef().Type, qw.msg.QName()); qw.iDoc != nil {
-				return nil
-			}
-			if qw.iDoc = appdef.WDoc(qw.appStructs.AppDef().Type, qw.msg.QName()); qw.iDoc != nil {
-				return nil
-			}
-			if qw.iRecord = appdef.CRecord(qw.appStructs.AppDef().Type, qw.msg.QName()); qw.iRecord != nil {
-				return nil
-			}
-			if qw.iRecord = appdef.WRecord(qw.appStructs.AppDef().Type, qw.msg.QName()); qw.iRecord != nil {
-				return nil
-			}
-		}
-	default:
-		if qw.iDoc = appdef.CDoc(qw.iWorkspace.Type, qw.msg.QName()); qw.iDoc != nil {
-			return nil
-		}
-		if qw.iDoc = appdef.WDoc(qw.iWorkspace.Type, qw.msg.QName()); qw.iDoc != nil {
-			return nil
-		}
-		if qw.iRecord = appdef.CRecord(qw.iWorkspace.Type, qw.msg.QName()); qw.iRecord != nil {
-			return nil
-		}
-		if qw.iRecord = appdef.WRecord(qw.iWorkspace.Type, qw.msg.QName()); qw.iRecord != nil {
-			return nil
-		}
+	if qw.iDoc = appdef.CDoc(qw.iWorkspace.Type, qw.msg.QName()); qw.iDoc != nil {
+		return nil
+	}
+	if qw.iDoc = appdef.WDoc(qw.iWorkspace.Type, qw.msg.QName()); qw.iDoc != nil {
+		return nil
+	}
+	if qw.iDoc = appdef.ODoc(qw.iWorkspace.Type, qw.msg.QName()); qw.iDoc != nil {
+		return nil
+	}
+	if qw.iRecord = appdef.CRecord(qw.iWorkspace.Type, qw.msg.QName()); qw.iRecord != nil {
+		return nil
+	}
+	if qw.iRecord = appdef.WRecord(qw.iWorkspace.Type, qw.msg.QName()); qw.iRecord != nil {
+		return nil
+	}
+	if qw.iRecord = appdef.ORecord(qw.iWorkspace.Type, qw.msg.QName()); qw.iRecord != nil {
+		return nil
 	}
 	return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("document or record %s is not defined in %v", qw.msg.QName(), qw.iWorkspace))
 }
@@ -92,14 +80,20 @@ func docsAuthorizeResult(ctx context.Context, qw *queryWork) (err error) {
 	}
 	// TODO: what to do with included objects?
 	// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-	ok := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
-	if !ok {
-		if ok, err = qw.appPart.IsOperationAllowed(ws, appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, qw.roles); err != nil {
+	oldACLOk := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
+	newACLOk := true
+	newACLCalculated := true
+	if newACLOk, err = qw.appPart.IsOperationAllowed(ws, appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, qw.roles); err != nil {
+		if !errors.Is(err, appdef.ErrNotFoundError) || !oldACLOk {
 			return err
 		}
+		newACLCalculated = false
 	}
-	if !ok {
+	if !newACLOk && !oldACLOk {
 		return coreutils.NewSysError(http.StatusForbidden)
+	}
+	if newACLCalculated && !newACLOk && oldACLOk {
+		logger.Verbose("newACL not ok, but oldACL ok.", appdef.OperationKind_Select, qw.resultType.QName(), qw.roles)
 	}
 	return nil
 }
@@ -111,24 +105,16 @@ func docsRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Keys) != 0 {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
-	sender := &sender{
-		responder:          qw.msg.Responder(),
-		isArrayResponse:    false,
-		contentType:        coreutils.ContentType_ApplicationJSON,
-		rowsProcessorErrCh: qw.rowsProcessorErrCh,
-	}
+	sender := qw.getObjectSender()
 	oo = append(oo, pipeline.WireAsyncOperator("Sender", sender))
 	qw.rowsProcessor = pipeline.NewAsyncPipeline(ctx, "View rows processor", oo[0], oo[1:]...)
-	qw.responseWriterGetter = func() bus.IResponseWriter {
-		return sender.respWriter
-	}
 	return
 }
 
 func docsExec(_ context.Context, qw *queryWork) (err error) {
 	var rec istructs.IRecord
 
-	if qw.iDoc != nil && qw.iDoc.Singleton() {
+	if qw.iDoc != nil && qw.isDocSingleton() {
 		if qw.msg.DocID() != 0 {
 			return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Errorf("document %s is singleton. DocID must be 0", qw.msg.QName()))
 		}
@@ -140,7 +126,12 @@ func docsExec(_ context.Context, qw *queryWork) (err error) {
 			return coreutils.NewHTTPErrorf(http.StatusNotFound, fmt.Errorf("singleton %s not found", qw.msg.QName()))
 		}
 	} else {
-		rec, err = qw.appStructs.Records().Get(qw.msg.WSID(), true, istructs.RecordID(qw.msg.DocID()))
+		if (qw.iDoc != nil && qw.iDoc.Kind() == appdef.TypeKind_ODoc) ||
+			(qw.iRecord != nil && qw.iRecord.Kind() == appdef.TypeKind_ORecord) {
+			rec, err = qw.appStructs.Events().GetORec(qw.msg.WSID(), istructs.RecordID(qw.msg.DocID()), istructs.NullOffset)
+		} else {
+			rec, err = qw.appStructs.Records().Get(qw.msg.WSID(), true, istructs.RecordID(qw.msg.DocID()))
+		}
 		if err != nil {
 			return err
 		}

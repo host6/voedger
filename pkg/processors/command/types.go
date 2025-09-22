@@ -72,7 +72,7 @@ type cmdWorkpiece struct {
 	pLogEvent                    istructs.IPLogEvent
 	appPartition                 *appPartition
 	workspace                    *workspace
-	idGenerator                  *implIDGenerator
+	idGeneratorReporter          *implIDGeneratorReporter
 	eca                          istructs.ExecCommandArgs
 	metrics                      commandProcessorMetrics
 	syncProjectorsStart          time.Time
@@ -90,9 +90,10 @@ type cmdWorkpiece struct {
 	appPartitionRestartScheduled bool
 	cmdQName                     appdef.QName
 	statusCodeOfSuccess          int
+	reapplier                    istructs.IEventReapplier
 }
 
-type implIDGenerator struct {
+type implIDGeneratorReporter struct {
 	istructs.IIDGenerator
 	generatedIDs map[istructs.RecordID]istructs.RecordID
 }
@@ -144,7 +145,7 @@ func newHostStateProvider(ctx context.Context, secretReader isecrets.ISecretRead
 	p := &hostStateProvider{}
 	p.state = stateprovide.ProvideCommandProcessorStateFactory()(ctx, p.getAppStructs, p.getPartititonID,
 		p.getWSID, secretReader, p.getCUD, p.getPrincipals, p.getToken, actualizers.DefaultIntentsLimit,
-		p.getCmdResultBuilder, p.getCmdPrepareArgs, p.getArgs, p.getUnloggedArgs, p.getWLogOffset)
+		p.getCmdResultBuilder, p.getCmdPrepareArgs, p.getArgs, p.getUnloggedArgs, p.getWLogOffset, state.NullOpts)
 	return p
 }
 

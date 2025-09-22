@@ -11,7 +11,6 @@ import (
 	"runtime/debug"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
@@ -51,10 +50,6 @@ func querySetResultType(ctx context.Context, qw *queryWork, statelessResources i
 	qNameResultType := iQueryFunc.ResultType(qw.execQueryArgs.PrepareArgs)
 
 	ws := qw.iWorkspace
-	if ws == nil {
-		// workspace is dummy
-		ws = qw.iQuery.Workspace()
-	}
 	qw.resultType = ws.Type(qNameResultType)
 	if qw.resultType.Kind() == appdef.TypeKind_null {
 		return coreutils.NewHTTPError(http.StatusBadRequest, fmt.Errorf("%s query result type %s does not exist in %v", qw.iQuery.QName(), qNameResultType, ws))
@@ -66,6 +61,10 @@ func queryAuthorizeResult(ctx context.Context, qw *queryWork) error {
 	return nil
 }
 func queryRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
+	result := qw.appStructs.AppDef().Type(qw.iQuery.QName()).(appdef.IQuery).Result()
+	if result == nil {
+		return nil
+	}
 	oo := make([]*pipeline.WiredOperator, 0)
 	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Include) != 0 {
 		oo = append(oo, pipeline.WireAsyncOperator("Include", newInclude(qw, false)))
@@ -73,9 +72,10 @@ func queryRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	if qw.queryParams.Constraints != nil && (len(qw.queryParams.Constraints.Order) != 0 || qw.queryParams.Constraints.Skip > 0 || qw.queryParams.Constraints.Limit > 0) {
 		oo = append(oo, pipeline.WireAsyncOperator("Aggregator", newAggregator(qw.queryParams)))
 	}
-	o, err := newFilter(qw, qw.appStructs.AppDef().Type(qw.appStructs.AppDef().Type(qw.iQuery.QName()).(appdef.IQuery).Result().QName()).(appdef.IWithFields).Fields())
+	resultType := qw.appStructs.AppDef().Type(result.QName())
+	o, err := newFilter(qw, resultType.(appdef.IWithFields).Fields())
 	if err != nil {
-		return
+		return err
 	}
 	if o != nil {
 		oo = append(oo, pipeline.WireAsyncOperator("Filter", o))
@@ -83,12 +83,10 @@ func queryRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	if qw.queryParams.Constraints != nil && len(qw.queryParams.Constraints.Keys) != 0 {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
-	sender := &sender{responder: qw.msg.Responder(), isArrayResponse: true}
+	sender, respWriterGetter := qw.getArraySender()
 	oo = append(oo, pipeline.WireAsyncOperator("Sender", sender))
 	qw.rowsProcessor = pipeline.NewAsyncPipeline(ctx, "View rows processor", oo[0], oo[1:]...)
-	qw.responseWriterGetter = func() bus.IResponseWriter {
-		return sender.respWriter
-	}
+	qw.responseWriterGetter = respWriterGetter
 	return
 }
 func queryExec(ctx context.Context, qw *queryWork) (err error) {

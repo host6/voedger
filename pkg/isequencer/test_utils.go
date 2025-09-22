@@ -9,12 +9,11 @@ import (
 	"context"
 	"math"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 )
 
-var actualizationTimeoutLimit = 1 * time.Second
+const actualizationTimeoutLimit = maxRetryDelay
 
 // waitForActualization waits for actualization to complete by repeatedly calling Start
 func WaitForStart(t *testing.T, seq ISequencer, wsKind WSKind, wsID WSID, shouldBeOk bool) PLogOffset {
@@ -98,9 +97,6 @@ func (m *MockStorage) ReadNumbers(wsid WSID, seqIDs []SeqID) ([]Number, error) {
 
 	result := make([]Number, len(seqIDs))
 
-	m.numbersMu.RLock()
-	defer m.numbersMu.RUnlock()
-
 	wsNumbers, exists := m.Numbers[wsid]
 	if !exists {
 		return result, nil // Return zeros if workspace not found
@@ -119,8 +115,8 @@ func (m *MockStorage) ReadNumbers(wsid WSID, seqIDs []SeqID) ([]Number, error) {
 func (m *MockStorage) WriteValuesAndNextPLogOffset(batch []SeqValue, offset PLogOffset) error {
 	// notest
 
-	m.mu.RLock()
-	defer m.mu.RUnlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if m.onWriteValuesAndOffset != nil {
 		m.onWriteValuesAndOffset()
@@ -129,9 +125,6 @@ func (m *MockStorage) WriteValuesAndNextPLogOffset(batch []SeqValue, offset PLog
 	if m.writeValuesAndOffsetError != nil {
 		return m.writeValuesAndOffsetError
 	}
-
-	m.numbersMu.Lock()
-	defer m.numbersMu.Unlock()
 
 	// batch could be empty here for the offset that is just written
 	// case:
@@ -221,4 +214,13 @@ func (m *MockStorage) AddPLogEntry(offset PLogOffset, wsid WSID, seqID SeqID, nu
 			Value: number,
 		},
 	)
+}
+
+func NewDefaultParams(seqTypes map[WSKind]map[SeqID]Number) Params {
+	return Params{
+		SeqTypes:                          seqTypes,
+		MaxNumUnflushedValues:             DefaultMaxNumUnflushedValues,
+		LRUCacheSize:                      DefaultLRUCacheSize,
+		BatcherDelayOnToBeFlushedOverflow: defaultBatcherDelayOnToBeFlushedOverflow,
+	}
 }

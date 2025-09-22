@@ -10,15 +10,17 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appdef/builder"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/irates"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	"github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -164,7 +166,7 @@ func Test_BasicUsage(t *testing.T) {
 
 	csingleton := appdef.CDoc(app.Type, appdef.NewQName("main", "SubscriptionProfile"))
 	require.True(csingleton.Singleton())
-	require.Equal("CSingletones is a configration singleton.\nThese comments are included in the statement definition, but may be overridden with `WITH Comment=...`", csingleton.Comment())
+	require.Equal("CSingletones is a configuration singleton.\nThese comments are included in the statement definition, but may be overridden with `WITH Comment=...`", csingleton.Comment())
 
 	wsingletone := appdef.WDoc(app.Type, appdef.NewQName("main", "Transaction"))
 	require.True(wsingletone.Singleton())
@@ -276,7 +278,7 @@ func Test_BasicUsage(t *testing.T) {
 
 	t.Run("Jobs", func(t *testing.T) {
 		job1 := appdef.Job(app.Type, appdef.NewQName("main", "TestJob1"))
-		require.EqualValues(`1 0 * * *`, job1.CronSchedule())
+		require.Equal(`1 0 * * *`, job1.CronSchedule())
 		t.Run("Job states", func(t *testing.T) {
 			stateCount := 0
 			for _, n := range proj.States().Names() {
@@ -297,7 +299,7 @@ func Test_BasicUsage(t *testing.T) {
 		})
 
 		job2 := appdef.Job(app.Type, appdef.NewQName("main", "TestJob2"))
-		require.EqualValues(`@every 2m30s`, job2.CronSchedule())
+		require.Equal(`@every 2m30s`, job2.CronSchedule())
 	})
 
 	cmd = appdef.Command(app.Type, appdef.NewQName("main", "NewOrder2"))
@@ -341,7 +343,8 @@ func (require *ParserAssertions) NoBuildError(sql string) {
 	schema, err := require.AppSchema(sql)
 	require.NoError(err)
 	builder := builder.New()
-	BuildAppDefs(schema, builder)
+	err = BuildAppDefs(schema, builder)
+	require.NoError(err)
 }
 
 func (require *ParserAssertions) Build(sql string) appdef.IAppDef {
@@ -418,7 +421,7 @@ func Test_Refs_NestedTables(t *testing.T) {
 
 	inner1 := app.Type(appdef.NewQName("pkg1", "inner1"))
 	ref1 := inner1.(appdef.IWithFields).RefField("ref1")
-	require.EqualValues([]appdef.QName{appdef.NewQName("pkg1", "table3")}, ref1.Refs())
+	require.Equal([]appdef.QName{appdef.NewQName("pkg1", "table3")}, ref1.Refs())
 }
 
 func Test_CircularReferencesTables(t *testing.T) {
@@ -1023,15 +1026,28 @@ func Test_Commands(t *testing.T) {
 
 func Test_Queries(t *testing.T) {
 	require := assertions(t)
-	require.AppSchemaError(`APPLICATION test();
+	t.Run("Query with fake return type", func(t *testing.T) {
+		require.AppSchemaError(`APPLICATION test();
 	WORKSPACE Workspace (
 		EXTENSION ENGINE BUILTIN (
 			QUERY q(fake.Fake) RETURNS fake.Fake
 		);
 	)
 	`, "file.vsql:4:12: fake undefined",
-		"file.vsql:4:31: fake undefined",
-	)
+			"file.vsql:4:31: fake undefined",
+		)
+
+	})
+	t.Run("Query with no return", func(t *testing.T) {
+
+		require := assertions(t)
+		require.AppSchemaError(`APPLICATION test();
+	WORKSPACE Workspace (
+		EXTENSION ENGINE BUILTIN (
+			QUERY Qry();
+		);
+	)`, "file.vsql:4:4: query must have a return type")
+	})
 }
 
 func Test_DuplicatesInViews(t *testing.T) {
@@ -2231,6 +2247,25 @@ func Test_Constraints(t *testing.T) {
 		CONSTRAINT c2 UNIQUE(t2, t1)
 	))`, "file.vsql:7:3: field t1 already in unique constraint")
 
+	t.Run("Unique ref fields", func(t *testing.T) {
+		schema, err := require.AppSchema(`
+	 	APPLICATION app1(); WORKSPACE ws1 (
+			TABLE t1 INHERITS sys.CDoc ();
+	    TABLE t2 INHERITS sys.WDoc (
+        f1 ref(t1) NOT NULL,
+        UNIQUE(f1)
+    ))`)
+		require.NoError(err)
+		builder := builder.New()
+		err = BuildAppDefs(schema, builder)
+		require.NoError(err)
+
+		app, err := builder.Build()
+		require.NoError(err)
+		wdoc := appdef.WDoc(app.Type, appdef.NewQName("pkg", "t2"))
+		require.NotNil(wdoc)
+		require.Equal(1, wdoc.UniqueCount())
+	})
 }
 
 func Test_Grants(t *testing.T) {
@@ -2372,6 +2407,67 @@ func Test_Grants(t *testing.T) {
 		require.Equal(1, numACLs)
 	})
 
+	t.Run("Grant ops with different fields", func(t *testing.T) {
+		schema, err := require.AppSchema(`APPLICATION test();
+			WORKSPACE W (
+				ROLE role;
+				TABLE t INHERITS sys.CDoc(
+					number int32,
+					name varchar
+				);
+				GRANT
+					SELECT(sys.ID, number, name),
+					UPDATE(number, name)
+				ON TABLE t TO role;
+			);
+		`)
+		require.NoError(err)
+		builder := builder.New()
+		require.NoError(BuildAppDefs(schema, builder))
+		app, err := builder.Build()
+		require.NoError(err)
+
+		t.Log(app.ACL())
+		require.Len(app.ACL(), 2)
+		for _, acl := range app.ACL() {
+			require.Equal(appdef.PolicyKind_Allow, acl.Policy())
+			require.Equal("pkg.role", acl.Principal().QName().String())
+			if acl.Ops()[0] == appdef.OperationKind_Select {
+				require.Equal([]appdef.OperationKind{appdef.OperationKind_Select}, acl.Ops())
+				require.Equal([]string{"sys.ID", "number", "name"}, acl.Filter().Fields())
+			} else {
+				require.Equal([]appdef.OperationKind{appdef.OperationKind_Update}, acl.Ops())
+				require.Equal([]string{"number", "name"}, acl.Filter().Fields())
+			}
+		}
+	})
+
+	t.Run("Grant all with fields", func(t *testing.T) {
+		schema, err := require.AppSchema(`APPLICATION test();
+			WORKSPACE W (
+				ROLE role;
+				TABLE t INHERITS sys.CDoc(
+					number int32,
+					name varchar
+				);
+				GRANT ALL(number, name) ON TABLE t TO role;
+			);
+		`)
+		require.NoError(err)
+		builder := builder.New()
+		require.NoError(BuildAppDefs(schema, builder))
+		app, err := builder.Build()
+		require.NoError(err)
+
+		t.Log(app.ACL())
+		require.Len(app.ACL(), 1)
+		for _, acl := range app.ACL() {
+			require.Equal(appdef.PolicyKind_Allow, acl.Policy())
+			require.Equal("pkg.role", acl.Principal().QName().String())
+			require.Equal([]appdef.OperationKind{appdef.OperationKind_Insert, appdef.OperationKind_Update, appdef.OperationKind_Select}, acl.Ops())
+			require.Equal([]string{"number", "name"}, acl.Filter().Fields())
+		}
+	})
 }
 
 func Test_Grants_Inherit(t *testing.T) {
@@ -2403,7 +2499,7 @@ func Test_Grants_Inherit(t *testing.T) {
 			require.Equal(appdef.PolicyKind_Allow, acl.Policy())
 
 			require.Equal(appdef.FilterKind_Types, acl.Filter().Kind())
-			require.EqualValues(
+			require.Equal(
 				[]appdef.TypeKind{appdef.TypeKind_GDoc, appdef.TypeKind_CDoc, appdef.TypeKind_ODoc, appdef.TypeKind_WDoc,
 					appdef.TypeKind_GRecord, appdef.TypeKind_CRecord, appdef.TypeKind_ORecord, appdef.TypeKind_WRecord},
 				acl.Filter().Types())
@@ -2638,7 +2734,8 @@ func Test_RatesAndLimits(t *testing.T) {
 		typ := w.Type(appdef.NewQName("pkg", "r"))
 		r, ok := typ.(appdef.IRate)
 		require.True(ok)
-		require.NotNil(r)
+		require.EqualValues(1, r.Count())
+		require.Equal(time.Hour, r.Period())
 		require.True(r.Scope(appdef.RateScope_AppPartition))
 		require.False(r.Scope(appdef.RateScope_Workspace))
 		require.False(r.Scope(appdef.RateScope_IP))
@@ -2736,57 +2833,16 @@ func Test_RefsWorkspaces(t *testing.T) {
 	);`)
 }
 
-func Test_ScheduledProjectors(t *testing.T) {
-
-	t.Run("should be deprecated", func(t *testing.T) {
-		require := assertions(t)
-		require.AppSchemaError(
-			`APPLICATION test();
+func Test_ScheduledProjectorsDeprecated(t *testing.T) {
+	require := assertions(t)
+	require.AppSchemaError(
+		`APPLICATION test();
 				ALTER WORKSPACE sys.AppWorkspaceWS (
 					EXTENSION ENGINE BUILTIN (
 						PROJECTOR ScheduledProjector CRON '1 0 * * *';
 					);
 				);`,
-			"file.vsql:4:7: scheduled projector deprecated; use jobs instead")
-	})
-
-	t.Run("bad workspace", func(t *testing.T) {
-		t.Skip()
-		require := assertions(t)
-		require.AppSchemaError(`APPLICATION test();
-			WORKSPACE w2 (
-				EXTENSION ENGINE BUILTIN (
-					PROJECTOR Proj1 CRON '1 0 * * *';
-				);
-			);`, "file.vsql:4:6: scheduled projector must be in app workspace")
-	})
-
-	t.Run("bad cron and intents", func(t *testing.T) {
-		t.Skip()
-		require := assertions(t)
-		require.AppSchemaError(`APPLICATION test();
-			ALTER WORKSPACE AppWorkspaceWS (
-				VIEW test(
-					i int32,
-					PRIMARY KEY(i)
-				) AS RESULT OF Proj1;
-
-				EXTENSION ENGINE BUILTIN (
-					PROJECTOR Proj1 CRON 'blah' INTENTS (sys.View(test));
-				);
-			);`, "file.vsql:9:6: invalid cron schedule: blah", "file.vsql:9:6: scheduled projector cannot have intents")
-	})
-
-	t.Run("good cron", func(t *testing.T) {
-		t.Skip()
-		require := assertions(t)
-		require.NoAppSchemaError(`APPLICATION test();
-ALTER WORKSPACE sys.AppWorkspaceWS (
-	EXTENSION ENGINE BUILTIN (
-		PROJECTOR ScheduledProjector CRON '1 0 * * *';
-	);
-);`)
-	})
+		"file.vsql:4:7: scheduled projector deprecated; use jobs instead")
 }
 
 func Test_UseWorkspace(t *testing.T) {
@@ -2802,14 +2858,13 @@ func Test_UseWorkspace(t *testing.T) {
 func Test_Jobs(t *testing.T) {
 
 	t.Run("bad workspace", func(t *testing.T) {
-		t.Skip()
 		require := assertions(t)
 		require.AppSchemaError(`APPLICATION test();
 			WORKSPACE w2 (
 				EXTENSION ENGINE BUILTIN (
 					JOB Job1 '1 0 * * *';
 				);
-			);`, "file.vsql:4:6: job must be in app workspace")
+			);`, "file.vsql:4:6: JOB is only allowed in AppWorkspaceWS")
 	})
 
 	t.Run("bad cron", func(t *testing.T) {
@@ -2831,27 +2886,51 @@ func Test_Jobs(t *testing.T) {
 				);
 			);`)
 	})
+
+	t.Run("missing cron", func(t *testing.T) {
+		require := assertions(t)
+		require.AppSchemaError(`APPLICATION test();
+			ALTER WORKSPACE sys.AppWorkspaceWS (
+				EXTENSION ENGINE BUILTIN (
+					JOB GoodJob '1 0 * * *';
+					JOB JobWithNoCron;
+				);
+			);`, "file.vsql:5:6: job without cron schedule is not allowed")
+	})
+
+	t.Run("missing cron version 2", func(t *testing.T) {
+		require := assertions(t)
+		require.AppSchemaError(`APPLICATION test();
+			ALTER WORKSPACE sys.AppWorkspaceWS (
+				EXTENSION ENGINE BUILTIN (
+					JOB GoodJob1 '1 0 * * *';
+					JOB GoodJob2 '1 0 * * *';
+					JOB JobWithNoCron;
+				);
+			);`, "file.vsql:6:6: job without cron schedule is not allowed")
+	})
+
 }
 
 func Test_DataTypes(t *testing.T) {
 
 	require := assertions(t)
-	require.NoAppSchemaError(`APPLICATION test();
+	schema, err := require.AppSchema(`APPLICATION test();
 ALTER WORKSPACE sys.AppWorkspaceWS (
 	TABLE t1 INHERITS sys.WDoc(
 		s1_1_1 character varying(10),
-		s1_1_1 character varying,
+		s1_1_2 character varying,
 		s1_2_1 varchar(10),
 		s1_2_2 varchar,
 		s1_3_1 text(10),
-		s1_3_1 text,
+		s1_3_2 text,
 
 		s2_1_1 binary varying(10),
-		s2_1_1 binary varying,
+		s2_1_2 binary varying,
 		s2_2_1 varbinary(10),
 		s2_2_2 varbinary,
 		s2_3_1 bytes(10),
-		s2_3_1 bytes,
+		s2_3_2 bytes,
 
 		s3_1 bigint,
 		s3_2 int64,
@@ -2877,10 +2956,90 @@ ALTER WORKSPACE sys.AppWorkspaceWS (
 		s9_2 blob,
 
 		s10_1 qualified name,
-		s10_2 qname
+		s10_2 qname,
 
+		s11_1 int16,
+		s11_2 smallint,
+
+		s12_1 int8,
+		s12_2 tinyint
 	);
 );`)
+	require.NoError(err)
+	builder := builder.New()
+	err = BuildAppDefs(schema, builder)
+	require.NoError(err)
+	app, err := builder.Build()
+	require.NoError(err)
+	require.NotNil(app)
+	ws := app.Workspace(appdef.NewQName("sys", "AppWorkspaceWS"))
+	tbl := ws.Type(appdef.NewQName("pkg", "t1")).(appdef.IWDoc)
+
+	// [~server.vsql.smallints/it.SmallIntegers~impl]
+	// smallint
+	require.Equal(appdef.DataKind_int16, tbl.Field("s11_1").DataKind())
+	require.Equal(appdef.DataKind_int16, tbl.Field("s11_2").DataKind())
+
+	// tinyint
+	require.Equal(appdef.DataKind_int8, tbl.Field("s12_1").DataKind())
+	require.Equal(appdef.DataKind_int8, tbl.Field("s12_2").DataKind())
+
+	// qname
+	require.Equal(appdef.DataKind_QName, tbl.Field("s10_1").DataKind())
+	require.Equal(appdef.DataKind_QName, tbl.Field("s10_2").DataKind())
+
+	// blob
+	b1field := tbl.Field("s9_1")
+	require.Equal(appdef.DataKind_RecordID, b1field.DataKind())
+
+	b1RefField, ok := b1field.(appdef.IRefField)
+	require.True(ok)
+	require.True(b1RefField.Ref(QNameWDocBLOB))
+
+	require.Equal(appdef.DataKind_RecordID, tbl.Field("s9_2").DataKind())
+
+	// bool
+	require.Equal(appdef.DataKind_bool, tbl.Field("s8_1").DataKind())
+	require.Equal(appdef.DataKind_bool, tbl.Field("s8_2").DataKind())
+
+	//money
+	require.Equal(appdef.DataKind_int64, tbl.Field("s7_2").DataKind())
+	require.Equal(appdef.DataKind_int64, tbl.Field("s7_3").DataKind())
+
+	// float64
+	require.Equal(appdef.DataKind_float64, tbl.Field("s6_1").DataKind())
+	require.Equal(appdef.DataKind_float64, tbl.Field("s6_2").DataKind())
+
+	// float32
+	require.Equal(appdef.DataKind_float32, tbl.Field("s5_1").DataKind())
+	require.Equal(appdef.DataKind_float32, tbl.Field("s5_2").DataKind())
+	require.Equal(appdef.DataKind_float32, tbl.Field("s5_3").DataKind())
+
+	//int32
+	require.Equal(appdef.DataKind_int32, tbl.Field("s4_1").DataKind())
+	require.Equal(appdef.DataKind_int32, tbl.Field("s4_2").DataKind())
+	require.Equal(appdef.DataKind_int32, tbl.Field("s4_3").DataKind())
+
+	//int64
+	require.Equal(appdef.DataKind_int64, tbl.Field("s3_1").DataKind())
+	require.Equal(appdef.DataKind_int64, tbl.Field("s3_2").DataKind())
+
+	// bytes
+	require.Equal(appdef.DataKind_bytes, tbl.Field("s2_1_1").DataKind())
+	require.Equal(appdef.DataKind_bytes, tbl.Field("s2_1_2").DataKind())
+	require.Equal(appdef.DataKind_bytes, tbl.Field("s2_2_1").DataKind())
+	require.Equal(appdef.DataKind_bytes, tbl.Field("s2_2_2").DataKind())
+	require.Equal(appdef.DataKind_bytes, tbl.Field("s2_3_1").DataKind())
+	require.Equal(appdef.DataKind_bytes, tbl.Field("s2_3_2").DataKind())
+
+	// string
+	require.Equal(appdef.DataKind_string, tbl.Field("s1_1_1").DataKind())
+	require.Equal(appdef.DataKind_string, tbl.Field("s1_1_2").DataKind())
+	require.Equal(appdef.DataKind_string, tbl.Field("s1_2_1").DataKind())
+	require.Equal(appdef.DataKind_string, tbl.Field("s1_2_2").DataKind())
+	require.Equal(appdef.DataKind_string, tbl.Field("s1_3_1").DataKind())
+	require.Equal(appdef.DataKind_string, tbl.Field("s1_3_2").DataKind())
+
 }
 
 func Test_UniquesFromFieldsets(t *testing.T) {
@@ -2973,6 +3132,7 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 	require := assertions(t)
 	schema, err := require.AppSchema(`APPLICATION test();
 		WORKSPACE MyWS (
+			DESCRIPTOR ();
 			TABLE Table2 INHERITS sys.CDoc(
 				Fld1 int32,
 				Nested TABLE Nested (
@@ -2995,10 +3155,11 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 	cfgs := istructsmem.AppConfigsType{}
 	cfgs.AddAppConfig(appQName, 1, appDef, 1)
 	appStructsProvider := istructsmem.Provide(cfgs, irates.NullBucketsFactory,
-		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, coreutils.MockTime)),
-		provider.Provide(mem.Provide(coreutils.MockTime)))
+		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
+		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
 	statelessResources := istructsmem.NewStatelessResources()
-	appParts, cleanup, err := appparts.New2(context.Background(), appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
+	vvmCtx, cancel := context.WithCancel(context.Background())
+	appParts, cleanup, err := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
 		engines.ProvideExtEngineFactories(
 			engines.ExtEngineFactoriesConfig{
 				AppConfigs:         cfgs,
@@ -3007,7 +3168,10 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 			}, "vvmName", imetrics.Provide()),
 		irates.NullBucketsFactory)
 	require.NoError(err)
-	defer cleanup()
+	defer func() {
+		cancel()
+		cleanup()
+	}()
 	appParts.DeployApp(appQName, nil, appDef, 1, [4]uint{1, 1, 1, 1}, 1)
 	appParts.DeployAppPartitions(appQName, []istructs.PartitionID{1})
 	borrowedAppPart, err := appParts.Borrow(appQName, 1, appparts.ProcessorKind_Command)
@@ -3049,10 +3213,11 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 	cfgs := istructsmem.AppConfigsType{}
 	cfgs.AddAppConfig(appQName, 1, appDef, 1)
 	appStructsProvider := istructsmem.Provide(cfgs, irates.NullBucketsFactory,
-		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, coreutils.MockTime)),
-		provider.Provide(mem.Provide(coreutils.MockTime)))
+		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
+		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
 	statelessResources := istructsmem.NewStatelessResources()
-	appParts, cleanup, err := appparts.New2(context.Background(), appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
+	vvmCtx, cancel := context.WithCancel(context.Background())
+	appParts, cleanup, err := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
 		engines.ProvideExtEngineFactories(
 			engines.ExtEngineFactoriesConfig{
 				AppConfigs:         cfgs,
@@ -3061,7 +3226,10 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 			}, "vvmName", imetrics.Provide()),
 		irates.NullBucketsFactory)
 	require.NoError(err)
-	defer cleanup()
+	defer func() {
+		cancel()
+		cleanup()
+	}()
 	appParts.DeployApp(appQName, nil, appDef, 1, [4]uint{1, 1, 1, 1}, 1)
 	appParts.DeployAppPartitions(appQName, []istructs.PartitionID{1})
 	borrowedAppPart, err := appParts.Borrow(appQName, 1, appparts.ProcessorKind_Command)
@@ -3072,4 +3240,48 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 		[]appdef.QName{appdef.NewQName("pkg", "Role1")})
 	require.NoError(err)
 	require.True(ok)
+}
+
+func Test_NotAllowedTypes(t *testing.T) {
+
+	require := assertions(t)
+
+	t.Run("BLOB in VIEWs not allowed", func(t *testing.T) {
+		require.AppSchemaError(`APPLICATION test();
+			WORKSPACE MyWS (
+				VIEW v1(
+					f1 int32,
+					f2 binary large object,
+					PRIMARY KEY(f1)
+				) AS RESULT OF p;
+
+				EXTENSION ENGINE BUILTIN (
+					PROJECTOR p AFTER EXECUTE ON c INTENTS (sys.View(v1));
+					COMMAND c();
+				);
+			);`, "file.vsql:5:9: BLOB field only allowed in table")
+	})
+
+	t.Run("BLOB in TYPEs not allowed", func(t *testing.T) {
+		require.AppSchemaError(`APPLICATION test();
+			WORKSPACE MyWS (
+				TYPE t1(
+					f1 int32,
+					f2 binary large object
+				);
+			);`, "file.vsql:5:9: BLOB field only allowed in table")
+	})
+
+	t.Run("Reference from CDoc to WDoc not allowed", func(t *testing.T) {
+		require.AppSchemaError(`APPLICATION test();
+			WORKSPACE MyWS (
+				TABLE t01 INHERITS sys.WDoc();
+				TABLE t02 INHERITS sys.WRecord();
+				TABLE t1 INHERITS sys.CDoc(
+					f1 ref(t01),
+					f2 ref(t02)
+				);
+			);`, "file.vsql:6:13: t01: reference to WDoc/WRecord",
+			"file.vsql:7:13: t02: reference to WDoc/WRecord")
+	})
 }

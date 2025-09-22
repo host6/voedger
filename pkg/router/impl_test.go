@@ -24,6 +24,8 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
@@ -139,7 +141,7 @@ func TestBasicUsage_Respond(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 				go func() {
-					err := responder.Respond(bus.ResponseMeta{ContentType: coreutils.ContentType_ApplicationJSON, StatusCode: http.StatusOK}, c.obj)
+					err := responder.Respond(bus.ResponseMeta{ContentType: httpu.ContentType_ApplicationJSON, StatusCode: http.StatusOK}, c.obj)
 					require.NoError(err)
 				}()
 			}, bus.DefaultSendTimeout)
@@ -157,7 +159,7 @@ func TestBasicUsage_Respond(t *testing.T) {
 func TestBeginResponseTimeout(t *testing.T) {
 	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		// bump the mock time to make timeout timer fire
-		coreutils.MockTime.Add(2 * time.Millisecond)
+		testingu.MockTime.Add(2 * time.Millisecond)
 		// just do not use the responder
 	}, bus.SendTimeout(time.Millisecond))
 	defer tearDown(router)
@@ -170,7 +172,7 @@ func TestBeginResponseTimeout(t *testing.T) {
 	respBodyBytes, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, bus.ErrSendTimeoutExpired.Error(), string(respBodyBytes))
-	expectResp(t, resp, coreutils.ContentType_TextPlain, http.StatusServiceUnavailable)
+	expectResp(t, resp, httpu.ContentType_TextPlain, http.StatusServiceUnavailable)
 }
 
 type testObject struct {
@@ -293,27 +295,26 @@ func TestClientDisconnect_FailedToWriteResponse(t *testing.T) {
 				StrField: "str",
 			})
 
-			// now let's wait for client disconnect
+			// now let's wait for setting onBeforeWriteResponse hook
 			<-setDisconnectOnWriteResponse
 
+			// next send to bus should be successful because client will be disconnected on the next writeResponse()
+			// this operation should trigger the client disconnect
 			expectedErrCh <- respWriter.Write(testObject{
 				IntField: 42,
 				StrField: "str0",
 			})
 
-			// this object must be successfully sent to bus but the router will fail to send in on next writeResponse() call
+			// wait for the client disconnection
+			<-requestCtx.Done()
+
+			// next sending to bus must be failed because the ctx is closed
 			expectedErrCh <- respWriter.Write(testObject{
 				IntField: 43,
 				StrField: "str1",
 			})
-
-			// this sending to bus must be failed because requestCtx stored in IResponseSender is closed
-			expectedErrCh <- respWriter.Write(testObject{
-				IntField: 44,
-				StrField: "str2",
-			})
 		}()
-	}, bus.SendTimeout(time.Hour)) // one hour timeout to eliminate case when client context closes longer than bus timoeut on client disconnect. It could take up to few seconds
+	}, bus.SendTimeout(time.Hour)) // one hour timeout to eliminate case when client context closes longer than bus timeout on client disconnect. It could take up to few seconds
 	defer tearDown(router)
 
 	// client side
@@ -336,14 +337,7 @@ func TestClientDisconnect_FailedToWriteResponse(t *testing.T) {
 	// force client disconnect right before write to the socket on the next writeResponse() call
 	once := sync.Once{}
 	onBeforeWriteResponse = func(w http.ResponseWriter) {
-		once.Do(func() {
-			resp.Body.Close()
-
-			// wait for write to the socket will be failed indeed. It happens not at once
-			// that will guarantee context.Canceled error on next sending instead of possible ErrNoConsumer
-			for _, err := w.Write([]byte{0}); err == nil; _, err = w.Write([]byte{0}) {
-			}
-		})
+		once.Do(func() { resp.Body.Close() })
 	}
 
 	// signal to the handler it could try to send the next section
@@ -351,8 +345,7 @@ func TestClientDisconnect_FailedToWriteResponse(t *testing.T) {
 	// but will be failed in router (will be disconnected right on writeResponse)
 	close(setDisconnectOnWriteResponse)
 
-	// first elem send after client disconnect should be successful, next one should fail
-	require.NoError(<-expectedErrCh)
+	// first elem send after client disconnect should be successful
 	require.NoError(<-expectedErrCh)
 
 	// next sending to the bus must be failed because the requestCtx is closed
@@ -396,7 +389,9 @@ func TestAdminService(t *testing.T) {
 		if len(nonLocalhostIP) == 0 {
 			t.Skip("unable to find local non-loopback ip address")
 		}
-		_, err = net.DialTimeout("tcp", fmt.Sprintf("%s:%d", nonLocalhostIP, router.adminPort()), 1*time.Second)
+		// hostport
+		_, err = net.DialTimeout("tcp", fmt.Sprintf("%v:%d", nonLocalhostIP, router.adminPort()), 1*time.Second)
+		require.Error(err)
 		if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "connection refused") &&
 			!strings.Contains(err.Error(), "i/o timeout") {
 			t.Fatal(err)
@@ -416,8 +411,9 @@ type testRouter struct {
 
 func startRouter(t *testing.T, router *testRouter, rp RouterParams, sendTimeout bus.SendTimeout, requestHandler bus.RequestHandler) {
 	ctx, cancel := context.WithCancel(context.Background())
-	requestSender := bus.NewIRequestSender(coreutils.MockTime, sendTimeout, requestHandler)
-	httpSrv, acmeSrv, adminService := Provide(rp, nil, nil, nil, requestSender, map[appdef.AppQName]istructs.NumAppWorkspaces{istructs.AppQName_test1_app1: 10})
+	requestSender := bus.NewIRequestSender(testingu.MockTime, sendTimeout, requestHandler)
+	httpSrv, acmeSrv, adminService := Provide(rp, nil, nil, nil, requestSender,
+		map[appdef.AppQName]istructs.NumAppWorkspaces{istructs.AppQName_test1_app1: 10}, nil, nil, nil)
 	require.Nil(t, acmeSrv)
 	require.NoError(t, httpSrv.Prepare(nil))
 	require.NoError(t, adminService.Prepare(nil))

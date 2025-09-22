@@ -6,7 +6,6 @@ package vit
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -25,9 +24,8 @@ import (
 )
 
 const (
-	TestEmail       = "123@123.com"
-	TestEmail2      = "124@124.com"
-	TestServicePort = 10000
+	TestEmail  = "123@123.com"
+	TestEmail2 = "124@124.com"
 
 	app1PkgName = "app1pkg"
 	App1PkgPath = "github.com/voedger/voedger/pkg/vit/app1pkg"
@@ -37,28 +35,31 @@ const (
 )
 
 const (
-	Field_Year         = "Year"
-	Field_Month        = "Month"
-	Field_Day          = "Day"
-	Field_StringValue  = "StringValue"
-	Field_Number       = "Number"
-	Field_CharCode     = "CharCode"
-	Field_Code         = "Code"
-	Field_FirstName    = "FirstName"
-	Field_LastName     = "LastName"
-	Field_DOB          = "DOB"
-	Field_Wallet       = "Wallet"
-	Field_Balance      = "Balance"
-	Field_Currency     = "Currency"
-	Field_Name         = "Name"
-	Field_Country      = "Country"
-	Field_Client       = "Client"
-	Field_Withdraw     = "Withdraw"
-	Field_Deposit      = "Deposit"
-	Field_Capabilities = "Capabilities"
-	Field_Cfg          = "Cfg"
-	Field_GroupA       = "GroupA"
-	Field_GroupB       = "GroupB"
+	Field_Year            = "Year"
+	Field_Month           = "Month"
+	Field_Day             = "Day"
+	Field_StringValue     = "StringValue"
+	Field_Number          = "Number"
+	Field_CharCode        = "CharCode"
+	Field_Code            = "Code"
+	Field_FirstName       = "FirstName"
+	Field_LastName        = "LastName"
+	Field_DOB             = "DOB"
+	Field_Wallet          = "Wallet"
+	Field_Balance         = "Balance"
+	Field_Currency        = "Currency"
+	Field_Name            = "Name"
+	Field_Country         = "Country"
+	Field_Client          = "Client"
+	Field_Withdraw        = "Withdraw"
+	Field_Deposit         = "Deposit"
+	Field_Capabilities    = "Capabilities"
+	Field_Cfg             = "Cfg"
+	Field_GroupA          = "GroupA"
+	Field_GroupB          = "GroupB"
+	Field_Blob            = "Blob"
+	Field_BlobReadDenied  = "BlobReadDenied"
+	testSMTPPwdSecretName = "smtp-pwd-secret-name"
 )
 
 var (
@@ -88,10 +89,13 @@ var (
 	QNameODoc1                               = appdef.NewQName(app1PkgName, "odoc1")
 	QNameODoc2                               = appdef.NewQName(app1PkgName, "odoc2")
 	TestSMTPCfg                              = smtp.Cfg{
-		Host:     "smtp.testserver.com",
-		Port:     1,
-		Username: "username@gmail.com",
+		Host:      "smtp.testserver.com",
+		Port:      1,
+		Username:  "username@gmail.com",
+		PwdSecret: testSMTPPwdSecretName,
 	}
+	QNameDocWithBLOB  = appdef.NewQName(app1PkgName, "DocWithBLOB")
+	QNameODocWithBLOB = appdef.NewQName(app1PkgName, "ODocWithBLOB")
 
 	// BLOBMaxSize 5
 	SharedConfig_App1 = NewSharedVITConfig(
@@ -109,17 +113,12 @@ var (
 		),
 		WithApp(istructs.AppQName_test1_app2, ProvideApp2, WithUserLogin("login", "1")),
 		WithVVMConfig(func(cfg *vvm.VVMConfig) {
-			// for impl_reverseproxy_test
-			cfg.Routes["/grafana"] = fmt.Sprintf("http://127.0.0.1:%d", TestServicePort)
-			cfg.RoutesRewrite["/grafana-rewrite"] = fmt.Sprintf("http://127.0.0.1:%d/rewritten", TestServicePort)
-			cfg.RouteDefault = fmt.Sprintf("http://127.0.0.1:%d/not-found", TestServicePort)
-			cfg.RouteDomains["localhost"] = fmt.Sprintf("http://127.0.0.1:%d", TestServicePort)
-
 			const app1_BLOBMaxSize = 5
 			cfg.BLOBMaxSize = app1_BLOBMaxSize
 
 			cfg.SMTPConfig = TestSMTPCfg
 		}),
+		WithSecret(testSMTPPwdSecretName, []byte("smtpPassword")),
 		WithCleanup(func(_ *VIT) {
 			MockCmdExec = func(input string, args istructs.ExecCommandArgs) error { panic("") }
 			MockQryExec = func(input string, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) error { panic("") }
@@ -262,6 +261,10 @@ func ProvideApp1(apis builtinapps.APIs, cfg *istructsmem.AppConfigType, ep exten
 	))
 
 	cfg.AddAsyncProjectors(
+		istructs.Projector{
+			Name: appdef.NewQName(app1PkgName, "ProjDummyQName"),
+			Func: func(istructs.IPLogEvent, istructs.IState, istructs.IIntents) (err error) { return nil },
+		},
 		istructs.Projector{
 			Name: appdef.NewQName(app1PkgName, "ProjDummy"),
 			Func: func(istructs.IPLogEvent, istructs.IState, istructs.IIntents) (err error) { return nil },
@@ -421,6 +424,10 @@ func ProvideApp1(apis builtinapps.APIs, cfg *istructsmem.AppConfigType, ep exten
 			})
 		})
 	}))
+
+	cfg.Resources.Add(istructsmem.NewQueryFunction(appdef.NewQName(app1PkgName, "QryVoid"), istructsmem.NullQueryExec))
+
+	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app1PkgName, "CmdODocWithBLOB"), istructsmem.NullCommandExec))
 
 	app1PackageFS := parser.PackageFS{
 		Path: App1PkgPath,

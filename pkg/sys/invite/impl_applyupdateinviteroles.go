@@ -11,6 +11,8 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -18,14 +20,14 @@ import (
 	"github.com/voedger/voedger/pkg/sys/smtp"
 )
 
-func asyncProjectorApplyUpdateInviteRoles(time coreutils.ITime, federation federation.IFederation, tokens itokens.ITokens, smtpCfg smtp.Cfg) istructs.Projector {
+func asyncProjectorApplyUpdateInviteRoles(time timeu.ITime, federation federation.IFederation, tokens itokens.ITokens, smtpCfg smtp.Cfg) istructs.Projector {
 	return istructs.Projector{
 		Name: qNameAPApplyUpdateInviteRoles,
 		Func: applyUpdateInviteRolesProjector(time, federation, tokens, smtpCfg),
 	}
 }
 
-func applyUpdateInviteRolesProjector(time coreutils.ITime, federation federation.IFederation, tokens itokens.ITokens, smtpCfg smtp.Cfg) func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
+func applyUpdateInviteRolesProjector(time timeu.ITime, federation federation.IFederation, tokens itokens.ITokens, smtpCfg smtp.Cfg) func(event istructs.IPLogEvent, state istructs.IState, intents istructs.IIntents) (err error) {
 	return func(event istructs.IPLogEvent, s istructs.IState, intents istructs.IIntents) (err error) {
 		skbCDocInvite, err := s.KeyBuilder(sys.Storage_Record, qNameCDocInvite)
 		if err != nil {
@@ -58,8 +60,8 @@ func applyUpdateInviteRolesProjector(time coreutils.ITime, federation federation
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"Roles":"%s"}}]}`, svCDocSubject.AsRecordID(appdef.SystemField_ID), event.ArgumentObject().AsString(Field_Roles)),
-			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse())
+			httpu.WithAuthorizeBy(token),
+			httpu.WithDiscardResponse())
 		if err != nil {
 			return
 		}
@@ -68,8 +70,8 @@ func applyUpdateInviteRolesProjector(time coreutils.ITime, federation federation
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.UpdateJoinedWorkspaceRoles", appQName, svCDocInvite.AsInt64(field_InviteeProfileWSID)),
 			fmt.Sprintf(`{"args":{"Roles":"%s","InvitingWorkspaceWSID":%d}}`, event.ArgumentObject().AsString(Field_Roles), event.Workspace()),
-			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse())
+			httpu.WithAuthorizeBy(token),
+			httpu.WithDiscardResponse())
 		if err != nil {
 			return
 		}
@@ -90,19 +92,17 @@ func applyUpdateInviteRolesProjector(time coreutils.ITime, federation federation
 		skbSendMail.PutInt32(sys.Storage_SendMail_Field_Port, smtpCfg.Port)
 		skbSendMail.PutString(sys.Storage_SendMail_Field_Username, smtpCfg.Username)
 
-		pwd := ""
-		if !coreutils.IsTest() {
-			skbAppSecretsStorage, err := s.KeyBuilder(sys.Storage_AppSecret, appdef.NullQName)
-			if err != nil {
-				return err
-			}
-			skbAppSecretsStorage.PutString(sys.Storage_AppSecretField_Secret, smtpCfg.PwdSecret)
-			svAppSecretsStorage, err := s.MustExist(skbAppSecretsStorage)
-			if err != nil {
-				return err
-			}
-			pwd = svAppSecretsStorage.AsString("")
+		skbAppSecretsStorage, err := s.KeyBuilder(sys.Storage_AppSecret, appdef.NullQName)
+		if err != nil {
+			return err
 		}
+		skbAppSecretsStorage.PutString(sys.Storage_AppSecretField_Secret, smtpCfg.PwdSecret)
+		svAppSecretsStorage, err := s.MustExist(skbAppSecretsStorage)
+		if err != nil {
+			return err
+		}
+
+		pwd := svAppSecretsStorage.AsString("")
 		skbSendMail.PutString(sys.Storage_SendMail_Field_Password, pwd)
 
 		_, err = intents.NewValue(skbSendMail)
@@ -114,8 +114,8 @@ func applyUpdateInviteRolesProjector(time coreutils.ITime, federation federation
 		_, err = federation.Func(
 			fmt.Sprintf("api/%s/%d/c.sys.CUD", appQName, event.Workspace()),
 			fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"State":%d,"Updated":%d,"Roles":"%s"}}]}`, event.ArgumentObject().AsRecordID(field_InviteID), State_Joined, time.Now().UnixMilli(), event.ArgumentObject().AsString(Field_Roles)),
-			coreutils.WithAuthorizeBy(token),
-			coreutils.WithDiscardResponse())
+			httpu.WithAuthorizeBy(token),
+			httpu.WithDiscardResponse())
 
 		return err
 	}

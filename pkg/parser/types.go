@@ -13,7 +13,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appdef/filter"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/filesu"
 )
 
 type FileSchemaAST struct {
@@ -40,7 +40,7 @@ type AppSchemaAST struct {
 
 type PackageFS struct {
 	Path string
-	FS   coreutils.IReadFS
+	FS   filesu.IReadFS
 }
 
 type statementNode struct {
@@ -329,8 +329,11 @@ type VoidOrDef struct {
 }
 
 type DataType struct {
+	Pos       lexer.Position
 	Varchar   *TypeVarchar `parser:"( @@"`
 	Bytes     *TypeBytes   `parser:"| @@"`
+	Int8      bool         `parser:"| @('tinyint' | 'int8')"`
+	Int16     bool         `parser:"| @('smallint' | 'int16')"`
 	Int32     bool         `parser:"| @('integer' | 'int' | 'int32')"`
 	Int64     bool         `parser:"| @('bigint' | 'int64')"`
 	Float32   bool         `parser:"| @('real' | 'float' | 'float32')"`
@@ -348,6 +351,10 @@ func (q DataType) String() (s string) {
 			return fmt.Sprintf("varchar[%d]", *q.Varchar.MaxLen)
 		}
 		return fmt.Sprintf("varchar[%d]", appdef.DefaultFieldMaxLength)
+	} else if q.Int8 {
+		return "int8"
+	} else if q.Int16 {
+		return "int16"
 	} else if q.Int32 {
 		return "int32"
 	} else if q.Int64 {
@@ -504,7 +511,7 @@ func (t *ProjectorTrigger) deactivate() bool {
 type JobStmt struct {
 	Statement
 	Name         Ident          `parser:"'JOB' @Ident"`
-	CronSchedule *string        `parser:"@String"`
+	CronSchedule *string        `parser:"@String?"`
 	State        []StateStorage `parser:"('STATE'   '(' @@ (',' @@)* ')' )?"`
 	Intents      []StateStorage `parser:"('INTENTS' '(' @@ (',' @@)* ')' )?"`
 	Engine       EngineType     // Initialized with 1st pass
@@ -567,7 +574,7 @@ type RateValueTimeUnit struct {
 }
 
 type RateValue struct {
-	Count           *int              `parser:"(@Int"`
+	Count           *uint32              `parser:"(@Int"`
 	Variable        *DefQName         `parser:"| @@) 'PER'"`
 	TimeUnitAmounts *uint32           `parser:"@Int?"`
 	TimeUnit        RateValueTimeUnit `parser:"@@"`
@@ -670,8 +677,9 @@ type GrantAllTablesAction struct {
 
 type GrantTableAll struct {
 	Pos      lexer.Position
-	GrantAll bool         `parser:"@'ALL'"`
-	Columns  []Identifier `parser:"( '(' @@ (',' @@)* ')' )?"`
+	GrantAll bool               `parser:"@'ALL'"`
+	Columns  []Identifier       `parser:"( '(' @@ (',' @@)* ')' )?"`
+	columns  []appdef.FieldName // filled on the analysis stage
 }
 
 type GrantTableActions struct {
@@ -697,9 +705,10 @@ type GrantAllTables struct {
 
 type GrantView struct {
 	Pos        lexer.Position
-	AllColumns bool         `parser:"(@(SELECT ONVIEW) | "`
-	Columns    []Identifier `parser:"( SELECT '(' @@ (',' @@)* ')' ONVIEW))"`
-	View       DefQName     `parser:"@@"`
+	AllColumns bool               `parser:"(@(SELECT ONVIEW) | "`
+	Columns    []Identifier       `parser:"( SELECT '(' @@ (',' @@)* ')' ONVIEW))"`
+	View       DefQName           `parser:"@@"`
+	columns    []appdef.FieldName // filled on the analysis stage
 }
 
 type GrantOrRevoke struct {
@@ -722,7 +731,8 @@ type GrantOrRevoke struct {
 	/* filled on the analysis stage */
 	toRole    appdef.QName
 	ops       []appdef.OperationKind
-	columns   []appdef.FieldName
+	opColumns map[appdef.OperationKind][]appdef.FieldName
+
 	workspace workspaceAddr
 }
 
@@ -864,14 +874,14 @@ type QueryStmt struct {
 	Name      Ident           `parser:"'QUERY' @Ident"`
 	Param     *AnyOrVoidOrDef `parser:"('(' @@? ')')?"`
 	State     []StateStorage  `parser:"('STATE'   '(' @@ (',' @@)* ')' )?"`
-	Returns   AnyOrVoidOrDef  `parser:"'RETURNS' @@"`
+	Returns   *AnyOrVoidOrDef `parser:"('RETURNS' @@)?"`
 	With      []WithItem      `parser:"('WITH' @@ (',' @@)* )?"`
-	Engine    EngineType      // Initialized with 1st pass
+	engine    EngineType      // Initialized with 1st pass
 	workspace workspaceAddr   // filled on the analysis stage
 }
 
 func (s *QueryStmt) GetName() string            { return string(s.Name) }
-func (s *QueryStmt) SetEngineType(e EngineType) { s.Engine = e }
+func (s *QueryStmt) SetEngineType(e EngineType) { s.engine = e }
 
 type EngineType struct {
 	WASM    bool `parser:"@'WASM'"`

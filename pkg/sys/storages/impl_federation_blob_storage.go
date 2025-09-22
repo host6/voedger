@@ -14,6 +14,7 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -43,12 +44,14 @@ func NewFederationBlobStorage(appStructs state.AppStructsFunc, wsid state.WSIDFu
 
 type federationBlobKeyBuilder struct {
 	baseKeyBuilder
-	expectedCodes string
-	blobID        istructs.RecordID
-	owner         string
-	appname       string
-	wsid          istructs.WSID
-	token         string
+	expectedCodes    string
+	ownerRecord      appdef.QName
+	ownerRecordField appdef.FieldName
+	ownerID          istructs.RecordID
+	owner            string
+	appname          string
+	wsid             istructs.WSID
+	token            string
 }
 
 func (b *federationBlobKeyBuilder) Equals(src istructs.IKeyBuilder) bool {
@@ -57,7 +60,13 @@ func (b *federationBlobKeyBuilder) Equals(src istructs.IKeyBuilder) bool {
 		return false
 	}
 	kb := src.(*federationBlobKeyBuilder)
-	if b.blobID != kb.blobID {
+	if b.ownerRecord != kb.ownerRecord {
+		return false
+	}
+	if b.ownerRecordField != kb.ownerRecordField {
+		return false
+	}
+	if b.ownerID != kb.ownerID {
 		return false
 	}
 	if b.expectedCodes != kb.expectedCodes {
@@ -92,18 +101,30 @@ func (b *federationBlobKeyBuilder) PutString(name string, value string) {
 		b.token = value
 		return
 	}
+	if name == sys.Storage_FederationBlob_Field_OwnerRecordField {
+		b.ownerRecordField = value
+		return
+	}
 	b.baseKeyBuilder.PutString(name, value)
 }
 
-func (b *federationBlobKeyBuilder) PutInt64(name string, value int64) {
-	if name == sys.Storage_FederationBlob_Field_BlobID {
-		recordID, err := coreutils.Int64ToRecordID(value)
-		if err != nil {
-			panic(err)
-		}
-		b.blobID = recordID
+func (b *federationBlobKeyBuilder) PutQName(name string, value appdef.QName) {
+	if name == sys.Storage_FederationBlob_Field_OwnerRecord {
+		b.ownerRecord = value
 		return
 	}
+	b.baseKeyBuilder.PutQName(name, value)
+}
+
+func (b *federationBlobKeyBuilder) PutRecordID(name string, value istructs.RecordID) {
+	if name == sys.Storage_FederationBlob_Field_OwnerID {
+		b.ownerID = value
+		return
+	}
+	b.baseKeyBuilder.PutRecordID(name, value)
+}
+
+func (b *federationBlobKeyBuilder) PutInt64(name string, value int64) {
 	if name == sys.Storage_FederationBlob_Field_WSID {
 		wsid, err := coreutils.Int64ToWSID(value)
 		if err != nil {
@@ -123,7 +144,7 @@ func (s *federationBlobStorage) NewKeyBuilder(appdef.QName, istructs.IStateKeyBu
 func (s *federationBlobStorage) getReadCloser(key istructs.IStateKeyBuilder) (io.ReadCloser, error) {
 	appqname := s.appStructs().AppQName()
 
-	opts := make([]coreutils.ReqOptFunc, 0)
+	opts := make([]httpu.ReqOptFunc, 0)
 
 	kb := key.(*federationBlobKeyBuilder)
 
@@ -135,11 +156,19 @@ func (s *federationBlobStorage) getReadCloser(key istructs.IStateKeyBuilder) (io
 		if err != nil {
 			return nil, err
 		}
-		opts = append(opts, coreutils.WithExpectedCode(code))
+		opts = append(opts, httpu.WithExpectedCode(code))
 	}
 
-	if kb.blobID == 0 {
-		return nil, errBlobIDNotSpecified
+	if kb.ownerID == 0 {
+		return nil, errOwnerIDNotSpecified
+	}
+
+	if kb.ownerRecord == appdef.NullQName {
+		return nil, errOwnerRecordNotSpecified
+	}
+
+	if len(kb.ownerRecordField) == 0 {
+		return nil, errOwnerRecordFieldNotSpecified
 	}
 
 	var owner string
@@ -169,23 +198,24 @@ func (s *federationBlobStorage) getReadCloser(key istructs.IStateKeyBuilder) (io
 	var readCloser io.ReadCloser
 
 	if s.emulation != nil {
-		result, err := s.emulation(owner, appname, wsid, kb.blobID)
+		result, err := s.emulation(owner, appname, wsid, kb.ownerRecord, kb.ownerRecordField, kb.ownerID)
 		if err != nil {
 			return nil, err
 		}
 		readCloser = io.NopCloser(bytes.NewReader(result))
 	} else {
 		if kb.token != "" {
-			opts = append(opts, coreutils.WithAuthorizeBy(kb.token))
+			opts = append(opts, httpu.WithAuthorizeBy(kb.token))
 		} else {
 			appQName := appdef.NewAppQName(owner, appname)
 			systemPrincipalToken, err := payloads.GetSystemPrincipalToken(s.tokens, appQName)
 			if err != nil {
 				return nil, err
 			}
-			opts = append(opts, coreutils.WithAuthorizeBy(systemPrincipalToken))
+			opts = append(opts, httpu.WithAuthorizeBy(systemPrincipalToken))
 		}
-		blobReader, err := s.federation.ReadBLOB(appdef.NewAppQName(owner, appname), wsid, kb.blobID, opts...)
+		blobReader, err := s.federation.ReadBLOB(appdef.NewAppQName(owner, appname), wsid, kb.ownerRecord, kb.ownerRecordField,
+			kb.ownerID, opts...)
 		if err != nil {
 			return nil, err
 		}

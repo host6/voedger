@@ -10,10 +10,12 @@ import (
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef/builder"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/goutils/testingu/require"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
+	"github.com/voedger/voedger/pkg/isequencer"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/istructs"
 )
@@ -30,7 +32,7 @@ func TestRateLimits_BasicUsage(t *testing.T) {
 	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 	qName1 := appdef.NewQName("test", "myFunc")
 
-	provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
+	provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0)
 
 	// limit c.sys.myFunc func call:
 	// - per app:
@@ -52,7 +54,7 @@ func TestRateLimits_BasicUsage(t *testing.T) {
 	as, err := provider.BuiltIn(appName)
 	require.NoError(err)
 
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		// no limits exceeded
 		require.False(as.IsFunctionRateLimitsExceeded(qName1, 42))
 
@@ -60,18 +62,18 @@ func TestRateLimits_BasicUsage(t *testing.T) {
 		require.True(as.IsFunctionRateLimitsExceeded(qName1, 42))
 
 		// proceed to the next minute to restore per-minute limit
-		coreutils.MockTime.Add(time.Minute)
+		testingu.MockTime.Add(time.Minute)
 	}
 
 	// still failed because now the 10-hours limit is exceeded
 	require.True(as.IsFunctionRateLimitsExceeded(qName1, 42))
 
 	// try to add a minute the check if per-minute limit restore is not enough indeed
-	coreutils.MockTime.Add(time.Minute)
+	testingu.MockTime.Add(time.Minute)
 	require.True(as.IsFunctionRateLimitsExceeded(qName1, 42))
 
 	// add 10 hours to restore all limits
-	coreutils.MockTime.Add(10 * time.Hour)
+	testingu.MockTime.Add(10 * time.Hour)
 	require.False(as.IsFunctionRateLimitsExceeded(qName1, 42))
 
 	t.Run("must be False if unknown (or unlimited) function", func(t *testing.T) {
@@ -90,7 +92,7 @@ func TestRateLimitsErrors(t *testing.T) {
 		},
 	}
 
-	require.Panics(func() { rls.prepare(iratesce.Provide(coreutils.NewITime())) },
+	require.Panics(func() { rls.prepare(iratesce.Provide(timeu.NewITime())) },
 		require.Has(unsupportedRateLimitKind))
 }
 

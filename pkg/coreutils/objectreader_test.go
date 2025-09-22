@@ -5,6 +5,7 @@
 package coreutils
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -217,6 +218,41 @@ func TestJSONMapToCUDBody(t *testing.T) {
 	})
 }
 
+func TestCheckValueByKind(t *testing.T) {
+	okCases := []struct {
+		val  any
+		kind appdef.DataKind
+	}{
+		{int8(1), appdef.DataKind_int8},
+		{int16(2), appdef.DataKind_int16},
+		{int32(3), appdef.DataKind_int32},
+		{int64(4), appdef.DataKind_int64},
+		{int64(5), appdef.DataKind_RecordID},
+		{float32(6), appdef.DataKind_float32},
+		{float64(7), appdef.DataKind_float64},
+		{true, appdef.DataKind_bool},
+		{"str", appdef.DataKind_string},
+		{"str.str", appdef.DataKind_QName},
+		{[]byte{9}, appdef.DataKind_bytes},
+		{istructs.RecordID(10), appdef.DataKind_RecordID},
+		{int64(11), appdef.DataKind_RecordID},
+		{appdef.NewQName("1", "1"), appdef.DataKind_QName},
+	}
+	for _, c := range okCases {
+		t.Run(fmt.Sprintf("%v", c.val), func(t *testing.T) {
+			require.NoError(t, CheckValueByKind(c.val, c.kind))
+		})
+	}
+
+	t.Run("not ok", func(t *testing.T) {
+		for kind := appdef.DataKind(1); kind < appdef.DataKind_FakeLast; kind++ {
+			t.Run(kind.String(), func(t *testing.T) {
+				require.Error(t, CheckValueByKind(func() {}, kind))
+			})
+		}
+	})
+}
+
 func testBasic(expectedQName appdef.QName, m map[string]interface{}, require *require.Assertions) {
 	require.Equal(int32(1), m["int32"])
 	require.Equal(int64(2), m["int64"])
@@ -259,4 +295,72 @@ func testAppDef(t *testing.T) appdef.IAppDef {
 	require.NoError(t, err)
 
 	return app
+}
+
+func TestCUDsToMap(t *testing.T) {
+	require := require.New(t)
+	appDef := testAppDef(t)
+
+	t.Run("single CUD", func(t *testing.T) {
+		rec := &TestObject{
+			Name:   testQName,
+			ID_:    1,
+			IsNew_: true,
+			Data: map[string]interface{}{
+				"int32":                  int32(42),
+				appdef.SystemField_QName: testQName,
+			},
+		}
+		event := &mockDBEvent{cuds: []istructs.ICUDRow{rec}}
+		got := CUDsToMap(event, appDef)
+		require.Len(got, 1)
+		cud := got[0]
+		require.Equal(istructs.RecordID(1), cud["sys.ID"])
+		require.Equal(testQName.String(), cud["sys.QName"])
+		require.Equal(true, cud["IsNew"])
+		fields := cud["fields"].(map[string]interface{})
+		require.Equal(int32(42), fields["int32"])
+	})
+
+	t.Run("multiple CUDs", func(t *testing.T) {
+		rec1 := &TestObject{Name: testQName, ID_: 1, Data: map[string]interface{}{"int32": int32(1)}}
+		rec2 := &TestObject{Name: testQName, ID_: 2, Data: map[string]interface{}{"int32": int32(2)}}
+		event := &mockDBEvent{cuds: []istructs.ICUDRow{rec1, rec2}}
+		got := CUDsToMap(event, appDef)
+		require.Len(got, 2)
+	})
+
+	t.Run("filter", func(t *testing.T) {
+		rec1 := &TestObject{Name: testQName, ID_: 1, Data: map[string]interface{}{"int32": int32(1)}}
+		rec2 := &TestObject{Name: testQNameSimple, ID_: 2, Data: map[string]interface{}{"int32": int32(2)}}
+		event := &mockDBEvent{cuds: []istructs.ICUDRow{rec1, rec2}}
+		got := CUDsToMap(event, appDef, WithFilter(func(qn appdef.QName) bool { return qn == testQName }))
+		require.Len(got, 1)
+		require.Equal(testQName.String(), got[0]["sys.QName"])
+	})
+
+	t.Run("WithMapperOpts", func(t *testing.T) {
+		rec := &TestObject{Name: testQName, ID_: 1, Data: map[string]interface{}{
+			"int32":                  int32(42),
+			"string":                 "foo",
+			appdef.SystemField_QName: testQName}}
+		event := &mockDBEvent{cuds: []istructs.ICUDRow{rec}}
+		got := CUDsToMap(event, appDef, WithMapperOpts(Filter(func(name string, kind appdef.DataKind) bool { return name == "string" })))
+		fields := got[0]["fields"].(map[string]interface{})
+		require.Equal("foo", fields["string"])
+		require.NotContains(fields, "int32")
+	})
+}
+
+type mockDBEvent struct {
+	istructs.IDbEvent
+	cuds []istructs.ICUDRow
+}
+
+func (e *mockDBEvent) CUDs(cb func(istructs.ICUDRow) bool) {
+	for _, c := range e.cuds {
+		if !cb(c) {
+			break
+		}
+	}
 }

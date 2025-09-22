@@ -10,11 +10,13 @@ import (
 	"testing"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/state/smtptest"
+	"github.com/voedger/voedger/pkg/parser"
+	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/vvm"
 )
 
@@ -32,9 +34,9 @@ type VIT struct {
 	isOnSharedConfig     bool
 	initialGoroutinesNum int
 	configCleanupsAmount int
-	emailCaptor          emailCaptor
-	httpClient           coreutils.IHTTPClient
-	mockTime             coreutils.IMockTime
+	emailCaptor          *implIEmailSender_captor
+	httpClient           httpu.IHTTPClient
+	mockTime             testingu.IMockTime
 	vvmProblemCtx        context.Context
 }
 
@@ -127,9 +129,9 @@ type app struct {
 }
 
 type BLOB struct {
-	Content  []byte
-	Name     string
-	MimeType string
+	Content     []byte
+	Name        string
+	ContentType string
 }
 
 type signInOpts struct {
@@ -138,12 +140,24 @@ type signInOpts struct {
 
 type signUpOpts struct {
 	profileClusterID istructs.ClusterID
-	reqOpts          []coreutils.ReqOptFunc
+	reqOpts          []httpu.ReqOptFunc
 }
-
-type emailCaptor chan smtptest.Message
 
 type implVITISecretsReader struct {
 	secrets          map[string][]byte
 	underlyingReader isecrets.ISecretReader
+}
+
+type implIEmailSender_captor struct {
+	emailCaptorCh chan state.EmailMessage
+}
+
+// cache for sys/registry, sys/cluster
+// to make the constant schemas be reused among tests to speed up
+// other app schemas could be changed among tests so it is wrong to cache non-sys apps
+// normally should be used in VIT tests only
+// vvm.NullSchemasCache is default in VVM
+type implISchemasCache_sysApps struct {
+	schemas map[appdef.AppQName]*parser.AppSchemaAST
+	lock    sync.Mutex
 }

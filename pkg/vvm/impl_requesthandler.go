@@ -6,16 +6,14 @@ package vvm
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/bus"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -40,7 +38,7 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 			return
 		}
 
-		token, err := getPrincipalToken(request)
+		token, err := bus.GetPrincipalToken(request)
 		if err != nil {
 			bus.ReplyAccessDeniedUnauthorized(responder, err.Error())
 			return
@@ -68,7 +66,7 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 				}
 
 				iqm := query2.NewIQueryMessage(requestCtx, request.AppQName, request.WSID, responder, *queryParams, request.DocID, processors.APIPath(request.APIPath), request.QName,
-					partitionID, request.Host, token, request.WorkspaceQName, request.Header[coreutils.Accept])
+					partitionID, request.Host, token, request.WorkspaceQName, request.Header[httpu.Accept])
 				if !procbus.Submit(uint(qpcgIdx_v2), 0, iqm) {
 					bus.ReplyErrf(responder, http.StatusServiceUnavailable, "no query_v2 processors available")
 				}
@@ -113,31 +111,4 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 			}
 		}
 	}
-}
-
-func getPrincipalToken(request bus.Request) (token string, err error) {
-	authHeader := request.Header[coreutils.Authorization]
-	if len(authHeader) == 0 {
-		return "", nil
-	}
-	if strings.HasPrefix(authHeader, coreutils.BearerPrefix) {
-		return strings.ReplaceAll(authHeader, coreutils.BearerPrefix, ""), nil
-	}
-	if strings.HasPrefix(authHeader, "Basic ") {
-		return getBasicAuthToken(authHeader)
-	}
-	return "", errors.New("unsupported Authorization header: " + authHeader)
-}
-
-func getBasicAuthToken(authHeader string) (token string, err error) {
-	headerValue := strings.ReplaceAll(authHeader, "Basic ", "")
-	headerValueBytes, err := base64.StdEncoding.DecodeString(headerValue)
-	if err != nil {
-		return "", fmt.Errorf("failed to decode base64 Basic Authorization header value: %w", err)
-	}
-	headerValue = string(headerValueBytes)
-	if strings.Count(headerValue, ":") != 1 {
-		return "", errors.New("unexpected Basic Authorization header format")
-	}
-	return strings.ReplaceAll(headerValue, ":", ""), nil
 }

@@ -11,16 +11,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/voedger/voedger/pkg/coreutils/utils"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/strconvu"
 
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/in10nmem"
-	in10nmemv1 "github.com/voedger/voedger/pkg/in10nmem/v1"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -76,47 +74,53 @@ func (s *httpService) subscribeAndWatchHandler() http.HandlerFunc {
 			}
 		}
 		flusher.Flush()
-		ch := make(chan in10nmem.UpdateUnit)
-		watchChannelContext, cancel := context.WithCancel(req.Context())
-		go func() {
-			defer close(ch)
-			s.n10n.WatchChannel(watchChannelContext, channel, func(projection in10n.ProjectionKey, offset istructs.Offset) {
-				var unit = in10nmem.UpdateUnit{
-					Projection: projection,
-					Offset:     offset,
-				}
-				ch <- unit
-			})
-		}()
-		defer logger.Info("watch done")
-		for req.Context().Err() == nil {
-			result, ok := <-ch
-			if !ok {
-				break
+		serveN10NChannel(req.Context(), rw, flusher, channel, s.n10n, urlParams.SubjectLogin)
+	}
+}
+
+// finishes when ctx is closed or on SSE message sending failure
+func serveN10NChannel(ctx context.Context, rw http.ResponseWriter, flusher http.Flusher, channel in10n.ChannelID, n10n in10n.IN10nBroker,
+	subjectLogin istructs.SubjectLogin) {
+	ch := make(chan in10nmem.UpdateUnit)
+	watchChannelCtx, watchChannelCtxCancel := context.WithCancel(ctx)
+	go func() {
+		defer close(ch)
+		n10n.WatchChannel(watchChannelCtx, channel, func(projection in10n.ProjectionKey, offset istructs.Offset) {
+			var unit = in10nmem.UpdateUnit{
+				Projection: projection,
+				Offset:     offset,
 			}
-			sseMessage := fmt.Sprintf("event: %s\ndata: %s\n\n", result.Projection.ToJSON(), utils.UintToString(result.Offset))
-			if _, err = fmt.Fprint(rw, sseMessage); err != nil {
-				logger.Error("failed to write sse message for subjectLogin", urlParams.SubjectLogin, "to client:", sseMessage, ":", err.Error())
-				break // WatchChannel will be finished on cancel()
-			}
-			if logger.IsVerbose() {
-				logger.Verbose(fmt.Sprintf("sse message sent for subjectLogin %s:", urlParams.SubjectLogin), strings.ReplaceAll(sseMessage, "\n", " "))
-			}
-			flusher.Flush()
+			ch <- unit
+		})
+	}()
+	defer logger.Info("serving n10n channel", channel, "finished")
+	for ctx.Err() == nil {
+		result, ok := <-ch
+		if !ok {
+			break
 		}
-		// graceful client disconnect -> req.Context() closed
-		// failed to write sse message -> need to close watchChannelContext
-		cancel()
-		for range ch {
+		sseMessage := fmt.Sprintf("event: %s\ndata: %s\n\n", result.Projection.ToJSON(), strconvu.UintToString(result.Offset))
+		if _, err := fmt.Fprint(rw, sseMessage); err != nil {
+			logger.Error("failed to write sse message for subjectLogin", subjectLogin, "to client:", sseMessage, ":", err.Error())
+			break // WatchChannel will be finished on cancel()
 		}
+		flusher.Flush()
+		if logger.IsVerbose() {
+			logger.Verbose(fmt.Sprintf("sse message sent for subjectLogin %s:", subjectLogin), strings.ReplaceAll(sseMessage, "\n", " "))
+		}
+	}
+	// graceful client disconnect -> req.Context() closed
+	// failed to write sse message -> need to close watchChannelContext
+	watchChannelCtxCancel()
+	for range ch {
 	}
 }
 
 func n10nErrorToStatusCode(err error) int {
 	switch {
-	case errors.Is(err, in10n.ErrChannelDoesNotExist), errors.Is(err, in10nmemv1.ErrMetricDoesNotExists):
+	case errors.Is(err, in10n.ErrChannelDoesNotExist), errors.Is(err, in10nmem.ErrMetricDoesNotExists):
 		return http.StatusBadRequest
-	case errors.Is(err, in10n.ErrQuotaExceeded_Subsciptions), errors.Is(err, in10n.ErrQuotaExceeded_SubsciptionsPerSubject),
+	case errors.Is(err, in10n.ErrQuotaExceeded_Subscriptions), errors.Is(err, in10n.ErrQuotaExceeded_SubscriptionsPerSubject),
 		errors.Is(err, in10n.ErrQuotaExceeded_Channels), errors.Is(err, in10n.ErrQuotaExceeded_ChannelsPerSubject):
 		return http.StatusTooManyRequests
 	}
@@ -187,7 +191,7 @@ func (s *httpService) updateHandler() http.HandlerFunc {
 
 		params := mux.Vars(req)
 		offset := params["offset"]
-		if off, err := strconv.ParseUint(offset, utils.DecimalBase, utils.BitSize64); err == nil {
+		if off, err := strconvu.ParseUint64(offset); err == nil {
 			s.n10n.Update(p, istructs.Offset(off))
 		}
 	}

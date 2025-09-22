@@ -20,7 +20,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"golang.org/x/net/netutil"
 
@@ -52,7 +52,7 @@ func (s *httpService) Prepare(work interface{}) (err error) {
 
 	s.registerRouterCheckerHandler()
 
-	s.registerHandlers_V1()
+	s.registerHandlersV1()
 
 	s.registerHandlersV2()
 
@@ -155,7 +155,7 @@ func (s *httpService) registerRouterCheckerHandler() {
 	s.router.HandleFunc("/api/check", corsHandler(checkHandler())).Methods("POST", "GET", "OPTIONS").Name("router check")
 }
 
-func (s *httpService) registerHandlers_V1() {
+func (s *httpService) registerHandlersV1() {
 	/*
 		launching app from localhost from browser. Trying to execute POST from web app within browser.
 		Browser sees that hosts differs: from localhost to alpha -> need CORS -> denies POST and executes the same request with OPTIONS header
@@ -184,11 +184,8 @@ func (s *httpService) registerHandlers_V1() {
 }
 
 func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) http.HandlerFunc {
-	return func(resp http.ResponseWriter, req *http.Request) {
-		request, ok := createBusRequest(req.Method, req, resp, numsAppsWorkspaces)
-		if !ok {
-			return
-		}
+	return withRequestValidation(numsAppsWorkspaces, func(req *http.Request, rw http.ResponseWriter, data validatedData) {
+		request := createBusRequest(req.Method, data, req)
 
 		// req's BaseContext is router service's context. See service.Start()
 		// router app closing or client disconnected -> req.Context() is done
@@ -203,13 +200,13 @@ func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[
 			if errors.Is(err, bus.ErrSendTimeoutExpired) {
 				status = http.StatusServiceUnavailable
 			}
-			WriteTextResponse(resp, err.Error(), status)
+			WriteTextResponse(rw, err.Error(), status)
 			return
 		}
 
-		initResponse(resp, responseMeta.ContentType, responseMeta.StatusCode)
-		reply_v1(requestCtx, resp, responseCh, responseErr, responseMeta.ContentType, cancel, request, responseMeta.Mode())
-	}
+		initResponse(rw, responseMeta.ContentType, responseMeta.StatusCode)
+		reply_v1(requestCtx, rw, responseCh, responseErr, responseMeta.ContentType, cancel, request, responseMeta.Mode())
+	})
 }
 
 func corsHandler(h http.Handler) http.HandlerFunc {
@@ -235,7 +232,7 @@ func checkHandler() http.HandlerFunc {
 }
 
 func initResponse(w http.ResponseWriter, contentType string, statusCode int) {
-	w.Header().Set(coreutils.ContentType, contentType)
+	w.Header().Set(httpu.ContentType, contentType)
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(statusCode)
 }

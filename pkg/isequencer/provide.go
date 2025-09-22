@@ -10,21 +10,12 @@ import (
 	"sync"
 
 	lru "github.com/hashicorp/golang-lru/v2"
-
-	"github.com/voedger/voedger/pkg/coreutils"
+	retrier "github.com/voedger/voedger/pkg/goutils/retry"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 )
 
-func NewDefaultParams(seqTypes map[WSKind]map[SeqID]Number) Params {
-	return Params{
-		SeqTypes:                          seqTypes,
-		MaxNumUnflushedValues:             DefaultMaxNumUnflushedValues,
-		LRUCacheSize:                      DefaultLRUCacheSize,
-		BatcherDelayOnToBeFlushedOverflow: defaultBatcherDelayOnToBeFlushedOverflow,
-	}
-}
-
 // New creates a new sequencer
-func New(params Params, seqStorage ISeqStorage, iTime coreutils.ITime) (ISequencer, context.CancelFunc) {
+func New(params Params, seqStorage ISeqStorage, iTime timeu.ITime) (ISequencer, context.CancelFunc) {
 	cache, err := lru.New[NumberKey, Number](params.LRUCacheSize)
 	if err != nil {
 		// notest
@@ -53,7 +44,9 @@ func New(params Params, seqStorage ISeqStorage, iTime coreutils.ITime) (ISequenc
 		actualizerWG:            &sync.WaitGroup{},
 		seqStorage:              seqStorage,
 		transactionIsInProgress: true, // to prevent start transaction before actualization completes
+		retrierCfg:              retrier.NewConfig(baseRetryDelay, maxRetryDelay),
 	}
+	s.retrierCfg.ResetDelayAfterMaxDelay = true
 	s.Actualize()
 
 	return s, s.cleanup

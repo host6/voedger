@@ -14,6 +14,7 @@ package in10nmem
 
 import (
 	"context"
+	"log"
 	"strconv"
 	"sync"
 	"testing"
@@ -21,8 +22,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/coreutils"
-	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/in10n"
 	istructs "github.com/voedger/voedger/pkg/istructs"
 )
@@ -40,8 +41,6 @@ func (c *callbackMock) updatesMock(projection in10n.ProjectionKey, offset istruc
 }
 
 func Test_SubscribeUnsubscribe(t *testing.T) {
-	defer logger.SetLogLevelWithRestore(logger.LogLevelTrace)()
-
 	var wg sync.WaitGroup
 
 	cb1 := new(callbackMock)
@@ -71,7 +70,7 @@ func Test_SubscribeUnsubscribe(t *testing.T) {
 	}
 	req := require.New(t)
 
-	nb, cleanup := ProvideEx2(quotasExample, coreutils.NewITime())
+	nb, cleanup := ProvideEx2(quotasExample, timeu.NewITime())
 	defer cleanup()
 
 	var channel1ID in10n.ChannelID
@@ -127,8 +126,8 @@ func Test_SubscribeUnsubscribe(t *testing.T) {
 
 	// Unsubscribe all channels from projectionKey1
 
-	nb.Unsubscribe(channel1ID, projectionKey1)
-	nb.Unsubscribe(channel2ID, projectionKey1)
+	require.NoError(t, nb.Unsubscribe(channel1ID, projectionKey1))
+	require.NoError(t, nb.Unsubscribe(channel2ID, projectionKey1))
 
 	for i := 100; i < 110; i++ {
 
@@ -155,6 +154,94 @@ func Test_SubscribeUnsubscribe(t *testing.T) {
 
 }
 
+// Test that after subscribing to a channel, the client receives updates for all projections with the current offset
+// even if the projections were not explicitly updated after the subscription.
+func Test_Subscribe_NoUpdate_Unsubscribe(t *testing.T) {
+
+	var wg sync.WaitGroup
+
+	cb1 := new(callbackMock)
+	cb1.data = make(chan UpdateUnit, 1)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	projectionKey1 := in10n.ProjectionKey{
+		App:        istructs.AppQName_test1_app1,
+		Projection: appdef.NewQName("test", "restaurant"),
+		WS:         istructs.WSID(8),
+	}
+	projectionKey2 := in10n.ProjectionKey{
+		App:        istructs.AppQName_test1_app1,
+		Projection: appdef.NewQName("test", "restaurant2"),
+		WS:         istructs.WSID(9),
+	}
+
+	quotasExample := in10n.Quotas{
+		Channels:                10,
+		ChannelsPerSubject:      10,
+		Subscriptions:           10,
+		SubscriptionsPerSubject: 10,
+	}
+	req := require.New(t)
+
+	nb, cleanup := ProvideEx2(quotasExample, timeu.NewITime())
+	defer cleanup()
+
+	nb.Update(projectionKey1, istructs.Offset(100))
+	nb.Update(projectionKey2, istructs.Offset(200))
+
+	// Create channel
+	var channel1ID in10n.ChannelID
+	{
+		var subject istructs.SubjectLogin = "paa"
+		var err error
+		channel1ID, err = nb.NewChannel(subject, 24*time.Hour)
+		req.NoError(err)
+
+		wg.Add(1)
+		go func() {
+			nb.WatchChannel(ctx, channel1ID, cb1.updatesMock)
+			wg.Done()
+		}()
+
+	}
+
+	for range 10 {
+		// Subscribe
+		{
+			err := nb.Subscribe(channel1ID, projectionKey1)
+			req.NoError(err)
+
+			err = nb.Subscribe(channel1ID, projectionKey2)
+			req.NoError(err)
+
+		}
+		// Should see some offsets
+
+		{
+			var ui []UpdateUnit
+			ui = append(ui, <-cb1.data)
+			ui = append(ui, <-cb1.data)
+			req.Contains(ui, UpdateUnit{
+				Offset:     istructs.Offset(100),
+				Projection: projectionKey1,
+			})
+			req.Contains(ui, UpdateUnit{
+				Offset:     istructs.Offset(200),
+				Projection: projectionKey2,
+			})
+		}
+		// Unsubscribe
+		require.NoError(t, nb.Unsubscribe(channel1ID, projectionKey1))
+		require.NoError(t, nb.Unsubscribe(channel1ID, projectionKey2))
+
+	}
+
+	cancel()
+	wg.Wait()
+
+}
+
 // Try watch on not exists channel. WatchChannel must exit.
 func TestWatchNotExistsChannel(t *testing.T) {
 	req := require.New(t)
@@ -166,7 +253,7 @@ func TestWatchNotExistsChannel(t *testing.T) {
 		SubscriptionsPerSubject: 1,
 	}
 
-	broker, cleanup := ProvideEx2(quotasExample, coreutils.NewITime())
+	broker, cleanup := ProvideEx2(quotasExample, timeu.NewITime())
 	defer cleanup()
 	ctx := context.TODO()
 
@@ -187,8 +274,6 @@ func TestWatchNotExistsChannel(t *testing.T) {
 
 func TestQuotas(t *testing.T) {
 
-	t.Parallel()
-
 	req := require.New(t)
 	quotasExample := in10n.Quotas{
 		Channels:                100,
@@ -198,7 +283,7 @@ func TestQuotas(t *testing.T) {
 	}
 
 	t.Run("Test channel quotas per subject. We create more channels than allowed for subject.", func(t *testing.T) {
-		broker, cleanup := ProvideEx2(quotasExample, coreutils.NewITime())
+		broker, cleanup := ProvideEx2(quotasExample, timeu.NewITime())
 		defer cleanup()
 		for i := 0; i <= 10; i++ {
 			_, err := broker.NewChannel("paa", 24*time.Hour)
@@ -209,7 +294,7 @@ func TestQuotas(t *testing.T) {
 	})
 
 	t.Run("Test channel quotas for the whole service. We create more channels than allowed for service.", func(t *testing.T) {
-		broker, cleanup := ProvideEx2(quotasExample, coreutils.NewITime())
+		broker, cleanup := ProvideEx2(quotasExample, timeu.NewITime())
 		defer cleanup()
 		var subject istructs.SubjectLogin
 		for i := 0; i < 10; i++ {
@@ -229,7 +314,7 @@ func TestQuotas(t *testing.T) {
 			Projection: appdef.NewQName("test", "restaurant"),
 			WS:         istructs.WSID(1),
 		}
-		broker, cleanup := ProvideEx2(quotasExample, coreutils.NewITime())
+		broker, cleanup := ProvideEx2(quotasExample, timeu.NewITime())
 		defer cleanup()
 		var subject istructs.SubjectLogin
 		for i := 0; i < 100; i++ {
@@ -245,11 +330,242 @@ func TestQuotas(t *testing.T) {
 					req.Equal(1000, numSubscriptions)
 					projectionKeyExample.WS = istructs.WSID(i + 100000)
 					err = broker.Subscribe(channel, projectionKeyExample)
-					req.ErrorIs(err, in10n.ErrQuotaExceeded_Subsciptions)
+					req.ErrorIs(err, in10n.ErrQuotaExceeded_Subscriptions)
 				}
 			}
 		}
 
 	})
 
+}
+
+// Flow:
+// - Create mockTimer
+// - Subscribe to QNameHeartbeat30
+// - Start goroutine that will call WatchChannel(..notifySubscriber..)
+// - mockTimer.FireNextTimerImmediately()
+// - Make sure that notifySubscriber is called
+func TestHeartbeats(t *testing.T) {
+
+	// https://github.com/voedger/voedger/issues/3938
+	t.Skip("Skipped temporarily due to issues")
+
+	req := require.New(t)
+	mockTime := testingu.MockTime
+	mockTime.FireNextTimerImmediately()
+
+	quotasExample := in10n.Quotas{
+		Channels:                1,
+		ChannelsPerSubject:      1,
+		Subscriptions:           1,
+		SubscriptionsPerSubject: 1,
+	}
+
+	broker, cleanup := ProvideEx2(quotasExample, mockTime)
+	defer cleanup()
+
+	// Create channel and subscribe to Heartbeat30
+	subject := istructs.SubjectLogin("testuser")
+	channelID, err := broker.NewChannel(subject, 24*time.Hour)
+	req.NoError(err)
+
+	err = broker.Subscribe(channelID, in10n.Heartbeat30ProjectionKey)
+	req.NoError(err)
+
+	// Setup callback to receive updates
+	cb := new(callbackMock)
+	cb.data = make(chan UpdateUnit, 1)
+
+	// Create context with cancel for cleanup
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start watching the channel in a separate goroutine
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		broker.WatchChannel(ctx, channelID, cb.updatesMock)
+	}()
+
+	for range 10 {
+		// Wait for update with timeout
+		select {
+		case update := <-cb.data:
+			// Verify we got an update for the heartbeat projection
+			req.Equal(in10n.Heartbeat30ProjectionKey, update.Projection)
+			log.Println("Received heartbeat update:", update)
+			mockTime.Add(30 * time.Second) // Simulate passage of time
+		case <-time.After(5 * time.Second):
+			t.Fatal("Timeout waiting for heartbeat notification")
+		}
+	}
+
+	// Clean up
+	cancel()
+	wg.Wait()
+}
+
+func TestChannelExpiration(t *testing.T) {
+	quotasExample := in10n.Quotas{
+		Channels:                1,
+		ChannelsPerSubject:      1,
+		Subscriptions:           1,
+		SubscriptionsPerSubject: 1,
+	}
+
+	broker, cleanup := ProvideEx2(quotasExample, testingu.MockTime)
+	defer cleanup()
+
+	subject := istructs.SubjectLogin("test")
+	channelID, err := broker.NewChannel(subject, time.Second)
+	require.NoError(t, err)
+	projectionKeyExample := in10n.ProjectionKey{
+		App:        istructs.AppQName_test1_app1,
+		Projection: appdef.NewQName("test", "restaurant"),
+		WS:         istructs.WSID(1),
+	}
+	err = broker.Subscribe(channelID, projectionKeyExample)
+	require.NoError(t, err)
+	ctx := context.Background()
+	wg := sync.WaitGroup{}
+	wg.Add(1)
+	eventHandled := make(chan any)
+	go func() {
+		broker.WatchChannel(ctx, channelID, func(projection in10n.ProjectionKey, offset istructs.Offset) {
+			eventHandled <- nil
+		})
+		wg.Done()
+	}()
+
+	// check the notifications work
+	broker.Update(projectionKeyExample, 42)
+	<-eventHandled
+
+	// expire the channel
+	testingu.MockTime.Sleep(2 * time.Second)
+
+	// try to send an event -> validation should fail because the channel is expired
+	broker.Update(projectionKeyExample, 43)
+
+	// expect WatchChannel() is done
+	// observe "channel time to live expired: subjectlogin test" message in the log
+	wg.Wait()
+}
+
+// Flow:
+// - Create a channel
+// - Start watching the channel
+// - Subscribe to the projection1
+// - Wait for metrics to be updated
+// - Subscribe to the projection2
+// - Wait for metrics to be updated
+// - Unsubscribe from the projection1
+// - Wait for metrics to be updated
+// - Close context
+// - Wait for metrics to be updated (zero)
+func Test_MetricNumProjectionSubscriptions(t *testing.T) {
+	req := require.New(t)
+
+	quotasExample := in10n.Quotas{
+		Channels:                1,
+		ChannelsPerSubject:      1,
+		Subscriptions:           10,
+		SubscriptionsPerSubject: 10,
+	}
+
+	broker, cleanup := ProvideEx2(quotasExample, timeu.NewITime())
+	defer cleanup()
+
+	// Initially, no subscriptions should exist
+	req.Equal(0, broker.MetricNumSubcriptions())
+
+	// Create a channel
+	subject := istructs.SubjectLogin("testuser")
+	channelID, err := broker.NewChannel(subject, 24*time.Hour)
+	req.NoError(err)
+
+	// Setup projection keys
+	projection1 := in10n.ProjectionKey{
+		App:        istructs.AppQName_test1_app1,
+		Projection: appdef.NewQName("test", "restaurant1"),
+		WS:         istructs.WSID(1),
+	}
+	projection2 := in10n.ProjectionKey{
+		App:        istructs.AppQName_test1_app1,
+		Projection: appdef.NewQName("test", "restaurant2"),
+		WS:         istructs.WSID(2),
+	}
+
+	// Setup callback and context for watching
+	cb := new(callbackMock)
+	cb.data = make(chan UpdateUnit, 10)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Start watching the channel
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		broker.WatchChannel(ctx, channelID, cb.updatesMock)
+	}()
+
+	// Subscribe to projection1
+	err = broker.Subscribe(channelID, projection1)
+	req.NoError(err)
+
+	// Wait for metrics to be updated
+	req.Equal(1, broker.MetricNumSubcriptions())
+	reqEventuallyEqual(t, 1, func() int {
+		return broker.MetricNumProjectionSubscriptions(projection1)
+	})
+
+	// Subscribe to projection2
+	err = broker.Subscribe(channelID, projection2)
+	req.NoError(err)
+
+	// Wait for metrics to be updated
+	req.Equal(2, broker.MetricNumSubcriptions())
+	req.Equal(1, broker.MetricNumProjectionSubscriptions(projection1))
+	reqEventuallyEqual(t, 1, func() int {
+		return broker.MetricNumProjectionSubscriptions(projection2)
+	})
+
+	// Unsubscribe from projection1
+	err = broker.Unsubscribe(channelID, projection1)
+	require.NoError(t, err)
+
+	// Wait for metrics to be updated
+	req.Equal(1, broker.MetricNumSubcriptions())
+	reqEventuallyEqual(t, 0, func() int {
+		return broker.MetricNumProjectionSubscriptions(projection1)
+	})
+
+	// Close context (this should clean up remaining subscriptions)
+	cancel()
+
+	// Wait for WatchChannel to finish
+	wg.Wait()
+
+	// Wait for metrics to be updated
+	req.Equal(0, broker.MetricNumSubcriptions())
+	reqEventuallyEqual(t, 0, func() int {
+		return broker.MetricNumProjectionSubscriptions(projection1)
+	})
+	reqEventuallyEqual(t, 0, func() int {
+		return broker.MetricNumProjectionSubscriptions(projection2)
+	})
+}
+
+// Wait for 1 seconds
+func reqEventuallyEqual(t *testing.T, expected int, fn func() int) {
+	t.Helper()
+	for range 10 {
+		if fn() == expected {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Errorf("In one second, expected %d, got %d", expected, fn())
 }

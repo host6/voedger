@@ -14,6 +14,7 @@ import (
 	"github.com/voedger/voedger/pkg/appdef/constraints"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/testingu/require"
+	"github.com/voedger/voedger/pkg/isequencer"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iratesce"
@@ -41,6 +42,8 @@ func TestBasicUsage(t *testing.T) {
 		adb := builder.New()
 		adb.AddPackage("test", "test.com/test")
 		wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 
 		saleParamsName := appdef.NewQName("test", "SaleParams")
 		saleSecureParamsName := appdef.NewQName("test", "saleSecureArgs")
@@ -90,7 +93,7 @@ func TestBasicUsage(t *testing.T) {
 	}()
 
 	// gets AppStructProvider and AppStructs
-	provider := Provide(appConfigs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
+	provider := Provide(appConfigs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0)
 
 	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -198,6 +201,8 @@ func TestBasicUsage_ViewRecords(t *testing.T) {
 		adb := builder.New()
 		adb.AddPackage("test", "test.com/test")
 		wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 		view := wsb.AddView(appdef.NewQName("test", "viewDrinks"))
 		view.Key().PartKey().AddField("partitionKey1", appdef.DataKind_int64)
 		view.Key().ClustCols().
@@ -216,7 +221,7 @@ func TestBasicUsage_ViewRecords(t *testing.T) {
 		return cfgs
 	}
 
-	p := Provide(appConfigs(), iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
+	p := Provide(appConfigs(), iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0)
 	as, err := p.BuiltIn(appName)
 	require.NoError(err)
 	viewRecords := as.ViewRecords()
@@ -300,6 +305,8 @@ func Test_appStructsType_ObjectBuilder(t *testing.T) {
 		adb := builder.New()
 		adb.AddPackage("test", "test.com/test")
 		wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 		obj := wsb.AddObject(objName)
 		obj.AddField("int", appdef.DataKind_int64, true)
 		obj.AddContainer("child", objName, 0, appdef.Occurs_Unbounded)
@@ -308,7 +315,7 @@ func Test_appStructsType_ObjectBuilder(t *testing.T) {
 		cfg := cfgs.AddBuiltInAppConfig(appName, adb)
 		cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-		provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
+		provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0)
 		app, err := provider.BuiltIn(appName)
 		require.NoError(err)
 
@@ -332,10 +339,10 @@ func Test_appStructsType_ObjectBuilder(t *testing.T) {
 		b := appStructs.ObjectBuilder(objName)
 		require.NotNil(b)
 
-		b.FillFromJSON(map[string]interface{}{
+		b.FillFromJSON(map[string]any{
 			"int": int64(1),
-			"child": []interface{}{
-				map[string]interface{}{
+			"child": []any{
+				map[string]any{
 					"int": int64(2),
 				},
 			},
@@ -382,7 +389,8 @@ func TestBasicUsage_Resources(t *testing.T) {
 
 		// Calls have no effect since we use Null* closures
 
-		f.Exec(istructs.ExecCommandArgs{})
+		err := f.Exec(istructs.ExecCommandArgs{})
+		require.NoError(err)
 
 		// Test String()
 		log.Println(f)
@@ -391,9 +399,9 @@ func TestBasicUsage_Resources(t *testing.T) {
 	t.Run("Basic usage NewQueryFunction", func(t *testing.T) {
 		myExecQuery := func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) error {
 			// Can use NullExecQuery instead of myExecQuery, it does nothing
-			NullQueryExec(ctx, args, callback)
+			NullQueryExec(ctx, args, callback) // nolint errcheck
 
-			callback(&istructs.NullObject{})
+			require.NoError(callback(&istructs.NullObject{}))
 			return nil
 		}
 
@@ -405,7 +413,8 @@ func TestBasicUsage_Resources(t *testing.T) {
 		require.Panics(func() { f.ResultType(istructs.PrepareArgs{}) })
 
 		// Depends on myExecQuery
-		f.Exec(context.Background(), istructs.ExecQueryArgs{}, func(istructs.IObject) error { return nil })
+		err := f.Exec(context.Background(), istructs.ExecQueryArgs{}, func(istructs.IObject) error { return nil })
+		require.NoError(err)
 
 		// Test String()
 		log.Println(f)
@@ -415,7 +424,7 @@ func TestBasicUsage_Resources(t *testing.T) {
 // Demonstrates basic usage application
 func TestBasicUsage_AppDef(t *testing.T) {
 	require := require.New(t)
-	test := test()
+	test := newTest()
 
 	app := test.AppStructs
 
@@ -491,6 +500,8 @@ func Test_BasicUsageDescribePackages(t *testing.T) {
 		argQName := appdef.NewQName("structs", "Arg")
 
 		wsb := adb.AddWorkspace(wsQName)
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 
 		rec := wsb.AddCRecord(recQName)
 		rec.AddField("int", appdef.DataKind_int64, false)
@@ -535,7 +546,7 @@ func Test_BasicUsageDescribePackages(t *testing.T) {
 			MaxAllowedPerDuration: 4,
 		})
 
-		provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
+		provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0)
 		app, err := provider.BuiltIn(appName)
 		require.NoError(err)
 
@@ -559,13 +570,13 @@ func Test_BasicUsageDescribePackages(t *testing.T) {
 
 func Test_Provide(t *testing.T) {
 	require := require.New(t)
-	test := test()
+	test := newTest()
 
 	t.Run("AppStructs() must error if unknown app name", func(t *testing.T) {
 		cfgs := make(AppConfigsType)
 		cfg := cfgs.AddBuiltInAppConfig(istructs.AppQName_test1_app1, builder.New())
 		cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
-		p := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), nil)
+		p := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), nil, isequencer.SequencesTrustLevel_0)
 		require.NotNil(p)
 
 		_, err := p.BuiltIn(appdef.NewAppQName("test1", "unknownApp"))
@@ -574,7 +585,7 @@ func Test_Provide(t *testing.T) {
 	})
 
 	t.Run("check application ClusterAppID() and AppQName()", func(t *testing.T) {
-		provider := Provide(test.AppConfigs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
+		provider := Provide(test.AppConfigs, iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0)
 
 		app, err := provider.BuiltIn(test.appName)
 		require.NoError(err)

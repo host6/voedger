@@ -8,11 +8,13 @@ package blobprocessor
 import (
 	"context"
 
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/iblobstorage"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
+// [~server.apiv2.blobs/cmp.blobber.ProvideService~impl]
 func ProvideService(serviceChannel BLOBServiceChannel, blobStorage iblobstorage.IBLOBStorage, wLimiterFactory WLimiterFactory) pipeline.IService {
 	return pipeline.NewService(func(vvmCtx context.Context) {
 		pipeline := providePipeline(vvmCtx, blobStorage, wLimiterFactory)
@@ -38,9 +40,10 @@ func ProvideService(serviceChannel BLOBServiceChannel, blobStorage iblobstorage.
 	})
 }
 
-func NewIRequestHandler(procbus iprocbus.IProcBus, chanGroupIdx BLOBServiceChannelGroupIdx) IRequestHandler {
+func NewIRequestHandler(procbus iprocbus.IProcBus, chanGroupIdx BLOBServiceChannelGroupIdx, appParts appparts.IAppPartitions) IRequestHandler {
 	return &implIRequestHandler{
 		procbus:      procbus,
 		chanGroupIdx: chanGroupIdx,
+		appParts:     appParts,
 	}
 }

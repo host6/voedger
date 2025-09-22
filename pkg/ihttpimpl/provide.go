@@ -11,7 +11,8 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/ihttp"
 	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -27,14 +28,14 @@ func NewProcessor(params ihttp.CLIParams, routerStorage ihttp.IRouterStorage) (s
 		certCache:   dbcertcache.ProvideDBCache(&routerAppStorage),
 		acmeDomains: &sync.Map{},
 		server: &http.Server{
-			Addr:              coreutils.ServerAddress(params.Port),
+			Addr:              httpu.ListenAddr(params.Port),
 			Handler:           r,
 			ReadHeaderTimeout: defaultReadHeaderTimeout,
 		},
 		apps:               make(map[appdef.AppQName]*appInfo),
 		numsAppsWorkspaces: make(map[appdef.AppQName]istructs.NumAppWorkspaces),
 	}
-	httpProcessor.requestSender = bus.NewIRequestSender(coreutils.NewITime(), bus.DefaultSendTimeout, httpProcessor.requestHandler)
+	httpProcessor.requestSender = bus.NewIRequestSender(timeu.NewITime(), bus.DefaultSendTimeout, httpProcessor.requestHandler)
 	if len(params.AcmeDomains) > 0 {
 		for _, domain := range params.AcmeDomains {
 			httpProcessor.AddAcmeDomain(domain)

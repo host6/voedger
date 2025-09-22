@@ -25,6 +25,9 @@ import (
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	wsdescutil "github.com/voedger/voedger/pkg/coreutils/testwsdesc"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/iauthnzimpl"
 	"github.com/voedger/voedger/pkg/iextengine"
@@ -32,6 +35,7 @@ import (
 	"github.com/voedger/voedger/pkg/in10nmem"
 	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/isecretsimpl"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -111,8 +115,9 @@ func TestBasicUsage(t *testing.T) {
 		require.Equal(projectionKey, projection)
 		check <- 1
 	})
-	app.n10nBroker.Subscribe(channelID, projectionKey)
-	defer app.n10nBroker.Unsubscribe(channelID, projectionKey)
+	err = app.n10nBroker.Subscribe(channelID, projectionKey)
+	require.NoError(err)
+	defer func() { require.NoError(app.n10nBroker.Unsubscribe(channelID, projectionKey)) }()
 
 	t.Run("basic usage", func(t *testing.T) {
 		// command processor works through ibus.SendResponse -> we need a sender -> let's test using ibus.SendRequest2()
@@ -137,7 +142,7 @@ func TestBasicUsage(t *testing.T) {
 		require.NoError(*respErr)
 		log.Println(respData)
 		require.Equal(http.StatusOK, respMeta.StatusCode)
-		require.Equal(coreutils.ContentType_ApplicationJSON, respMeta.ContentType)
+		require.Equal(httpu.ContentType_ApplicationJSON, respMeta.ContentType)
 		// check that command is handled and notifications were sent
 		<-check
 		<-check
@@ -157,7 +162,7 @@ func TestBasicUsage(t *testing.T) {
 		for elem := range respCh {
 			require.Zero(counter)
 			require.Equal(http.StatusInternalServerError, respMeta.StatusCode)
-			require.Equal(coreutils.ContentType_ApplicationJSON, respMeta.ContentType)
+			require.Equal(httpu.ContentType_ApplicationJSON, respMeta.ContentType)
 			require.Equal(coreutils.SysError{HTTPStatus: http.StatusInternalServerError, Message: "fire error"}, elem) // nolint:errorlint
 			counter++
 		}
@@ -242,9 +247,9 @@ func TestRecoveryOnSyncProjectorError(t *testing.T) {
 	// ok to c.sys.CUD
 	respData := sendCUD(t, 1, app)
 	require.Equal(2, int(respData["CurrentWLogOffset"].(float64))) // 1st is WorkspaceDescriptor stub insert
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+	require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
 
 	// 2nd c.sys.CUD -> sync projector failure, expect 500 internal server error
 	respData = sendCUD(t, 1, app, http.StatusInternalServerError)
@@ -256,9 +261,9 @@ func TestRecoveryOnSyncProjectorError(t *testing.T) {
 	// 3rd c.sys.CUD - > recovery procedure must re-apply 2nd event (PLog, records and WLog), then 3rd event is processed ok (sync projectors are ok)
 	respData = sendCUD(t, 1, app)
 	require.Equal(4, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+4, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID)+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+5, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+6, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+7, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+8, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
 }
 
 func TestRecovery(t *testing.T) {
@@ -282,30 +287,30 @@ func TestRecovery(t *testing.T) {
 
 	respData := sendCUD(t, 1, app)
 	require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+	require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
 
 	restartCmdProc(&app)
 	respData = sendCUD(t, 1, app)
 	require.Equal(3, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+3, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+3, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+4, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+5, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
 
 	restartCmdProc(&app)
 	respData = sendCUD(t, 2, app)
 	require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID), istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+	require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
 
 	restartCmdProc(&app)
 	respData = sendCUD(t, 1, app)
 	require.Equal(4, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+4, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.NewRecordID(istructs.FirstBaseRecordID)+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.NewCDocCRecordID(istructs.FirstBaseRecordID)+5, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+6, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+7, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+	require.Equal(istructs.FirstUserRecordID+8, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
 
 	app.cancel()
 	<-app.done
@@ -349,12 +354,11 @@ func TestCUDUpdate(t *testing.T) {
 		Body:     []byte(`{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"test.test"}}]}`),
 		Header:   app.sysAuthHeader,
 	}
-	cmdRespMeta, cmdResp, err := bus.GetCommandResponse(app.ctx, app.requestSender, req)
-	require.NoError(err)
+	cmdRespMeta, cmdResp, sysErr := bus.GetCommandResponse(app.ctx, app.requestSender, req)
+	require.NoError(sysErr)
 	require.Equal(http.StatusOK, cmdRespMeta.StatusCode)
-	require.Equal(coreutils.ContentType_ApplicationJSON, cmdRespMeta.ContentType)
+	require.Equal(httpu.ContentType_ApplicationJSON, cmdRespMeta.ContentType)
 	require.Empty(cmdResp.CmdResult)
-	require.Zero(cmdResp.SysError)
 	newID := cmdResp.NewIDs["1"]
 	require.NotZero(newID)
 
@@ -363,15 +367,15 @@ func TestCUDUpdate(t *testing.T) {
 		cmdRespMeta, _, err := bus.GetCommandResponse(app.ctx, app.requestSender, req)
 		require.NoError(err)
 		require.Equal(http.StatusOK, cmdRespMeta.StatusCode)
-		require.Equal(coreutils.ContentType_ApplicationJSON, cmdRespMeta.ContentType)
+		require.Equal(httpu.ContentType_ApplicationJSON, cmdRespMeta.ContentType)
 	})
 
 	t.Run("404 not found on update not existing", func(t *testing.T) {
 		req.Body = []byte(fmt.Sprintf(`{"cuds":[{"sys.ID":%d,"fields":{"sys.QName":"test.test", "IntFld": 42}}]}`, istructs.NonExistingRecordID))
 		cmdRespMeta, _, err := bus.GetCommandResponse(app.ctx, app.requestSender, req)
-		require.NoError(err)
+		require.Error(err)
 		require.Equal(http.StatusNotFound, cmdRespMeta.StatusCode)
-		require.Equal(coreutils.ContentType_ApplicationJSON, cmdRespMeta.ContentType)
+		require.Equal(httpu.ContentType_ApplicationJSON, cmdRespMeta.ContentType)
 	})
 }
 
@@ -418,12 +422,17 @@ func Test400BadRequestOnCUDErrors(t *testing.T) {
 				Body:     []byte("{" + c.bodyAdd + "}"),
 				Header:   app.sysAuthHeader,
 			}
-			cmdRespMeta, cmdResp, err := bus.GetCommandResponse(app.ctx, app.requestSender, req)
-			require.NoError(err)
+			cmdRespMeta, _, sysErr := bus.GetCommandResponse(app.ctx, app.requestSender, req)
 			require.Equal(http.StatusBadRequest, cmdRespMeta.StatusCode, c.desc)
-			require.Equal(coreutils.ContentType_ApplicationJSON, cmdRespMeta.ContentType, c.desc)
-			require.Contains(cmdResp.SysError.Message, c.expectedMessageLike, c.desc)
-			require.Equal(http.StatusBadRequest, cmdResp.SysError.HTTPStatus, c.desc)
+			require.Equal(httpu.ContentType_ApplicationJSON, cmdRespMeta.ContentType, c.desc)
+			if sysErr != nil {
+				var sysError coreutils.SysError
+				require.ErrorAs(sysErr, &sysError)
+				require.Contains(sysError.Message, c.expectedMessageLike, c.desc)
+				require.Equal(http.StatusBadRequest, sysError.HTTPStatus, c.desc)
+			} else {
+				require.Empty(c.expectedMessageLike, c.desc)
+			}
 		})
 	}
 }
@@ -493,18 +502,22 @@ func TestErrors(t *testing.T) {
 			if len(c.Resource) > 0 {
 				req.Resource = c.Resource
 			}
-			cmdRespMeta, cmdResp, err := bus.GetCommandResponse(app.ctx, app.requestSender, req)
-			require.NoError(err, c.desc)
+			cmdRespMeta, _, sysErr := bus.GetCommandResponse(app.ctx, app.requestSender, req)
 			require.Equal(c.expectedStatusCode, cmdRespMeta.StatusCode, c.desc)
-			require.Equal(coreutils.ContentType_ApplicationJSON, cmdRespMeta.ContentType, c.desc)
-			require.Contains(cmdResp.SysError.Message, c.expectedMessageLike, c.desc)
-			require.Equal(c.expectedStatusCode, cmdResp.SysError.HTTPStatus, c.desc)
+			require.Equal(httpu.ContentType_ApplicationJSON, cmdRespMeta.ContentType, c.desc)
+			if sysErr != nil {
+				var sysError coreutils.SysError
+				require.ErrorAs(sysErr, &sysError)
+				require.Contains(sysError.Message, c.expectedMessageLike, c.desc)
+				require.Equal(c.expectedStatusCode, sysError.HTTPStatus, c.desc)
+			} else {
+				require.Empty(c.expectedMessageLike, c.desc)
+			}
 		})
 	}
 }
 
 func TestAuthnz(t *testing.T) {
-	t.Skip("temporarily skipped. To be rolled back in https://github.com/voedger/voedger/issues/3199")
 	require := require.New(t)
 
 	qNameTestDeniedCDoc := appdef.NewQName("app1pkg", "TestDeniedCDoc") // the same in core/iauthnzimpl
@@ -578,7 +591,7 @@ func TestAuthnz(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.desc, func(t *testing.T) {
 			cmdRespMeta, _, err := bus.GetCommandResponse(app.ctx, app.requestSender, c.req)
-			require.NoError(err)
+			require.Error(err)
 			require.Equal(c.expectedStatusCode, cmdRespMeta.StatusCode, c.desc)
 		})
 	}
@@ -586,7 +599,7 @@ func TestAuthnz(t *testing.T) {
 
 func getAuthHeader(token string) map[string]string {
 	return map[string]string{
-		coreutils.Authorization: "Bearer " + token,
+		httpu.Authorization: "Bearer " + token,
 	}
 }
 
@@ -600,7 +613,7 @@ func TestBasicUsage_FuncWithRawArg(t *testing.T) {
 		wsb.AddRole(iauthnz.QNameRoleEveryone)
 		wsb.AddRole(iauthnz.QNameRoleSystem)
 		cfg.Resources.Add(istructsmem.NewCommandFunction(testCmdQName, func(args istructs.ExecCommandArgs) (err error) {
-			require.EqualValues("custom content", args.ArgumentObject.AsString(processors.Field_RawObject_Body))
+			require.Equal("custom content", args.ArgumentObject.AsString(processors.Field_RawObject_Body))
 			close(ch)
 			return
 		}))
@@ -617,7 +630,7 @@ func TestBasicUsage_FuncWithRawArg(t *testing.T) {
 	cmdRespMeta, _, err := bus.GetCommandResponse(app.ctx, app.requestSender, request)
 	require.NoError(err)
 	require.Equal(http.StatusOK, cmdRespMeta.StatusCode)
-	require.Equal(coreutils.ContentType_ApplicationJSON, cmdRespMeta.ContentType)
+	require.Equal(httpu.ContentType_ApplicationJSON, cmdRespMeta.ContentType)
 	<-ch
 }
 
@@ -660,7 +673,7 @@ func TestRateLimit(t *testing.T) {
 
 	// 3rd exceeds rate limits
 	cmdRespMeta, _, err := bus.GetCommandResponse(app.ctx, app.requestSender, request)
-	require.NoError(err)
+	require.Error(err)
 	require.Equal(http.StatusTooManyRequests, cmdRespMeta.StatusCode)
 }
 
@@ -700,10 +713,10 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	serviceChannel := make(CommandChannel)
 	done := make(chan struct{})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	vvmCtx, cancel := context.WithCancel(context.Background())
 
 	cfgs := istructsmem.AppConfigsType{}
-	asf := mem.Provide(coreutils.MockTime)
+	asf := mem.Provide(testingu.MockTime)
 	appStorageProvider := istorageimpl.Provide(asf)
 
 	// build application
@@ -730,7 +743,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	require.NoError(err)
 
 	appStructsProvider := istructsmem.Provide(cfgs, iratesce.TestBucketsFactory,
-		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), appStorageProvider)
+		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), appStorageProvider, isequencer.SequencesTrustLevel_0)
 
 	secretReader := isecretsimpl.ProvideSecretReader()
 	n10nBroker, n10nBrokerCleanup := in10nmem.ProvideEx2(in10n.Quotas{
@@ -738,10 +751,10 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 		ChannelsPerSubject:      10,
 		Subscriptions:           1000,
 		SubscriptionsPerSubject: 10,
-	}, coreutils.NewITime())
+	}, timeu.NewITime())
 
 	// prepare the AppParts to borrow AppStructs
-	appParts, appPartsClean, err := appparts.New2(ctx, appStructsProvider,
+	appParts, appPartsClean, err := appparts.New2(vvmCtx, appStructsProvider,
 		actualizers.NewSyncActualizerFactoryFactory(actualizers.ProvideSyncActualizerFactory(), secretReader, n10nBroker, statelessResources),
 		appparts.NullActualizerRunner,
 		appparts.NullSchedulerRunner,
@@ -753,14 +766,13 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 			}, "", imetrics.Provide()),
 		iratesce.TestBucketsFactory)
 	require.NoError(err)
-	defer appPartsClean()
 
 	appParts.DeployApp(testAppName, nil, appDef, testAppPartCount, testAppEngines, cfg.NumAppWorkspaces())
 	appParts.DeployAppPartitions(testAppName, []istructs.PartitionID{testAppPartID})
 
 	// command processor works through ibus.SendResponse -> we need ibus implementation
 
-	requestSender := bus.NewIRequestSender(coreutils.MockTime, bus.GetTestSendTimeout(), func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+	requestSender := bus.NewIRequestSender(testingu.MockTime, bus.SendTimeout(10*time.Second), func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		// simulate handling the command request be a real application
 		cmdQName, err := appdef.ParseQName(request.Resource[2:])
 		require.NoError(err)
@@ -770,10 +782,10 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 			return
 		}
 		token := ""
-		if authHeader, ok := request.Header[coreutils.Authorization]; ok {
+		if authHeader, ok := request.Header[httpu.Authorization]; ok {
 			token = strings.TrimPrefix(authHeader, "Bearer ")
 		}
-		icm := NewCommandMessage(ctx, request.Body, request.AppQName, request.WSID, responder, testAppPartID, cmdQName, token, "", 0, 0, "")
+		icm := NewCommandMessage(vvmCtx, request.Body, request.AppQName, request.WSID, responder, testAppPartID, cmdQName, token, "", 0, 0, "")
 		serviceChannel <- icm
 	})
 
@@ -781,12 +793,12 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(testAppName)
 	systemToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	cmdProcessorFactory := ProvideServiceFactory(appParts, coreutils.NewITime(), n10nBroker, imetrics.Provide(), "vvm",
+	cmdProcessorFactory := ProvideServiceFactory(appParts, timeu.NewITime(), n10nBroker, imetrics.Provide(), "vvm",
 		iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs), secretReader)
 	cmdProcService := cmdProcessorFactory(serviceChannel)
 
 	go func() {
-		cmdProcService.Run(ctx)
+		cmdProcService.Run(vvmCtx)
 		close(done)
 	}()
 
@@ -800,8 +812,8 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	return testApp{
 		cfg:               cfg,
 		requestSender:     requestSender,
-		cancel:            cancel,
-		ctx:               ctx,
+		cancel:            func() { cancel(); appPartsClean() },
+		ctx:               vvmCtx,
 		done:              done,
 		cmdProcService:    cmdProcService,
 		serviceChannel:    serviceChannel,

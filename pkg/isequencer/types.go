@@ -12,8 +12,8 @@ import (
 	"time"
 
 	lruPkg "github.com/hashicorp/golang-lru/v2"
-
-	"github.com/voedger/voedger/pkg/coreutils"
+	retrier "github.com/voedger/voedger/pkg/goutils/retry"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 )
 
 type PartitionID uint16
@@ -22,6 +22,7 @@ type WSKind uint16 // istructs.QNameID
 type WSID uint64
 type Number uint64
 type PLogOffset uint64
+type ClusterAppID = uint32
 
 type NumberKey struct {
 	WSID  WSID
@@ -96,9 +97,10 @@ type sequencer struct {
 	// Written by Next()
 	inproc map[NumberKey]Number
 
-	iTime coreutils.ITime
+	iTime timeu.ITime
 
 	transactionIsInProgress bool
+	retrierCfg              retrier.Config
 }
 
 // [~server.design.sequences/test.isequencer.mockISeqStorage~impl]
@@ -109,7 +111,6 @@ type MockStorage struct {
 	ReadNumbersError          error
 	writeValuesAndOffsetError error
 	mu                        sync.RWMutex
-	numbersMu                 sync.RWMutex
 	pLog                      map[PLogOffset][]SeqValue // Simulated PLog entries
 	readNextOffsetError       error
 	onWriteValuesAndOffset    func()
@@ -117,3 +118,5 @@ type MockStorage struct {
 	onActualizeFromPLog       func()
 	onReadNumbers             func()
 }
+
+type SequencesTrustLevel byte

@@ -195,7 +195,7 @@ func lookupInCtx[stmtType *TableStmt | *TypeStmt | *FunctionStmt | *CommandStmt 
 					}
 					chain = append(chain, iws)
 					for _, dq := range iws.Inherits {
-						err := resolveInCtx[*WorkspaceStmt](dq, ictx, func(f *WorkspaceStmt, wSchema *PackageSchemaAST) error {
+						err := resolveInCtx(dq, ictx, func(f *WorkspaceStmt, wSchema *PackageSchemaAST) error {
 							if !lookInOtherPackages && wSchema != ictx.pkg {
 								return nil // do not look tags in other packages
 							}
@@ -375,6 +375,13 @@ func dataTypeToDataKind(t DataType) appdef.DataKind {
 	}
 	if t.Float64 {
 		return appdef.DataKind_float64
+	}
+	// [~server.vsql.smallints/cmp.Parser~impl]
+	if t.Int8 {
+		return appdef.DataKind_int8
+	}
+	if t.Int16 {
+		return appdef.DataKind_int16
 	}
 	if t.Int32 {
 		return appdef.DataKind_int32

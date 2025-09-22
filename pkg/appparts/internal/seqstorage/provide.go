@@ -12,19 +12,17 @@ import (
 )
 
 // [~server.design.sequences/cmp.ISeqStorageImplementation.New~impl]
-func New(appID istructs.ClusterAppID, partitionID istructs.PartitionID, events istructs.IEvents, appDef appdef.IAppDef,
-	seqStorage isequencer.IVVMSeqStorageAdapter) isequencer.ISeqStorage {
+func New(appID isequencer.ClusterAppID, partitionID istructs.PartitionID, events istructs.IEvents, appDef appdef.IAppDef,
+	seqStorageAdapter isequencer.IVVMSeqStorageAdapter) isequencer.ISeqStorage {
 	return &implISeqStorage{
 		events:      events,
 		partitionID: partitionID,
 		appID:       appID,
 		appDef:      appDef,
-		storage:     seqStorage,
+		storage:     seqStorageAdapter,
 		seqIDs: map[appdef.QName]uint16{
-			istructs.QNamePLogOffsetSequence: istructs.QNameIDPLogOffsetSequence,
 			istructs.QNameWLogOffsetSequence: istructs.QNameIDWLogOffsetSequence,
-			istructs.QNameCRecordIDSequence:  istructs.QNameIDCRecordIDSequence,
-			istructs.QNameOWRecordIDSequence: istructs.QNameIDOWRecordIDSequence,
+			istructs.QNameRecordIDSequence:   istructs.QNameIDRecordIDSequence,
 		},
 	}
 }

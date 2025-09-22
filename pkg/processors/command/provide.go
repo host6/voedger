@@ -11,6 +11,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/processors"
 
 	"github.com/voedger/voedger/pkg/appparts"
@@ -31,7 +32,7 @@ type workspace struct {
 type cmdProc struct {
 	appsPartitions map[appdef.AppQName]map[istructs.PartitionID]*appPartition
 	n10nBroker     in10n.IN10nBroker
-	time           coreutils.ITime
+	time           timeu.ITime
 	authenticator  iauthnz.IAuthenticator
 	storeOp        pipeline.ISyncOperator
 }
@@ -42,7 +43,7 @@ type appPartition struct {
 }
 
 // syncActualizerFactory is a factory(partitionID) that returns a fork operator with a sync actualizer per each application. Inside of an each actualizer - projectors for each application
-func ProvideServiceFactory(appParts appparts.IAppPartitions, tm coreutils.ITime,
+func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
 	secretReader isecrets.ISecretReader) ServiceFactory {
 	return func(commandsChannel CommandChannel) pipeline.IService {
@@ -59,7 +60,12 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm coreutils.ITime,
 				pipeline.WireFunc("applyRecords", func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 					// sync apply records
 					cmd := work.(*cmdWorkpiece)
-					if err = cmd.appStructs.Records().Apply(cmd.pLogEvent); err != nil {
+					if cmd.reapplier != nil {
+						err = cmd.reapplier.ApplyRecords()
+					} else {
+						err = cmd.appStructs.Records().Apply(cmd.pLogEvent)
+					}
+					if err != nil {
 						cmd.appPartitionRestartScheduled = true
 					}
 					return err
@@ -84,12 +90,17 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm coreutils.ITime,
 					pipeline.ForkBranch(pipeline.NewSyncOp(func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 						// put WLog
 						cmd := work.(*cmdWorkpiece)
-						if err = cmd.appStructs.Events().PutWlog(cmd.pLogEvent); err != nil {
+						if cmd.reapplier != nil {
+							err = cmd.reapplier.PutWLog()
+						} else {
+							err = cmd.appStructs.Events().PutWlog(cmd.pLogEvent)
+						}
+						if err != nil {
 							cmd.appPartitionRestartScheduled = true
 						} else {
 							cmd.workspace.NextWLogOffset++
 						}
-						return
+						return err
 					})),
 				)))
 			cmdPipeline := pipeline.NewSyncPipeline(vvmCtx, "Command Processor",
@@ -118,6 +129,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm coreutils.ITime,
 				pipeline.WireFunc("getStatusCodeOfSuccess", getStatusCodeOfSuccess),
 				pipeline.WireFunc("checkIsActiveInCUDs", checkIsActiveInCUDs),
 				pipeline.WireFunc("authorizeRequestCUDs", cmdProc.authorizeRequestCUDs),
+				pipeline.WireFunc("appendBLOBOwnershipUpdaters", appendBLOBOwnershipUpdaters),
 				pipeline.WireFunc("writeCUDs", cmdProc.writeCUDs),
 				pipeline.WireFunc("getCmdResultBuilder", cmdProc.getCmdResultBuilder),
 				pipeline.WireFunc("buildCommandArgs", cmdProc.buildCommandArgs),

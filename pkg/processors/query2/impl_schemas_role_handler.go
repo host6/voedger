@@ -15,6 +15,7 @@ import (
 	"github.com/voedger/voedger/pkg/appdef/acl"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 )
 
 func swaggerUI(url string) string {
@@ -39,29 +40,36 @@ func schemasRoleExec(ctx context.Context, qw *queryWork) (err error) {
 		return coreutils.NewHTTPErrorf(http.StatusNotFound, fmt.Errorf("workspace %s not found", wsQname.String()))
 	}
 
-	role := workspace.Type(qw.msg.QName())
-	if role == nil || role.Kind() != appdef.TypeKind_Role {
+	typ := workspace.Type(qw.msg.QName())
+	if typ == nil || typ.Kind() != appdef.TypeKind_Role {
 		return coreutils.NewHTTPErrorf(http.StatusNotFound, fmt.Errorf("role %s not found in workspace %s", qw.msg.QName().String(), wsQname.String()))
+	}
+	role := typ.(appdef.IRole)
+
+	developer := qw.isDeveloper()
+
+	if !developer && !role.Published() {
+		return coreutils.NewHTTPErrorf(http.StatusForbidden, fmt.Errorf("role %s is not published", role.QName().String()))
 	}
 
 	schemaMeta := SchemaMeta{
-		SchemaTitle:   fmt.Sprintf("%s: %s OpenAPI 3.0", qw.msg.AppQName().Name(), role.QName().Entity()),
+		SchemaTitle:   fmt.Sprintf("%s: %s OpenAPI 3.0", qw.msg.AppQName().Name(), typ.QName().Entity()),
 		SchemaVersion: "1.0.0", // TODO: get app name and version from appdef
-		Description:   role.Comment(),
+		Description:   typ.Comment(),
 		AppName:       qw.msg.AppQName(),
 	}
 
 	writer := new(bytes.Buffer)
 
-	err = CreateOpenAPISchema(writer, workspace, qw.msg.QName(), acl.PublishedTypes, schemaMeta)
+	err = CreateOpenAPISchema(writer, workspace, qw.msg.QName(), acl.PublishedTypes, schemaMeta, developer)
 	if err != nil {
 		return coreutils.NewHTTPErrorf(http.StatusInternalServerError, err)
 	}
 
-	if strings.Contains(qw.msg.Accept(), coreutils.ContentType_TextHTML) {
+	if strings.Contains(qw.msg.Accept(), httpu.ContentType_TextHTML) {
 		url := fmt.Sprintf(`/api/v2/apps/%s/%s/schemas/%s/roles/%s`,
 			qw.msg.AppQName().Owner(), qw.msg.AppQName().Name(), wsQname.String(), qw.msg.QName().String())
-		return qw.msg.Responder().Respond(bus.ResponseMeta{ContentType: coreutils.ContentType_TextHTML, StatusCode: http.StatusOK}, swaggerUI(url))
+		return qw.msg.Responder().Respond(bus.ResponseMeta{ContentType: httpu.ContentType_TextHTML, StatusCode: http.StatusOK}, swaggerUI(url))
 	}
-	return qw.msg.Responder().Respond(bus.ResponseMeta{ContentType: coreutils.ContentType_ApplicationJSON, StatusCode: http.StatusOK}, writer.Bytes())
+	return qw.msg.Responder().Respond(bus.ResponseMeta{ContentType: httpu.ContentType_ApplicationJSON, StatusCode: http.StatusOK}, writer.Bytes())
 }

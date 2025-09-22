@@ -18,7 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/coreutils/utils"
+	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -69,53 +69,6 @@ func TestBasicUsage_NewWSID(t *testing.T) {
 func TestBaseWSIDOverflow(t *testing.T) {
 	istructs.NewWSID(istructs.CurrentClusterID(), istructs.MaxBaseWSID)
 	require.Panics(t, func() { istructs.NewWSID(istructs.CurrentClusterID(), istructs.MaxBaseWSID+1) })
-}
-
-func TestBasicUsage_NewRecordID(t *testing.T) {
-	require := require.New(t)
-
-	// First cluster-generated ID
-	{
-		recordID := istructs.NewRecordID(1)
-		require.Equal(istructs.RecordID(istructs.ClusterAsRegisterID)*istructs.RegisterFactor+1, recordID)
-	}
-	// Second cluster-generated ID
-	{
-		recordID := istructs.NewRecordID(2)
-		require.Equal(istructs.RecordID(istructs.ClusterAsRegisterID)*istructs.RegisterFactor+2, recordID)
-	}
-}
-
-func TestBasicUsage_NewCDocCRecordID(t *testing.T) {
-	require := require.New(t)
-
-	// First cluster-generated C*- ID
-	{
-		recordID := istructs.NewCDocCRecordID(1)
-		require.Equal(istructs.RecordID(istructs.ClusterAsCRecordRegisterID)*istructs.RegisterFactor+1, recordID)
-	}
-	// Second cluster-generated ID
-	{
-		recordID := istructs.NewCDocCRecordID(2)
-		require.Equal(istructs.RecordID(istructs.ClusterAsCRecordRegisterID)*istructs.RegisterFactor+2, recordID)
-	}
-}
-
-func TestBasicUsage_BaseRecordID(t *testing.T) {
-	require := require.New(t)
-
-	// First cluster-generated ID
-	{
-		recordID := istructs.NewRecordID(1)
-		require.Equal(istructs.RecordID(istructs.ClusterAsRegisterID)*istructs.RegisterFactor+1, recordID)
-		require.Equal(istructs.RecordID(1), recordID.BaseRecordID())
-	}
-	// Second cluster-generated ID
-	{
-		recordID := istructs.NewRecordID(2)
-		require.Equal(istructs.RecordID(istructs.ClusterAsRegisterID)*istructs.RegisterFactor+2, recordID)
-		require.Equal(istructs.RecordID(2), recordID.BaseRecordID())
-	}
 }
 
 // regenerateID: just example for test usage
@@ -272,7 +225,7 @@ func TestResourceKindType_MarshalText(t *testing.T) {
 		},
 		{name: `ResourceKind_FakeLast —> 3`,
 			k:    istructs.ResourceKind_FakeLast,
-			want: utils.UintToString(istructs.ResourceKind_FakeLast),
+			want: strconvu.UintToString(istructs.ResourceKind_FakeLast),
 		},
 	}
 	for _, tt := range tests {
@@ -290,7 +243,7 @@ func TestResourceKindType_MarshalText(t *testing.T) {
 
 	t.Run("100% cover ResourceKindType.String()", func(t *testing.T) {
 		const tested = istructs.ResourceKind_FakeLast + 1
-		want := "ResourceKindType(" + utils.UintToString(tested) + ")"
+		want := "ResourceKindType(" + strconvu.UintToString(tested) + ")"
 		got := tested.String()
 		if got != want {
 			t.Errorf("(ResourceKind_FakeLast + 1).String() = %v, want %v", got, want)

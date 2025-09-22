@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	"github.com/voedger/voedger/pkg/itokensjwt"
@@ -50,7 +50,7 @@ func TestBasicUsage_PrincipalPayload(t *testing.T) {
 		gp, err := signer.ValidateToken(token, &payload)
 		require.NoError(err)
 		require.Equal(srcPayload, payload)
-		require.Greater(gp.IssuedAt.Unix(), int64(0))
+		require.Positive(gp.IssuedAt.Unix())
 		require.Equal(testApp, gp.AppQName)
 		require.Equal(testDuration, gp.Duration)
 	})
@@ -82,7 +82,7 @@ func TestBasicUsage_BLOBUploadingPayload(t *testing.T) {
 		gp, err := signer.ValidateToken(token, &payload)
 		require.NoError(err)
 		require.Equal(srcPayload, payload)
-		require.Greater(gp.IssuedAt.Unix(), int64(0))
+		require.Positive(gp.IssuedAt.Unix())
 		require.Equal(testApp, gp.AppQName)
 		require.Equal(testDuration, gp.Duration)
 	})
@@ -117,7 +117,7 @@ func TestBasicUsage_VerifiedValue(t *testing.T) {
 		require.Equal(testQName, payload.Entity)
 		require.Equal("testName", payload.Field)
 		require.Equal(json.Number("42"), payload.Value)
-		require.Greater(gp.IssuedAt.Unix(), int64(0))
+		require.Positive(gp.IssuedAt.Unix())
 		require.Equal(testApp, gp.AppQName)
 		require.Equal(testDuration, gp.Duration)
 		require.Equal(istructs.WSID(43), payload.WSID)
@@ -147,14 +147,14 @@ func TestBasicUsage_IAppTokens(t *testing.T) {
 		payload := PrincipalPayload{}
 		gp, err := at.ValidateToken(token, &payload)
 		require.NoError(err)
-		require.Greater(gp.IssuedAt.Unix(), int64(0))
+		require.Positive(gp.IssuedAt.Unix())
 		require.Equal(testApp, gp.AppQName)
 		require.Equal(testDuration, gp.Duration)
 	})
 
 	t.Run("Basic validation error", func(t *testing.T) {
-		coreutils.MockTime.Add(testDuration * 2)
-		defer func() { coreutils.MockTime.Add(-testDuration * 2) }()
+		testingu.MockTime.Add(testDuration * 2)
+		defer func() { testingu.MockTime.Add(-testDuration * 2) }()
 		payload := PrincipalPayload{}
 		_, err := at.ValidateToken(token, &payload)
 		require.ErrorIs(err, itokens.ErrTokenExpired)

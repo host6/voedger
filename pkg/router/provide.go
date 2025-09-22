@@ -6,12 +6,16 @@
 package router
 
 import (
+	"fmt"
 	"log"
 	"net/http"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/coreutils/federation"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/itokens"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	blobprocessor "github.com/voedger/voedger/pkg/processors/blobber"
 	"golang.org/x/crypto/acme/autocert"
 
@@ -22,18 +26,16 @@ import (
 // port == 443 -> httpsService + ACMEService, otherwise -> HTTPService only, ACMEService is nil
 // where is VVM RequestHandler? bus.RequestHandler
 func Provide(rp RouterParams, broker in10n.IN10nBroker, blobRequestHandler blobprocessor.IRequestHandler, autocertCache autocert.Cache,
-	requestSender bus.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) (httpSrv IHTTPService, acmeSrv IACMEService, adminSrv IAdminService) {
-	httpServ := getHTTPService("HTTP server", coreutils.ServerAddress(rp.Port), rp, broker, blobRequestHandler,
-		requestSender, numsAppsWorkspaces)
-
-	if coreutils.IsTest() {
-		adminEndpoint = "127.0.0.1:0"
-	}
+	requestSender bus.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces, iTokens itokens.ITokens,
+	federation federation.IFederation, appTokensFactory payloads.IAppTokensFactory) (httpSrv IHTTPService, acmeSrv IACMEService, adminSrv IAdminService) {
+	httpServ := getHTTPService("HTTP server", httpu.ListenAddr(rp.Port), rp, broker, blobRequestHandler,
+		requestSender, numsAppsWorkspaces, iTokens, federation, appTokensFactory)
+	adminEndpoint := fmt.Sprintf("%s:%d", httpu.LocalhostIP, rp.AdminPort)
 	adminSrv = getHTTPService("Admin HTTP server", adminEndpoint, RouterParams{
 		WriteTimeout:     rp.WriteTimeout,
 		ReadTimeout:      rp.ReadTimeout,
 		ConnectionsLimit: rp.ConnectionsLimit,
-	}, broker, nil, requestSender, numsAppsWorkspaces)
+	}, broker, nil, requestSender, numsAppsWorkspaces, iTokens, federation, appTokensFactory)
 
 	if rp.Port != HTTPSPort {
 		return httpServ, nil, adminSrv
@@ -76,7 +78,9 @@ func Provide(rp RouterParams, broker in10n.IN10nBroker, blobRequestHandler blobp
 }
 
 func getHTTPService(name string, listenAddress string, rp RouterParams, broker in10n.IN10nBroker,
-	blobRequestHandler blobprocessor.IRequestHandler, requestSender bus.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) *httpService {
+	blobRequestHandler blobprocessor.IRequestHandler, requestSender bus.IRequestSender,
+	numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces, iTokens itokens.ITokens,
+	federation federation.IFederation, appTokensFactory payloads.IAppTokensFactory) *httpService {
 	httpServ := &httpService{
 		RouterParams:       rp,
 		n10n:               broker,
@@ -85,6 +89,9 @@ func getHTTPService(name string, listenAddress string, rp RouterParams, broker i
 		listenAddress:      listenAddress,
 		name:               name,
 		blobRequestHandler: blobRequestHandler,
+		iTokens:            iTokens,
+		federation:         federation,
+		appTokensFactory:   appTokensFactory,
 	}
 
 	return httpServ

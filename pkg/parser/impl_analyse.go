@@ -160,9 +160,9 @@ func analyse(c *basicContext, packages []*PackageSchemaAST) {
 			case *RevokeStmt:
 				analyseRevoke(v, ictx)
 			case *TableStmt:
-				analyseRefFields(v.Items, ictx)
+				analyseRefFields(v.Items, ictx, v.tableTypeKind)
 			case *TypeStmt:
-				analyseRefFields(v.Items, ictx)
+				analyseRefFields(v.Items, ictx, appdef.TypeKind_Object)
 			case *ViewStmt:
 				analyseViewRefFields(v.Items, ictx)
 			}
@@ -223,11 +223,11 @@ func analyseGrantOrRevoke(toOrFrom DefQName, grant *GrantOrRevoke, c *iterateCtx
 			checkColumn := func(column Identifier) error {
 				for _, f := range view.Items {
 					if f.Field != nil && f.Field.Name.Value == column.Value {
-						grant.columns = append(grant.columns, string(column.Value))
+						grant.View.columns = append(grant.View.columns, string(column.Value))
 						return nil
 					}
 					if f.RefField != nil && f.RefField.Name.Value == column.Value {
-						grant.columns = append(grant.columns, string(column.Value))
+						grant.View.columns = append(grant.View.columns, string(column.Value))
 						return nil
 					}
 				}
@@ -373,27 +373,14 @@ func analyseGrantOrRevoke(toOrFrom DefQName, grant *GrantOrRevoke, c *iterateCtx
 			items = descriptor.Items
 		}
 		grant.Table.Table.qName = pkg.NewQName(Ident(named.GetName()))
-		for _, item := range grant.Table.Items {
-			if item.Insert {
-				grant.ops = append(grant.ops, appdef.OperationKind_Insert)
-			} else if item.Update {
-				grant.ops = append(grant.ops, appdef.OperationKind_Update)
-			} else if item.Select {
-				grant.ops = append(grant.ops, appdef.OperationKind_Select)
-			} else if item.Activate {
-				grant.ops = append(grant.ops, appdef.OperationKind_Activate)
-			} else if item.Deactivate {
-				grant.ops = append(grant.ops, appdef.OperationKind_Deactivate)
-			}
-		}
+
+		// Helper function to check if a column exists and add it to the appropriate operation
 		checkColumn := func(column Ident) error {
 			for _, f := range items {
 				if f.Field != nil && f.Field.Name == column {
-					grant.columns = append(grant.columns, string(column))
 					return nil
 				}
 				if f.RefField != nil && f.RefField.Name == column {
-					grant.columns = append(grant.columns, string(column))
 					return nil
 				}
 				if f.NestedTable != nil && f.NestedTable.Name == column {
@@ -402,23 +389,58 @@ func analyseGrantOrRevoke(toOrFrom DefQName, grant *GrantOrRevoke, c *iterateCtx
 			}
 			return ErrUndefinedField(string(column))
 		}
+
+		// Handle ALL case
 		if grant.Table.All != nil {
+			// For each operation, process the columns
 			for _, column := range grant.Table.All.Columns {
 				if err := checkColumn(column.Value); err != nil {
 					c.stmtErr(&column.Pos, err)
+					return
 				}
+				grant.Table.All.columns = append(grant.Table.All.columns, string(column.Value))
 			}
-		}
-		for _, i := range grant.Table.Items {
-			for _, column := range i.Columns {
-				if column.Name != nil {
-					if err := checkColumn(column.Name.Value); err != nil {
-						c.stmtErr(&column.Pos, err)
-					}
+		} else if len(grant.Table.Items) > 0 {
+			opColumns := make(map[appdef.OperationKind][]string)
+			// Handle operation-specific grants
+			for _, item := range grant.Table.Items {
+				var op appdef.OperationKind
+				if item.Insert {
+					op = appdef.OperationKind_Insert
+				} else if item.Update {
+					op = appdef.OperationKind_Update
+				} else if item.Select {
+					op = appdef.OperationKind_Select
+				} else if item.Activate {
+					op = appdef.OperationKind_Activate
+				} else if item.Deactivate {
+					op = appdef.OperationKind_Deactivate
 				} else {
-					grant.columns = append(grant.columns, column.SysName)
+					continue
+				}
+
+				// Process columns for this specific operation
+				if len(item.Columns) == 0 {
+					opColumns[op] = []appdef.FieldName{}
+				} else {
+					for _, column := range item.Columns {
+						if column.Name != nil {
+							if err := checkColumn(column.Name.Value); err != nil {
+								c.stmtErr(&column.Pos, err)
+								return
+							}
+							opColumns[op] = append(opColumns[op], string(column.Name.Value))
+						} else {
+							// System column - add to operation's list
+							opColumns[op] = append(opColumns[op], column.SysName)
+							// // Also maintain backward compatibility
+							// grant.columns = append(grant.columns, column.SysName)
+						}
+					}
 				}
 			}
+			// Store the operation-to-columns mapping in the grant
+			grant.opColumns = opColumns
 		}
 
 	}
@@ -507,6 +529,8 @@ func analyzeRate(r *RateStmt, c *iterateCtx) {
 		if err := resolveInCtx(*r.Value.Variable, c, resolve); err != nil {
 			c.stmtErr(&r.Value.Variable.Pos, err)
 		}
+	} else if r.Value.Count != nil {
+		r.Value.count = *r.Value.Count
 	}
 	r.workspace = c.mustCurrentWorkspace()
 }
@@ -650,10 +674,30 @@ func analyzeLimit(limit *LimitStmt, c *iterateCtx) {
 	limit.workspace = c.mustCurrentWorkspace()
 }
 
+func analyzeDatatype(dt *DataType, c *iterateCtx, isTable bool) {
+	if dt.Blob && !isTable {
+		c.stmtErr(&dt.Pos, ErrBlobFieldOnlyInTable)
+	}
+	vc := dt.Varchar
+	if vc != nil && vc.MaxLen != nil {
+		if *vc.MaxLen > uint64(appdef.MaxFieldLength) {
+			c.stmtErr(&vc.Pos, ErrMaxFieldLengthTooLarge)
+		}
+	}
+	bb := dt.Bytes
+	if bb != nil && bb.MaxLen != nil {
+		if *bb.MaxLen > uint64(appdef.MaxFieldLength) {
+			c.stmtErr(&bb.Pos, ErrMaxFieldLengthTooLarge)
+		}
+	}
+
+}
+
 func analyzeView(view *ViewStmt, c *iterateCtx) {
 	view.pkRef = nil
 	fields := make(map[string]int)
 	for i := range view.Items {
+
 		fe := &view.Items[i]
 		if fe.PrimaryKey != nil {
 			if view.pkRef != nil {
@@ -669,6 +713,7 @@ func analyzeView(view *ViewStmt, c *iterateCtx) {
 			} else {
 				fields[string(f.Name.Value)] = i
 			}
+			analyzeDatatype(&fe.Field.Type, c, false)
 		} else if fe.RefField != nil {
 			rf := fe.RefField
 			if _, ok := fields[string(rf.Name.Value)]; ok {
@@ -865,7 +910,10 @@ func analyzeQuery(query *QueryStmt, c *iterateCtx) {
 		}
 
 	}
-	if query.Returns.Def != nil {
+
+	if query.Returns == nil {
+		c.stmtErr(&query.Pos, ErrQueryMustHaveReturn)
+	} else if query.Returns.Def != nil {
 		if err := resolveInCtx(*query.Returns.Def, c, func(*TypeStmt, *PackageSchemaAST) error { return nil }); err != nil {
 			c.stmtErr(&query.Returns.Def.Pos, err)
 		}
@@ -904,7 +952,7 @@ func checkStorageEntity(key *StateStorage, f *StorageStmt, c *iterateCtx) error 
 		}
 		for _, entity := range key.Entities {
 			if err2 := resolveInCtx(entity, c, func(view *ViewStmt, pkg *PackageSchemaAST) error {
-				key.entityQNames = append(key.entityQNames, pkg.NewQName(entity.Name))
+				key.entityQNames = append(key.entityQNames, pkg.NewQName(view.Name))
 				return nil
 			}); err2 != nil {
 				return err2
@@ -1082,6 +1130,10 @@ func analyzeJob(j *JobStmt, c *iterateCtx) {
 	}
 	if ws.workspace.GetName() != nameAppWorkspaceWS || ws.pkg.Name != appdef.SysPackage {
 		c.stmtErr(&j.Pos, ErrJobMustBeInAppWorkspace)
+	}
+	if j.CronSchedule == nil || *j.CronSchedule == "" {
+		c.stmtErr(&j.Pos, ErrJobWithoutCronSchedule)
+		return
 	}
 
 	parser := cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
@@ -1365,6 +1417,11 @@ func lookupField(items []TableItemExpr, name Ident, c *iterateCtx) (found bool) 
 				return true
 			}
 		}
+		if item.RefField != nil {
+			if item.RefField.Name == name {
+				return true
+			}
+		}
 		if item.FieldSet != nil {
 			if err := resolveInCtx(item.FieldSet.Type, c, func(t *TypeStmt, schema *PackageSchemaAST) error {
 				found = lookupField(t.Items, name, c)
@@ -1396,18 +1453,7 @@ func analyseFields(items []TableItemExpr, c *iterateCtx, isTable bool) {
 				}
 			}
 			if field.Type.DataType != nil {
-				vc := field.Type.DataType.Varchar
-				if vc != nil && vc.MaxLen != nil {
-					if *vc.MaxLen > uint64(appdef.MaxFieldLength) {
-						c.stmtErr(&vc.Pos, ErrMaxFieldLengthTooLarge)
-					}
-				}
-				bb := field.Type.DataType.Bytes
-				if bb != nil && bb.MaxLen != nil {
-					if *bb.MaxLen > uint64(appdef.MaxFieldLength) {
-						c.stmtErr(&bb.Pos, ErrMaxFieldLengthTooLarge)
-					}
-				}
+				analyzeDatatype(field.Type.DataType, c, isTable)
 			} else {
 				if !isTable { // analysing a TYPE
 					err := resolveInCtx(*field.Type.Def, c, func(f *TypeStmt, pkg *PackageSchemaAST) error {
@@ -1479,7 +1525,7 @@ func analyseFields(items []TableItemExpr, c *iterateCtx, isTable bool) {
 	}
 }
 
-func analyseRefFields(items []TableItemExpr, c *iterateCtx) {
+func analyseRefFields(items []TableItemExpr, c *iterateCtx, tableTypeKind appdef.TypeKind) {
 	for i := range items {
 		item := items[i]
 		if item.RefField != nil {
@@ -1488,6 +1534,10 @@ func analyseRefFields(items []TableItemExpr, c *iterateCtx) {
 				if err := resolveInCtx(rf.RefDocs[i], c, func(f *TableStmt, tblPkg *PackageSchemaAST) error {
 					if f.Abstract {
 						return ErrReferenceToAbstractTable(rf.RefDocs[i].String())
+					}
+					if (tableTypeKind == appdef.TypeKind_CRecord || tableTypeKind == appdef.TypeKind_CDoc) &&
+						(f.tableTypeKind == appdef.TypeKind_WRecord || f.tableTypeKind == appdef.TypeKind_WDoc) {
+						return ErrReferenceToWDocOrWRecord(rf.RefDocs[i].String())
 					}
 					rf.refQNames = append(rf.refQNames, tblPkg.NewQName(f.Name))
 					rf.refTables = append(rf.refTables, tableAddr{f, tblPkg})
@@ -1500,7 +1550,7 @@ func analyseRefFields(items []TableItemExpr, c *iterateCtx) {
 		}
 		if item.NestedTable != nil {
 			nestedTable := &item.NestedTable.Table
-			analyseRefFields(nestedTable.Items, c)
+			analyseRefFields(nestedTable.Items, c, nestedTable.tableTypeKind)
 		}
 	}
 }

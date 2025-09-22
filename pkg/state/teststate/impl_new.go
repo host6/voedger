@@ -21,7 +21,9 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/compile"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/iratesce"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -104,7 +106,7 @@ func (gts *generalTestState) stateSingletonRecord(fQName IFullQName, keyValueLis
 		panic("use Record method for non-singleton entities")
 	}
 
-	gts.record(fQName, istructs.MinReservedBaseRecordID, isSingleton, keyValueList...)
+	gts.record(fQName, istructs.MinReservedRecordID, isSingleton, keyValueList...)
 }
 
 func (gts *generalTestState) getQNameFromFQName(fQName IFullQName) appdef.QName {
@@ -305,7 +307,7 @@ func (gts *generalTestState) record(fQName IFullQName, id istructs.RecordID, isS
 	qName := gts.getQNameFromFQName(fQName)
 
 	// check if the record already exists
-	slices.ContainsFunc(gts.recordItems, func(i recordItem) bool {
+	_ = slices.ContainsFunc(gts.recordItems, func(i recordItem) bool {
 		if i.entity == fQName {
 			if isSingleton {
 				panic(fmt.Errorf("singletone %s already exists", qName.String()))
@@ -550,13 +552,14 @@ func (gts *generalTestState) buildAppDef() {
 		}
 	}
 
-	asf := mem.Provide(coreutils.MockTime)
+	asf := mem.Provide(testingu.MockTime)
 	storageProvider := istorageimpl.Provide(asf)
 	prov := istructsmem.Provide(
 		cfgs,
 		iratesce.TestBucketsFactory,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
 		storageProvider,
+		isequencer.SequencesTrustLevel_0,
 	)
 
 	structs, err := prov.BuiltIn(istructs.AppQName_test1_app1)

@@ -173,24 +173,54 @@ func (o objectBackedByMap) SpecifiedValues(cb func(appdef.IField, interface{}) b
 
 type keys struct {
 	pipeline.AsyncNOOP
-	keys map[string]bool
+	keys map[string]interface{}
 }
 
-func newKeys(ss []string) (o pipeline.IAsyncOperator) {
-	k := &keys{keys: make(map[string]bool)}
-	for _, s := range ss {
-		k.keys[s] = true
+func newKeys(paths []string) (o pipeline.IAsyncOperator) {
+	k := &keys{keys: make(map[string]interface{})}
+
+	var f func(keysMap map[string]interface{}, keys []string)
+	f = func(keysMap map[string]interface{}, keys []string) {
+		key := keys[0]
+		if len(keys) == 1 {
+			keysMap[key] = true
+		} else {
+			intf, ok := keysMap[key]
+			if !ok {
+				intf = make(map[string]interface{})
+			}
+			f(intf.(map[string]interface{}), keys[1:])
+			keysMap[key] = intf
+		}
+	}
+	for _, path := range paths {
+		f(k.keys, splitPath(path))
 	}
 	return k
 }
 
-func (f *keys) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
-	for k := range work.(objectBackedByMap).data {
-		if f.keys[k] {
-			continue
+func (k *keys) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+	var f func(keysMap map[string]interface{}, data map[string]interface{})
+	f = func(keysMap map[string]interface{}, data map[string]interface{}) {
+		for key := range data {
+			switch v1 := keysMap[key].(type) {
+			case bool:
+				// Do nothing
+			case map[string]interface{}:
+				switch v2 := data[key].(type) {
+				case map[string]interface{}:
+					f(v1, v2)
+				case []map[string]interface{}:
+					for i := range v2 {
+						f(v1, v2[i])
+					}
+				}
+			case nil:
+				delete(data, key)
+			}
 		}
-		delete(work.(objectBackedByMap).data, k)
 	}
+	f(k.keys, work.(objectBackedByMap).data)
 	return work, nil
 }
 
@@ -321,20 +351,28 @@ func (a *aggregator) compareUint64(v1, v2 uint64, asc bool) bool {
 type sender struct {
 	pipeline.AsyncNOOP
 	responder          bus.IResponder
-	respWriter         bus.IResponseWriter
-	isArrayResponse    bool
-	contentType        string
 	rowsProcessorErrCh chan error
 }
 
-func (s *sender) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
-	if !s.isArrayResponse {
-		return work, s.responder.Respond(bus.ResponseMeta{ContentType: s.contentType, StatusCode: http.StatusOK}, work.(objectBackedByMap).data)
-	}
+type arraySender struct {
+	sender
+	respWriter bus.IResponseWriter
+}
+
+type objectSender struct {
+	sender
+	contentType string
+}
+
+func (s *arraySender) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
 	if s.respWriter == nil {
 		s.respWriter = s.responder.InitResponse(http.StatusOK)
 	}
 	return work, s.respWriter.Write(work.(objectBackedByMap).data)
+}
+
+func (s *objectSender) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+	return work, s.responder.Respond(bus.ResponseMeta{ContentType: s.contentType, StatusCode: http.StatusOK}, work.(objectBackedByMap).data)
 }
 func (s *sender) OnError(_ context.Context, err error) {
 	s.rowsProcessorErrCh <- coreutils.WrapSysError(err, http.StatusBadRequest)
@@ -624,14 +662,19 @@ func (i include) getRelations(ctx context.Context, work pipeline.IWorkpiece) (re
 	return
 }
 func (i include) checkField(parent map[string]interface{}, refFieldOrContainer string, refFieldOrContainerExpression []string) (err error) {
-	for _, field := range i.ad.Type(parent[appdef.SystemField_QName].(appdef.QName)).(appdef.IWithFields).RefFields() {
-		if field.Name() == refFieldOrContainer {
-			return nil
+	iType := i.ad.Type(parent[appdef.SystemField_QName].(appdef.QName))
+	if withFields, ok := iType.(appdef.IWithFields); ok {
+		for _, field := range withFields.RefFields() {
+			if field.Name() == refFieldOrContainer {
+				return nil
+			}
 		}
 	}
-	for _, container := range i.ad.Type(parent[appdef.SystemField_QName].(appdef.QName)).(appdef.IWithContainers).Containers() {
-		if container.Name() == refFieldOrContainer {
-			return nil
+	if withContainers, ok := iType.(appdef.IWithContainers); ok {
+		for _, field := range withContainers.Containers() {
+			if field.Name() == refFieldOrContainer {
+				return nil
+			}
 		}
 	}
 	return fmt.Errorf("field expression - '%s', '%s' - %w", strings.Join(refFieldOrContainerExpression, "."), refFieldOrContainer, errUnexpectedField)

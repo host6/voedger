@@ -6,12 +6,13 @@ package query2
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/pipeline"
@@ -32,16 +33,8 @@ func viewHandler() apiPathHandler {
 }
 
 func viewSetRequestType(ctx context.Context, qw *queryWork) error {
-	switch qw.iWorkspace {
-	case nil:
-		// workspace is dummy
-		if qw.iView = appdef.View(qw.appStructs.AppDef().Type, qw.msg.QName()); qw.iView == nil {
-			return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("view %s does not exist", qw.msg.QName()))
-		}
-	default:
-		if qw.iView = appdef.View(qw.iWorkspace.Type, qw.msg.QName()); qw.iView == nil {
-			return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("view %s does not exist in %v", qw.msg.QName(), qw.iWorkspace))
-		}
+	if qw.iView = appdef.View(qw.iWorkspace.Type, qw.msg.QName()); qw.iView == nil {
+		return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("view %s does not exist in %v", qw.msg.QName(), qw.iWorkspace))
 	}
 	return nil
 }
@@ -50,33 +43,30 @@ func viewSetResultType(ctx context.Context, qw *queryWork, statelessResources is
 	return nil
 }
 func viewAuthorizeResult(ctx context.Context, qw *queryWork) (err error) {
-	if qw.resultType != appdef.AnyType {
-		// will authorize result only if result is sys.Any
-		// otherwise each field is considered as allowed if EXECUTE ON QUERY is allowed
-		return nil
-	}
 	ws := qw.iWorkspace
-	if ws == nil {
-		// workspace is dummy
-		panic("")
-	}
 	var requestedFields []string
 	if len(qw.queryParams.Constraints.Keys) != 0 {
 		requestedFields = qw.queryParams.Constraints.Keys
 	} else {
-		for _, field := range qw.appStructs.AppDef().Type(qw.iView.QName()).(appdef.IView).Key().Fields() {
+		for _, field := range qw.appStructs.AppDef().Type(qw.iView.QName()).(appdef.IView).Fields() {
 			requestedFields = append(requestedFields, field.Name())
 		}
 	}
 	// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-	ok := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
-	if !ok {
-		if ok, err = qw.appPart.IsOperationAllowed(ws, appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, qw.roles); err != nil {
+	oldACLOk := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
+	newACLOk := true
+	newACLCalculated := true
+	if newACLOk, err = qw.appPart.IsOperationAllowed(ws, appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, qw.roles); err != nil {
+		if !errors.Is(err, appdef.ErrNotFoundError) || !oldACLOk {
 			return err
 		}
+		newACLCalculated = false
 	}
-	if !ok {
+	if !newACLOk && !oldACLOk {
 		return coreutils.NewSysError(http.StatusForbidden)
+	}
+	if newACLCalculated && !newACLOk && oldACLOk {
+		logger.Verbose("newACL not ok, but oldACL ok.", appdef.OperationKind_Select, qw.resultType.QName(), qw.roles)
 	}
 	return nil
 }
@@ -105,12 +95,10 @@ func viewRowsProcessor(ctx context.Context, qw *queryWork) (err error) {
 	if len(qw.queryParams.Constraints.Keys) != 0 {
 		oo = append(oo, pipeline.WireAsyncOperator("Keys", newKeys(qw.queryParams.Constraints.Keys)))
 	}
-	sender := &sender{responder: qw.msg.Responder(), isArrayResponse: true}
+	sender, respWriterGetter := qw.getArraySender()
 	oo = append(oo, pipeline.WireAsyncOperator("Sender", sender))
 	qw.rowsProcessor = pipeline.NewAsyncPipeline(ctx, "View rows processor", oo[0], oo[1:]...)
-	qw.responseWriterGetter = func() bus.IResponseWriter {
-		return sender.respWriter
-	}
+	qw.responseWriterGetter = respWriterGetter
 	return
 }
 func viewExec(ctx context.Context, qw *queryWork) (err error) {
@@ -136,7 +124,11 @@ func viewExec(ctx context.Context, qw *queryWork) (err error) {
 func getKeys(qw *queryWork) (keys []istructs.IKeyBuilder, err error) {
 	fields := qw.appStructs.AppDef().Type(qw.iView.QName()).(appdef.IView).Key().Fields()
 	values := make([][]interface{}, 0, len(fields))
+	partialKey := false
 	for i, field := range fields {
+		if partialKey {
+			continue
+		}
 		switch field.DataKind() {
 		case appdef.DataKind_int32:
 			vv, err := qw.queryParams.Constraints.Where.getAsInt32(field.Name())
@@ -144,6 +136,7 @@ func getKeys(qw *queryWork) (keys []istructs.IKeyBuilder, err error) {
 				return nil, err
 			}
 			if vv == nil {
+				partialKey = true
 				continue
 			}
 			values = append(values, make([]interface{}, 0))

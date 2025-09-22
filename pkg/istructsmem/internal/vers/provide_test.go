@@ -10,14 +10,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
 func Test_BasicUsage(t *testing.T) {
-	sp := istorageimpl.Provide(mem.Provide(coreutils.MockTime))
+	sp := istorageimpl.Provide(mem.Provide(testingu.MockTime))
 	storage, err := sp.AppStorage(istructs.AppQName_test1_app1)
 	require.NoError(t, err)
 
@@ -36,7 +36,8 @@ func Test_BasicUsage(t *testing.T) {
 
 		require.Equal(UnknownVersion, versions.Get(key))
 
-		versions.Put(key, ver)
+		err = versions.Put(key, ver)
+		require.NoError(err)
 		require.Equal(ver, versions.Get(key))
 
 		t.Run("must be able to load early stored versions", func(t *testing.T) {

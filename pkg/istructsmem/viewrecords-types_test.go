@@ -15,6 +15,7 @@ import (
 	"github.com/voedger/voedger/pkg/appdef/builder"
 	"github.com/voedger/voedger/pkg/appdef/constraints"
 	"github.com/voedger/voedger/pkg/goutils/testingu/require"
+	"github.com/voedger/voedger/pkg/isequencer"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iratesce"
@@ -36,6 +37,8 @@ func Test_KeyType(t *testing.T) {
 		adb.AddPackage("test", "test.com/test")
 
 		wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 
 		t.Run("should be ok to build view", func(t *testing.T) {
 			view := wsb.AddView(viewName)
@@ -77,7 +80,7 @@ func Test_KeyType(t *testing.T) {
 	appCfgs := appConfigs()
 	appCfg := appCfgs.GetConfig(appName)
 
-	appProvider := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), teststore.NewStorageProvider(teststore.NewStorage(appName)))
+	appProvider := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), teststore.NewStorageProvider(teststore.NewStorage(appName)), isequencer.SequencesTrustLevel_0)
 	app, err := appProvider.BuiltIn(appName)
 	require.NoError(err)
 	require.NotNil(app)
@@ -230,6 +233,8 @@ func TestCore_ViewRecords(t *testing.T) {
 		adb := builder.New()
 		adb.AddPackage("test", "test.com/test")
 		wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 		t.Run("should be ok to build application", func(t *testing.T) {
 			view := wsb.AddView(appdef.NewQName("test", "viewDrinks"))
 			view.Key().PartKey().
@@ -262,7 +267,7 @@ func TestCore_ViewRecords(t *testing.T) {
 
 	appCfgs := appConfigs()
 	appCfg := appCfgs.GetConfig(istructs.AppQName_test1_app1)
-	p := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
+	p := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider, isequencer.SequencesTrustLevel_0)
 	app, err := p.BuiltIn(istructs.AppQName_test1_app1)
 	require.NoError(err)
 	viewRecords := app.ViewRecords()
@@ -442,7 +447,7 @@ func TestCore_ViewRecords(t *testing.T) {
 		kb.PutString("clusteringColumn3", "tofu")
 
 		value, err := viewRecords.Get(2, kb)
-		require.ErrorIs(err, ErrRecordNotFound)
+		require.ErrorIs(err, istructs.ErrRecordNotFound)
 		require.NotNil(value)
 	})
 
@@ -894,6 +899,8 @@ func Test_ViewRecordsPutJSON(t *testing.T) {
 		adb := builder.New()
 		adb.AddPackage("test", "test.com/test")
 		wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 		t.Run("should be ok to build application", func(t *testing.T) {
 			view := wsb.AddView(appdef.MustParseQName(viewName))
 			view.Key().PartKey().
@@ -910,7 +917,7 @@ func Test_ViewRecordsPutJSON(t *testing.T) {
 		return cfgs
 	}()
 
-	app, err := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider).BuiltIn(appName)
+	app, err := Provide(appCfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider, isequencer.SequencesTrustLevel_0).BuiltIn(appName)
 	require.NoError(err)
 
 	t.Run("should be ok to put view record via PutJSON", func(t *testing.T) {
@@ -1015,6 +1022,8 @@ func Test_LoadStoreViewRecord_Bytes(t *testing.T) {
 	adb := builder.New()
 	adb.AddPackage("test", "test.com/test")
 	wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+	wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+	wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 	t.Run("should be ok to build application", func(t *testing.T) {
 		v := wsb.AddView(viewName)
 		v.Key().PartKey().
@@ -1105,7 +1114,7 @@ func Test_LoadStoreViewRecord_Bytes(t *testing.T) {
 
 	t.Run("should be load error if truncated clustering columns bytes", func(t *testing.T) {
 		k2 := newKey(cfg, viewName)
-		for i := 0; i < len(c)-4; i++ { // 4 - is length of variable bytes "test" that can be truncated with impunity
+		for i := range len(c) - 4 { // 4 - is length of variable bytes "test" that can be truncated with impunity
 			err := k2.loadFromBytes(c[:i])
 			require.Error(err, i)
 		}
@@ -1133,7 +1142,7 @@ func Test_LoadStoreViewRecord_Bytes(t *testing.T) {
 	testRowsIsEqual(t, &v1.rowType, &v2.rowType)
 
 	t.Run("should be load error if truncated value bytes", func(t *testing.T) {
-		for i := 0; i < len(v); i++ {
+		for i := range v {
 			v2 := newValue(cfg, viewName)
 			err := v2.loadFromBytes(v[:i])
 			require.Error(err, i)
@@ -1156,6 +1165,8 @@ func Test_ViewRecords_ClustColumnsQName(t *testing.T) {
 		adb := builder.New()
 		adb.AddPackage("test", "test.com/test")
 		wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 		t.Run("should be ok to build application", func(t *testing.T) {
 			v := wsb.AddView(appdef.NewQName("test", "viewDrinks"))
 			v.Key().PartKey().
@@ -1178,7 +1189,7 @@ func Test_ViewRecords_ClustColumnsQName(t *testing.T) {
 		return cfgs
 	}
 
-	p := Provide(appConfigs(), iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider())
+	p := Provide(appConfigs(), iratesce.TestBucketsFactory, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0)
 	as, err := p.BuiltIn(appName)
 	require.NoError(err)
 	viewRecords := as.ViewRecords()
@@ -1235,6 +1246,8 @@ func Test_ViewRecord_GetBatch(t *testing.T) {
 	adb := builder.New()
 	adb.AddPackage("test", "test.com/test")
 	wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+	wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+	wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 	t.Run("should be ok to build application", func(t *testing.T) {
 		v := wsb.AddView(championshipsView)
 		v.Key().PartKey().
@@ -1260,7 +1273,7 @@ func Test_ViewRecord_GetBatch(t *testing.T) {
 	cfgs := make(AppConfigsType, 1)
 	cfg := cfgs.AddBuiltInAppConfig(appName, adb)
 	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
-	provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider)
+	provider := Provide(cfgs, iratesce.TestBucketsFactory, testTokensFactory(), storageProvider, isequencer.SequencesTrustLevel_0)
 
 	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -1416,7 +1429,7 @@ func Test_ViewRecord_GetBatch(t *testing.T) {
 		t.Run("if maximum batch size exceeds", func(t *testing.T) {
 			const tooGig = maxGetBatchRecordCount + 1
 			batch := make([]istructs.ViewRecordGetBatchItem, tooGig)
-			for i := 0; i < len(batch); i++ {
+			for i := range batch {
 				batch[i].Key = app.ViewRecords().KeyBuilder(championsView)
 				batch[i].Key.PutInt32("Year", int32(i))
 				batch[i].Key.PutString("Sport", "Шашки")
@@ -1519,6 +1532,8 @@ func Test_ViewRecordStructure(t *testing.T) {
 	adb.AddPackage("test", "test.com/test")
 	t.Run("should be ok to build application", func(t *testing.T) {
 		wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
+		wsb.AddCDoc(appdef.NewQName("test", "WSDesc"))
+		wsb.SetDescriptor(appdef.NewQName("test", "WSDesc"))
 		v := wsb.AddView(viewName)
 		v.Key().PartKey().
 			AddField("ValueDateYear", appdef.DataKind_int32)

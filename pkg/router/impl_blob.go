@@ -15,9 +15,9 @@ import (
 
 	"github.com/gorilla/mux"
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/coreutils"
-	"github.com/voedger/voedger/pkg/coreutils/utils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -31,7 +31,7 @@ func (s *httpService) blobHTTPRequestHandler_Write() http.HandlerFunc {
 			return
 		}
 		if !s.blobRequestHandler.HandleWrite(appQName, wsid, headers, req.Context(), req.URL.Query(),
-			newBLOBOKResponseIniter(resp), req.Body, func(statusCode int, args ...interface{}) {
+			newBLOBOKResponseIniter(resp, http.StatusOK), req.Body, func(statusCode int, args ...interface{}) {
 				WriteTextResponse(resp, fmt.Sprint(args...), statusCode)
 			}, s.requestSender) {
 			resp.WriteHeader(http.StatusServiceUnavailable)
@@ -52,7 +52,7 @@ func (s *httpService) blobHTTPRequestHandler_Read() http.HandlerFunc {
 		vars := mux.Vars(req)
 		existingBLOBIDOrSUID := vars[URLPlaceholder_blobIDOrSUUID]
 		if !s.blobRequestHandler.HandleRead(appQName, wsid, headers, req.Context(),
-			newBLOBOKResponseIniter(resp), func(statusCode int, args ...interface{}) {
+			newBLOBOKResponseIniter(resp, http.StatusOK), func(statusCode int, args ...interface{}) {
 				WriteTextResponse(resp, fmt.Sprint(args...), statusCode)
 			}, existingBLOBIDOrSUID, s.requestSender) {
 			resp.WriteHeader(http.StatusServiceUnavailable)
@@ -63,7 +63,7 @@ func (s *httpService) blobHTTPRequestHandler_Read() http.HandlerFunc {
 
 func parseURLParams(req *http.Request, resp http.ResponseWriter) (appQName appdef.AppQName, wsid istructs.WSID, headers map[string]string, ok bool) {
 	vars := mux.Vars(req)
-	wsidUint, err := strconv.ParseUint(vars[URLPlaceholder_wsid], utils.DecimalBase, utils.BitSize64)
+	wsidUint, err := strconvu.ParseUint64(vars[URLPlaceholder_wsid])
 	if err != nil {
 		// notest: checked by router url rule
 		panic(err)
@@ -72,10 +72,10 @@ func parseURLParams(req *http.Request, resp http.ResponseWriter) (appQName appde
 	for k, v := range req.Header {
 		headers[k] = v[0]
 	}
-	if _, ok := headers[coreutils.Authorization]; !ok {
+	if _, ok := headers[httpu.Authorization]; !ok {
 		// no token among headers -> look among cookies
 		// no token among cookies as well -> just do nothing, 403 will happen on call helper commands further in BLOBs processor
-		cookie, err := req.Cookie(coreutils.Authorization)
+		cookie, err := req.Cookie(httpu.Authorization)
 		if !errors.Is(err, http.ErrNoCookie) {
 			if err != nil {
 				// notest
@@ -87,19 +87,19 @@ func parseURLParams(req *http.Request, resp http.ResponseWriter) (appQName appde
 				return appQName, wsid, headers, false
 			}
 			// authorization token in cookies -> q.sys.DownloadBLOBAuthnz requires it in headers
-			headers[coreutils.Authorization] = val
+			headers[httpu.Authorization] = val
 		}
 	}
 	appQName = appdef.NewAppQName(vars[URLPlaceholder_appOwner], vars[URLPlaceholder_appName])
 	return appQName, istructs.WSID(wsidUint), headers, true
 }
 
-func newBLOBOKResponseIniter(r http.ResponseWriter) func(headersKV ...string) io.Writer {
+func newBLOBOKResponseIniter(r http.ResponseWriter, okStatusCode int) func(headersKV ...string) io.Writer {
 	return func(headersKV ...string) io.Writer {
 		for i := 0; i < len(headersKV); i += 2 {
 			r.Header().Set(headersKV[i], headersKV[i+1])
 		}
-		r.WriteHeader(http.StatusOK)
+		r.WriteHeader(okStatusCode)
 		return r
 	}
 }

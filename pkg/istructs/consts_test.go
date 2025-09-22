@@ -22,14 +22,10 @@ const (
 	_ = uint16(2 - QNameIDCommandCUD)
 	_ = uint16(QNameIDForCorruptedData - 3)
 	_ = uint16(3 - QNameIDForCorruptedData)
-	_ = uint16(QNameIDPLogOffsetSequence - 4)
-	_ = uint16(4 - QNameIDPLogOffsetSequence)
-	_ = uint16(QNameIDWLogOffsetSequence - 5)
-	_ = uint16(5 - QNameIDWLogOffsetSequence)
-	_ = uint16(QNameIDCRecordIDSequence - 6)
-	_ = uint16(6 - QNameIDCRecordIDSequence)
-	_ = uint16(QNameIDOWRecordIDSequence - 7)
-	_ = uint16(7 - QNameIDOWRecordIDSequence)
+	_ = uint16(QNameIDWLogOffsetSequence - 4)
+	_ = uint16(4 - QNameIDWLogOffsetSequence)
+	_ = uint16(QNameIDRecordIDSequence - 5)
+	_ = uint16(5 - QNameIDRecordIDSequence)
 
 	_ = uint16(QNameIDSysLast - 0xFF)
 	_ = uint16(0xFF - QNameIDSysLast)
@@ -82,9 +78,4 @@ func TestWSID(t *testing.T) {
 	require.Equal(FirstPseudoBaseWSID+MaxPseudoBaseWSID+1, FirstBaseAppWSID)
 	require.Equal(FirstBaseAppWSID+MaxNumAppWorkspaces, FirtReservedWSID)
 	require.Equal(FirtReservedWSID+NumReservedWSID, FirstBaseUserWSID)
-}
-
-func TestClusterConsts(t *testing.T) {
-	require.Equal(t, 64536, ClusterAsRegisterID)
-	require.Equal(t, 64537, ClusterAsCRecordRegisterID)
 }

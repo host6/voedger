@@ -15,14 +15,15 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/apppartsctl"
 	"github.com/voedger/voedger/pkg/bus"
-	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iblobstorage"
 	"github.com/voedger/voedger/pkg/ielections"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/iprocbusmem"
 	"github.com/voedger/voedger/pkg/isecrets"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
@@ -30,6 +31,7 @@ import (
 	"github.com/voedger/voedger/pkg/parser"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/processors"
+	"github.com/voedger/voedger/pkg/processors/actualizers"
 	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
 	"github.com/voedger/voedger/pkg/router"
 	"github.com/voedger/voedger/pkg/state"
@@ -49,7 +51,7 @@ type OperatorBLOBProcessors pipeline.ISyncOperator
 type OperatorQueryProcessor pipeline.ISyncOperator
 type AppPartitionFactory func(ctx context.Context, appQName appdef.AppQName, asyncProjectors istructs.Projectors, partitionID istructs.PartitionID) pipeline.ISyncOperator
 type AsyncActualizersFactory func(ctx context.Context, appQName appdef.AppQName, asyncProjectors istructs.Projectors, partitionID istructs.PartitionID,
-	tokens itokens.ITokens, federation federation.IFederation, opts []state.StateOptFunc) pipeline.ISyncOperator
+	tokens itokens.ITokens, federation federation.IFederation, stateOpts state.StateOpts) pipeline.ISyncOperator
 type OperatorAppServicesFactory func(ctx context.Context) pipeline.ISyncOperator
 type CommandChannelFactory func(channelIdx uint) commandprocessor.CommandChannel
 type QueryChannel_V1 iprocbus.ServiceChannel
@@ -135,7 +137,7 @@ type AppsExtensionPoints map[appdef.AppQName]extensionpoints.IExtensionPoint
 
 type VVMConfig struct {
 	VVMAppsBuilder             VVMAppsBuilder // is a map
-	Time                       coreutils.ITime
+	Time                       timeu.ITime
 	RouterWriteTimeout         int
 	RouterReadTimeout          int
 	RouterConnectionsLimit     int
@@ -145,7 +147,7 @@ type VVMConfig struct {
 	RoutesRewrite              map[string]string
 	RouteDomains               map[string]string
 	SendTimeout                bus.SendTimeout
-	StorageFactory             func() (provider istorage.IAppStorageFactory, err error)
+	StorageFactory             func(time timeu.ITime) (provider istorage.IAppStorageFactory, err error)
 	BLOBMaxSize                iblobstorage.BLOBMaxSizeType
 	Name                       processors.VVMName
 	NumCommandProcessors       istructs.NumCommandProcessors
@@ -154,12 +156,15 @@ type VVMConfig struct {
 	MaxPrepareQueries          MaxPrepareQueriesType
 	StorageCacheSize           StorageCacheSizeType
 	processorsChannels         []ProcesorChannel
-	ActualizerStateOpts        []state.StateOptFunc
+	EmailSender                state.IEmailSender
 	SecretsReader              isecrets.ISecretReader
 	SMTPConfig                 smtp.Cfg
 	WSPostInitFunc             workspace.WSPostInitFunc
 	DataPath                   string
 	MetricsServicePort         metrics.MetricsServicePort
+	AsyncActualizersRetryDelay actualizers.RetryDelay
+	AdminPort                  int
+	SchemasCache               ISchemasCache // normally NullSchemasCache in production, vit.SysAppsSchemasCache in VIT tests
 
 	// 0 -> dynamic port will be used, new on each vvmIdx
 	// >0 -> vVMPort+vvmIdx will be actually used
@@ -168,14 +173,20 @@ type VVMConfig struct {
 	// test and FederationURL contains port -> the port will be relaced with the actual VVMPort
 	FederationURL *url.URL
 
-	// used in tests only
-	// normally is empty in VIT. coretuils.IsTest -> UUID is added to the keyspace name at istorage/provider/Provide()
-	// need to e.g. test VVM restart preserving storage
-	KeyspaceNameSuffix string
+	// the string that will be added to the keyspace names of each app to isolate keyspaces among few integration tests run
+	// simultaneously on the same storage driver.
+	// normally should be a random string matching ^[a-z0-9]+$
+	// use [provider.NewTestKeyspaceIsolationSuffix()]
+	// normally should be used in tests only
+	// exposed here for test cases when >1 VVMs must use the same storage
+	KeyspaceIsolationSuffix string
 
 	// [~server.design.orch/VVMConfig.Orch~impl]
 	NumVVM NumVVM // amount of VVMs in the cluster. Default 1
 	IP     net.IP // current IP of the VVM. Used as the value for leaderhsip elections
+
+	// [~server.design.sequences/cmp.VVMConfig.SequencesTrustLevel~impl]
+	SequencesTrustLevel isequencer.SequencesTrustLevel
 }
 
 type VoedgerVM struct {
@@ -221,3 +232,19 @@ type IVVMElections ielections.IElections[storage.TTLStorageImplKey, string]
 type ignition struct{}
 
 func (i ignition) Release() {}
+
+type ISchemasCache interface {
+	// @ConcurrentAccess
+	// must return nil if not found
+	Get(appQName appdef.AppQName) *parser.AppSchemaAST
+	// @ConcurrentAccess
+	Put(appQName appdef.AppQName, schema *parser.AppSchemaAST)
+}
+
+type NullSchemasCache struct{}
+
+func (*NullSchemasCache) Get(appQName appdef.AppQName) *parser.AppSchemaAST {
+	return nil
+}
+
+func (*NullSchemasCache) Put(appQName appdef.AppQName, schema *parser.AppSchemaAST) {}

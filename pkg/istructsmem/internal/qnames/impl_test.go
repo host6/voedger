@@ -14,7 +14,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appdef/builder"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -29,7 +29,7 @@ func TestQNames(t *testing.T) {
 
 	appName := istructs.AppQName_test1_app1
 
-	sp := istorageimpl.Provide(mem.Provide(coreutils.MockTime))
+	sp := istorageimpl.Provide(mem.Provide(testingu.MockTime))
 	storage, err := sp.AppStorage(appName)
 	require.NoError(err)
 
@@ -127,7 +127,7 @@ func TestQNamesPrepareErrors(t *testing.T) {
 	appName := istructs.AppQName_test1_app1
 
 	t.Run("should be error if unknown system view version", func(t *testing.T) {
-		sp := istorageimpl.Provide(mem.Provide(coreutils.MockTime))
+		sp := istorageimpl.Provide(mem.Provide(testingu.MockTime))
 		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
@@ -135,15 +135,16 @@ func TestQNamesPrepareErrors(t *testing.T) {
 			panic(err)
 		}
 
-		versions.Put(vers.SysQNamesVersion, latestVersion+1)
+		err := versions.Put(vers.SysQNamesVersion, latestVersion+1)
+		require.NoError(err)
 
 		names := New()
-		err := names.Prepare(storage, versions, nil)
+		err = names.Prepare(storage, versions, nil)
 		require.ErrorIs(err, vers.ErrorInvalidVersion)
 	})
 
 	t.Run("should be error if invalid QName loaded from system view ", func(t *testing.T) {
-		sp := istorageimpl.Provide(mem.Provide(coreutils.MockTime))
+		sp := istorageimpl.Provide(mem.Provide(testingu.MockTime))
 		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
@@ -151,18 +152,20 @@ func TestQNamesPrepareErrors(t *testing.T) {
 			panic(err)
 		}
 
-		versions.Put(vers.SysQNamesVersion, latestVersion)
+		err := versions.Put(vers.SysQNamesVersion, latestVersion)
+		require.NoError(err)
 		const badName = "-test.error.qname-"
-		storage.Put(utils.ToBytes(consts.SysView_QNames, ver01), []byte(badName), utils.ToBytes(istructs.QNameID(512)))
+		err = storage.Put(utils.ToBytes(consts.SysView_QNames, ver01), []byte(badName), utils.ToBytes(istructs.QNameID(512)))
+		require.NoError(err)
 
 		names := New()
-		err := names.Prepare(storage, versions, nil)
+		err = names.Prepare(storage, versions, nil)
 		require.ErrorIs(err, appdef.ErrConvertError)
 		require.ErrorContains(err, badName)
 	})
 
 	t.Run("should be ok if deleted QName loaded from system view ", func(t *testing.T) {
-		sp := istorageimpl.Provide(mem.Provide(coreutils.MockTime))
+		sp := istorageimpl.Provide(mem.Provide(testingu.MockTime))
 		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
@@ -170,16 +173,18 @@ func TestQNamesPrepareErrors(t *testing.T) {
 			panic(err)
 		}
 
-		versions.Put(vers.SysQNamesVersion, latestVersion)
-		storage.Put(utils.ToBytes(consts.SysView_QNames, ver01), []byte("test.deleted"), utils.ToBytes(istructs.NullQNameID))
+		err := versions.Put(vers.SysQNamesVersion, latestVersion)
+		require.NoError(err)
+		err = storage.Put(utils.ToBytes(consts.SysView_QNames, ver01), []byte("test.deleted"), utils.ToBytes(istructs.NullQNameID))
+		require.NoError(err)
 
 		names := New()
-		err := names.Prepare(storage, versions, nil)
+		err = names.Prepare(storage, versions, nil)
 		require.NoError(err)
 	})
 
 	t.Run("should be error if invalid (small) istructs.QNameID loaded from system view ", func(t *testing.T) {
-		sp := istorageimpl.Provide(mem.Provide(coreutils.MockTime))
+		sp := istorageimpl.Provide(mem.Provide(testingu.MockTime))
 		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
@@ -187,17 +192,19 @@ func TestQNamesPrepareErrors(t *testing.T) {
 			panic(err)
 		}
 
-		versions.Put(vers.SysQNamesVersion, latestVersion)
-		storage.Put(utils.ToBytes(consts.SysView_QNames, ver01), []byte(istructs.QNameForError.String()), utils.ToBytes(istructs.QNameIDForError))
+		err := versions.Put(vers.SysQNamesVersion, latestVersion)
+		require.NoError(err)
+		err = storage.Put(utils.ToBytes(consts.SysView_QNames, ver01), []byte(istructs.QNameForError.String()), utils.ToBytes(istructs.QNameIDForError))
+		require.NoError(err)
 
 		names := New()
-		err := names.Prepare(storage, versions, nil)
+		err = names.Prepare(storage, versions, nil)
 		require.ErrorIs(err, ErrWrongQNameID)
 		require.ErrorContains(err, fmt.Sprintf("unexpected ID (%v)", istructs.QNameIDForError))
 	})
 
 	t.Run("should be error if too many QNames", func(t *testing.T) {
-		sp := istorageimpl.Provide(mem.Provide(coreutils.MockTime))
+		sp := istorageimpl.Provide(mem.Provide(testingu.MockTime))
 		storage, _ := sp.AppStorage(appName)
 
 		versions := vers.New()
@@ -211,7 +218,7 @@ func TestQNamesPrepareErrors(t *testing.T) {
 				adb := builder.New()
 				adb.AddPackage("test", "test.com/test")
 				wsb := adb.AddWorkspace(appdef.NewQName("test", "workspace"))
-				for i := 0; i <= MaxAvailableQNameID; i++ {
+				for i := range MaxAvailableQNameID + 1 {
 					wsb.AddObject(appdef.NewQName("test", fmt.Sprintf("name_%d", i)))
 				}
 				appDef, err := adb.Build()

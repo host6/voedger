@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	retrier "github.com/voedger/voedger/pkg/goutils/retry"
 	"github.com/voedger/voedger/pkg/state/stateprovide"
 	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/authnz"
@@ -22,7 +23,6 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/istructsmem"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/state"
@@ -63,6 +63,7 @@ type asyncActualizer struct {
 	projErrState   int32 // 0 - no error, 1 - error
 	plogBatch            // [50]plogEvent
 	appParts       appparts.IAppPartitions
+	retrierCfg     retrier.Config
 }
 
 func (a *asyncActualizer) Prepare() {
@@ -80,61 +81,33 @@ func (a *asyncActualizer) Prepare() {
 	if a.conf.FlushPositionInterval == 0 {
 		a.conf.FlushPositionInterval = defaultFlushPositionInterval
 	}
-	if a.conf.AfterError == nil {
-		a.conf.AfterError = time.After
-	}
-
 	if a.conf.LogError == nil {
 		a.conf.LogError = logger.Error
+	}
+
+	a.retrierCfg.OnError = func(_ int, _ time.Duration, opErr error) (retry bool, err error) {
+		a.conf.LogError(a.name, opErr)
+		return true, nil
 	}
 }
 
 func (a *asyncActualizer) Run(ctx context.Context) {
-	var err error
-	if err = a.waitForAppDeploy(ctx); err != nil {
-		panic(err)
-	}
 	for ctx.Err() == nil {
-		if err = a.init(ctx); err == nil {
-			logger.Trace(a.name, "started")
-			err = a.keepReading()
-		}
-		a.finit() // execute even if a.init() has failed
-		if err != nil {
-			a.conf.LogError(a.name, err)
-			select {
-			case <-ctx.Done():
-			case <-a.conf.AfterError(actualizerErrorDelay):
+		_ = retrier.RetryNoResult(ctx, a.retrierCfg, func() error {
+			err := a.init(ctx)
+			if err == nil {
+				logger.Trace(a.name, "started")
+				err = a.keepReading()
 			}
-		}
+			a.finit() // execute even if a.init() has failed
+			return err
+		})
 	}
 }
 
 func (a *asyncActualizer) cancelChannel(e error) {
 	a.readCtx.cancelWithError(e)
 	a.conf.Broker.WatchChannel(a.readCtx.ctx, a.conf.channel, func(projection in10n.ProjectionKey, offset istructs.Offset) {})
-}
-
-func (a *asyncActualizer) waitForAppDeploy(ctx context.Context) error {
-	start := time.Now()
-	for ctx.Err() == nil {
-		ap, err := a.appParts.Borrow(a.conf.AppQName, a.conf.PartitionID, appparts.ProcessorKind_Actualizer)
-		if err == nil || errors.Is(err, appparts.ErrNotAvailableEngines) {
-			if ap != nil {
-				ap.Release()
-			}
-			return nil
-		}
-		if !errors.Is(err, appparts.ErrNotFound) {
-			return err
-		}
-		if time.Since(start) >= initFailureErrorLogInterval {
-			logger.Error(fmt.Sprintf("app %s part %d actualizer %q: failed to init in 30 seconds", a.conf.AppQName, a.conf.PartitionID, a.projectorQName))
-			start = time.Now()
-		}
-		time.Sleep(borrowRetryDelay)
-	}
-	return nil // consider "context canceled" as expected error
 }
 
 func (a *asyncActualizer) init(ctx context.Context) (err error) {
@@ -213,7 +186,9 @@ func (a *asyncActualizer) init(ctx context.Context) (err error) {
 		a.conf.Federation,
 		a.conf.IntentsLimit,
 		a.conf.BundlesLimit,
-		a.conf.Opts...)
+		a.conf.StateOpts,
+		a.conf.EmailSender,
+	)
 
 	a.name = fmt.Sprintf("%v [%d]", p.name, a.conf.PartitionID)
 
@@ -365,7 +340,7 @@ func (a *asyncActualizer) readPlogToOffset(ctx context.Context, tillOffset istru
 			}
 		}
 		if len(*batch) > 0 {
-			//nolint: suppress error if at least one event was read
+			//nolint suppress error if at least one event was read
 			return nil
 		}
 		return err
@@ -590,7 +565,7 @@ func ActualizerOffset(appStructs istructs.IAppStructs, partition istructs.Partit
 	key.PutInt32(partitionFld, int32(partition))
 	key.PutQName(projectorNameFld, projectorName)
 	value, err := appStructs.ViewRecords().Get(istructs.NullWSID, key)
-	if errors.Is(err, istructsmem.ErrRecordNotFound) {
+	if errors.Is(err, istructs.ErrRecordNotFound) {
 		return istructs.NullOffset, nil
 	}
 	if err != nil {

@@ -8,17 +8,15 @@ import (
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appdef/sys"
 	"github.com/voedger/voedger/pkg/sys/builtin"
 )
 
 var (
-	qnameProjectionOffsets = appdef.NewQName(appdef.SysPackage, "projectionOffsets")
-)
-
-const (
-	partitionFld     = "partition"
-	projectorNameFld = "projector"
-	offsetFld        = "offset"
+	qnameProjectionOffsets = sys.ProjectionOffsetsView.Name
+	partitionFld           = sys.ProjectionOffsetsView.Fields.Partition
+	projectorNameFld       = sys.ProjectionOffsetsView.Fields.Projector
+	offsetFld              = sys.ProjectionOffsetsView.Fields.Offset
 )
 
 const (
@@ -26,10 +24,8 @@ const (
 	defaultBundlesLimit          = 100
 	defaultFlushInterval         = time.Millisecond * 100
 	defaultFlushPositionInterval = time.Minute
-	actualizerErrorDelay         = time.Second * 30
+	DefaultRetryDelay            = RetryDelay(30 * time.Second)
 	n10nChannelDuration          = 100 * 365 * 24 * time.Hour
-	borrowRetryDelay             = 50 * time.Millisecond
-	initFailureErrorLogInterval  = 30 * time.Second
 	DefaultIntentsLimit          = builtin.MaxCUDs * 10
 )
 

@@ -14,13 +14,14 @@ import (
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/iblobstorage"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
 // everything is validated already
-func buildWorkspace(templateName string, ep extensionpoints.IExtensionPoint, wsKind appdef.QName, federation federation.IFederation, newWSID istructs.WSID,
+func buildWorkspace(templateName string, ep extensionpoints.IExtensionPoint, wsKind appdef.QName, federation federation.IFederationWithRetry, newWSID istructs.WSID,
 	targetAppQName appdef.AppQName, wsName string, systemPrincipalToken string) (err error) {
 	wsTemplateBLOBs, wsTemplateData, err := ValidateTemplate(templateName, ep, wsKind)
 	if err != nil {
@@ -41,7 +42,7 @@ func buildWorkspace(templateName string, ep extensionpoints.IExtensionPoint, wsK
 
 	cudBody := coreutils.JSONMapToCUDBody(wsTemplateData)
 	cudURL := fmt.Sprintf("api/%s/%d/c.sys.CUD", targetAppQName.String(), newWSID)
-	if _, err := federation.Func(cudURL, cudBody, coreutils.WithAuthorizeBy(systemPrincipalToken), coreutils.WithDiscardResponse()); err != nil {
+	if _, err := federation.Func(cudURL, cudBody, httpu.WithAuthorizeBy(systemPrincipalToken), httpu.WithDiscardResponse()); err != nil {
 		return fmt.Errorf("c.sys.CUD failed: %w", err)
 	}
 	logger.Info(fmt.Sprintf("workspace %s build completed", wsName))
@@ -66,29 +67,32 @@ func updateBLOBsIDsMap(wsData []map[string]interface{}, blobsMap blobsMap) {
 	}
 }
 
-func uploadBLOBs(blobs []BLOBWorkspaceTemplateField, fed federation.IFederation, appQName appdef.AppQName, wsid istructs.WSID, principalToken string) (blobsMap, error) {
-	res := blobsMap{}
+func uploadBLOBs(blobs []BLOBWorkspaceTemplateField, fed federation.IFederationWithRetry, appQName appdef.AppQName, wsid istructs.WSID, principalToken string) (blobsMap, error) {
+	blobsMap := blobsMap{}
 	for _, blob := range blobs {
 		logger.Info("workspace build: uploading blob", blob.Name)
 		blobReader := iblobstorage.BLOBReader{
 			DescrType: iblobstorage.DescrType{
-				Name:     blob.Name,
-				MimeType: blob.MimeType,
+				Name:             blob.Name,
+				ContentType:      blob.ContentType,
+				OwnerRecord:      blob.OwnerRecord,
+				OwnerRecordField: blob.OwnerRecordField,
 			},
 			ReadCloser: io.NopCloser(bytes.NewReader(blob.Content)),
 		}
-		newBLOBID, err := fed.UploadBLOB(appQName, wsid, blobReader, coreutils.WithAuthorizeBy(principalToken))
+		newBLOBID, err := fed.UploadBLOB(appQName, wsid, blobReader, httpu.WithAuthorizeBy(principalToken))
 		if err != nil {
 			return nil, fmt.Errorf("blob %s: %w", blob.Name, err)
 		}
 
-		fieldBlobID, ok := res[blob.RecordID]
+		// set ownerRawID -> uploaded BLOBID match
+		ownerRawIDs, ok := blobsMap[blob.OwnerRecordRawID]
 		if !ok {
-			fieldBlobID = map[string]istructs.RecordID{}
-			res[blob.RecordID] = fieldBlobID
+			ownerRawIDs = map[string]istructs.RecordID{}
+			blobsMap[blob.OwnerRecordRawID] = ownerRawIDs
 		}
-		fieldBlobID[blob.FieldName] = newBLOBID
-		logger.Info(fmt.Sprintf("workspace build: blob %s uploaded and set: [%d][%s]=%d", blob.Name, blob.RecordID, blob.FieldName, newBLOBID))
+		ownerRawIDs[blob.OwnerRecordField] = newBLOBID
+		logger.Info(fmt.Sprintf("workspace build: blob %s uploaded and set: [%d][%s]=%d", blob.Name, blob.OwnerRecordRawID, blob.OwnerRecordField, newBLOBID))
 	}
-	return res, nil
+	return blobsMap, nil
 }

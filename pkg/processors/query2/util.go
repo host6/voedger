@@ -15,6 +15,7 @@ import (
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -33,16 +34,8 @@ func queryRateLimitExceeded(ctx context.Context, qw *queryWork) error {
 	return nil
 }
 func querySetRequestType(ctx context.Context, qw *queryWork) error {
-	switch qw.iWorkspace {
-	case nil:
-		// workspace is dummy
-		if qw.iQuery = appdef.Query(qw.appStructs.AppDef().Type, qw.msg.QName()); qw.iQuery == nil {
-			return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("query %s does not exist", qw.msg.QName()))
-		}
-	default:
-		if qw.iQuery = appdef.Query(qw.iWorkspace.Type, qw.msg.QName()); qw.iQuery == nil {
-			return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("query %s does not exist in %v", qw.msg.QName(), qw.iWorkspace))
-		}
+	if qw.iQuery = appdef.Query(qw.iWorkspace.Type, qw.msg.QName()); qw.iQuery == nil {
+		return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Sprintf("query %s does not exist in %v", qw.msg.QName(), qw.iWorkspace))
 	}
 	return nil
 }
@@ -82,7 +75,7 @@ type queryWork struct {
 	iWorkspace           appdef.IWorkspace
 	iQuery               appdef.IQuery
 	iView                appdef.IView
-	iDoc                 appdef.ISingleton
+	iDoc                 appdef.IDoc
 	iRecord              appdef.IContainedRecord
 	wsDesc               istructs.IRecord
 	callbackFunc         istructs.ExecQueryCallback
@@ -108,6 +101,26 @@ func (qw *queryWork) borrow() (err error) {
 	}
 	qw.appStructs = qw.appPart.AppStructs()
 	return nil
+}
+
+func (qw *queryWork) isDeveloper() bool {
+	for _, role := range qw.principalPayload.Roles {
+		if role.QName == appdef.QNameRoleDeveloper {
+			return true
+		}
+	}
+	return false
+}
+
+func (qw *queryWork) isDocSingleton() bool {
+	if qw.iDoc == nil {
+		return false
+	}
+	iSingleton, ok := qw.iDoc.(appdef.ISingleton)
+	if !ok {
+		return false
+	}
+	return iSingleton.Singleton()
 }
 
 func newQueryWork(msg IQueryMessage, appParts appparts.IAppPartitions,
@@ -159,5 +172,27 @@ func NewIQueryMessage(requestCtx context.Context, appQName appdef.AppQName, wsid
 		token:          token,
 		workspaceQName: workspaceQName,
 		headerAccept:   headerAccept,
+	}
+}
+
+func (qw *queryWork) getArraySender() (pipeline.IAsyncOperator, func() bus.IResponseWriter) {
+	res := &arraySender{
+		sender: sender{
+			responder:          qw.msg.Responder(),
+			rowsProcessorErrCh: qw.rowsProcessorErrCh,
+		},
+	}
+	return res, func() bus.IResponseWriter {
+		return res.respWriter
+	}
+}
+
+func (qw *queryWork) getObjectSender() pipeline.IAsyncOperator {
+	return &objectSender{
+		sender: sender{
+			responder:          qw.msg.Responder(),
+			rowsProcessorErrCh: qw.rowsProcessorErrCh,
+		},
+		contentType: httpu.ContentType_ApplicationJSON,
 	}
 }
