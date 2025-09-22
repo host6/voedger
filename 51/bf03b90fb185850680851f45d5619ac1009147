@@ -1,3 +1,5 @@
 Resolves issue 'projectors: Test_AsynchronousActualizer_ErrorAndRestore test fails sometimes'
 
 Resolves #1713 projectors: Test_AsynchronousActualizer_ErrorAndRestore test fails sometimes
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/1713","jira_ticket_url":"","branch_type":1}
