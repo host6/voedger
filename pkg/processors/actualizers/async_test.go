@@ -373,6 +373,19 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	// Wait for the logged error
 	errStr := <-errorsCh
 
+	// sometimes context.Canceled error could be here. Case:
+	// a workpiese is sent to the async pipeline in asyncActualizer.handleEvent()
+	// next iteration us run in asyncActualizer.readPlogByBatches()
+	// borrowAppPart is called in asyncActualizer.readPLogToTheEnd() again
+	// error is logged in async pipeline + context is canceled in asyncActualizerContextState.cancelWithError()
+	// borrowAppPart is failed with context.Canceled error
+	// conex.Canceled error is logged before the actual error
+
+	if errStr == "[test.failing_projector [1] context canceled]" {
+		// wait for our error
+		errStr = <-errorsCh
+	}
+
 	require.Equal("error: [test.failing_projector [1] wsid[1002] offset[0]: test error]", errStr)
 
 	// wait until the istructs.Projector version is updated with the 1st record
@@ -399,7 +412,9 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 
 	select {
 	case err := <-errorsCh:
-		t.Fatal("unexpected error is logged:", err)
+		if err != "error: [test.failing_projector [1] context canceled]" {
+			t.Fatal("unexpected error is logged:", err)
+		}
 	default:
 	}
 }
