@@ -20,6 +20,7 @@ import (
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/goutils/filesu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iauthnz"
@@ -94,7 +95,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 	storageCacheSizeType := vvmConfig.StorageCacheSize
 	iMetrics := imetrics.Provide()
 	vvmName := vvmConfig.Name
-	iAppStorageFactory, err := provideStorageFactory(vvmConfig)
+	iAppStorageFactory, err := provideStorageFactory(vvmConfig, iTime)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -112,11 +113,13 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		return nil, nil, err
 	}
 	vvmPortSource := provideVVMPortSource()
-	iFederation, cleanup2 := provideIFederation(vvmConfig, vvmPortSource)
+	iFederation, cleanup2 := provideIFederation(vvmCtx, vvmConfig, vvmPortSource)
 	iStatelessResources := provideStatelessResources(appConfigsTypeEmpty, vvmConfig, v2, buildInfo, iAppStorageProvider, iTokens, iFederation, iAppStructsProvider, iAppTokensFactory)
 	v3 := actualizers.NewSyncActualizerFactoryFactory(syncActualizerFactory, iSecretReader, in10nBroker, iStatelessResources)
-	v4 := vvmConfig.ActualizerStateOpts
-	basicAsyncActualizerConfig := provideBasicAsyncActualizerConfig(vvmName, iSecretReader, iTokens, iMetrics, in10nBroker, iFederation, v4...)
+	retryDelay := vvmConfig.AsyncActualizersRetryDelay
+	stateOpts := provideStateOpts()
+	iEmailSender := vvmConfig.EmailSender
+	basicAsyncActualizerConfig := provideBasicAsyncActualizerConfig(vvmName, iSecretReader, iTokens, iMetrics, in10nBroker, iFederation, retryDelay, stateOpts, iEmailSender)
 	iActualizerRunner := actualizers.ProvideActualizers(basicAsyncActualizerConfig)
 	basicSchedulerConfig := schedulers.BasicSchedulerConfig{
 		VvmName:      vvmName,
@@ -128,7 +131,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		Time:         iTime,
 	}
 	iSchedulerRunner := provideSchedulerRunner(basicSchedulerConfig)
-	v5, err := provideSidecarApps(vvmConfig)
+	v4, err := provideSidecarApps(vvmConfig)
 	if err != nil {
 		cleanup2()
 		cleanup()
@@ -141,25 +144,24 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		IAppTokensFactory:   iAppTokensFactory,
 		IFederation:         iFederation,
 		ITime:               iTime,
-		SidecarApps:         v5,
+		SidecarApps:         v4,
 	}
-	builtInAppsArtefacts, err := provideBuiltInAppsArtefacts(vvmConfig, apIs, appConfigsTypeEmpty, v2)
+	iSchemasCache := vvmConfig.SchemasCache
+	builtInAppsArtefacts, err := provideBuiltInAppsArtefacts(vvmConfig, apIs, appConfigsTypeEmpty, v2, iSchemasCache)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	iSysVvmStorage, err := provideIVVMAppTTLStorage(iAppStorageProvider)
+	iAppPartitions, cleanup3, err := provideAppPartitions(vvmCtx, iAppStructsProvider, v3, iActualizerRunner, iSchedulerRunner, bucketsFactoryType, iStatelessResources, builtInAppsArtefacts, vvmName, iMetrics)
 	if err != nil {
 		cleanup2()
 		cleanup()
 		return nil, nil, err
 	}
-	ivvmSeqStorageAdapter := storage.NewVVMSeqStorageAdapter(iSysVvmStorage)
-	iAppPartitions, cleanup3 := provideAppPartitions(vvmCtx, iAppStructsProvider, v3, iActualizerRunner, iSchedulerRunner, bucketsFactoryType, iStatelessResources, builtInAppsArtefacts, vvmName, iMetrics, iTime, ivvmSeqStorageAdapter)
-	v6 := provideSubjectGetterFunc()
+	v5 := provideSubjectGetterFunc()
 	isDeviceAllowedFuncs := provideIsDeviceAllowedFunc(v2)
-	iAuthenticator := iauthnzimpl.NewDefaultAuthenticator(v6, isDeviceAllowedFuncs)
+	iAuthenticator := iauthnzimpl.NewDefaultAuthenticator(v5, isDeviceAllowedFuncs)
 	serviceFactory := commandprocessor.ProvideServiceFactory(iAppPartitions, iTime, in10nBroker, iMetrics, vvmName, iAuthenticator, iSecretReader)
 	operatorCommandProcessors := provideCommandProcessors(numCommandProcessors, commandChannelFactory, serviceFactory)
 	numQueryProcessors := vvmConfig.NumQueryProcessors
@@ -169,8 +171,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 	operatorQueryProcessors_V1 := provideQueryProcessors_V1(numQueryProcessors, queryChannel_V1, iAppPartitions, queryprocessorServiceFactory, iMetrics, vvmName, maxPrepareQueriesType, iAuthenticator, iTokens, iFederation, iStatelessResources, iSecretReader)
 	queryChannel_V2 := provideQueryChannel_V2(serviceChannelFactory)
 	query2ServiceFactory := query2.ProvideServiceFactory()
-	iFederationForQP := federation.NewForQP(iFederation)
-	operatorQueryProcessors_V2 := provideQueryProcessors_V2(numQueryProcessors, queryChannel_V2, iAppPartitions, query2ServiceFactory, iMetrics, vvmName, maxPrepareQueriesType, iAuthenticator, iTokens, iFederationForQP, iFederation, iStatelessResources, iSecretReader)
+	operatorQueryProcessors_V2 := provideQueryProcessors_V2(numQueryProcessors, queryChannel_V2, iAppPartitions, query2ServiceFactory, iMetrics, vvmName, maxPrepareQueriesType, iAuthenticator, iTokens, iFederation, iStatelessResources, iSecretReader)
 	numBLOBProcessors := vvmConfig.NumBLOBProcessors
 	blobServiceChannel := provideBLOBChannel(serviceChannelFactory)
 	blobAppStoragePtr := provideBlobAppStoragePtr(iAppStorageProvider)
@@ -186,9 +187,9 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		return nil, nil, err
 	}
 	iAppPartsCtlPipelineService := provideAppPartsCtlPipelineService(iAppPartitionsController)
-	v7 := provideBuiltInApps(builtInAppsArtefacts, v5)
+	v6 := provideBuiltInApps(builtInAppsArtefacts, v4)
 	routerAppStoragePtr := provideRouterAppStoragePtr(iAppStorageProvider)
-	bootstrapOperator, err := provideBootstrapOperator(iFederation, iAppStructsProvider, iTime, iAppPartitions, v7, v5, iTokens, iAppStorageProvider, blobAppStoragePtr, routerAppStoragePtr)
+	bootstrapOperator, err := provideBootstrapOperator(iFederation, iAppStructsProvider, iTime, iAppPartitions, v6, v4, iTokens, iAppStorageProvider, blobAppStoragePtr, routerAppStoragePtr)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -205,10 +206,10 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 	commandProcessorsChannelGroupIdxType := provideProcessorChannelGroupIdxCommand(vvmConfig)
 	queryProcessorsChannelGroupIdxType_V1 := provideProcessorChannelGroupIdxQuery_V1(vvmConfig)
 	queryProcessorsChannelGroupIdxType_V2 := provideProcessorChannelGroupIdxQuery_V2(vvmConfig)
-	vvmApps := provideVVMApps(v7)
+	vvmApps := provideVVMApps(v6)
 	requestHandler := provideRequestHandler(iAppPartitions, iProcBus, commandProcessorsChannelGroupIdxType, queryProcessorsChannelGroupIdxType_V1, queryProcessorsChannelGroupIdxType_V2, numCommandProcessors, vvmApps)
 	iRequestSender := bus.NewIRequestSender(iTime, sendTimeout, requestHandler)
-	v8, err := provideNumsAppsWorkspaces(vvmApps, iAppStructsProvider, v5)
+	v7, err := provideNumsAppsWorkspaces(vvmApps, iAppStructsProvider, v4)
 	if err != nil {
 		cleanup4()
 		cleanup3()
@@ -216,23 +217,31 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		cleanup()
 		return nil, nil, err
 	}
-	routerServices := provideRouterServices(routerParams, sendTimeout, in10nBroker, iRequestHandler, quotas, wLimiterFactory, blobStorage, cache, iRequestSender, vvmPortSource, v8, iTokens, iFederation, iAppTokensFactory)
+	routerServices := provideRouterServices(routerParams, sendTimeout, in10nBroker, iRequestHandler, quotas, wLimiterFactory, blobStorage, cache, iRequestSender, vvmPortSource, v7, iTokens, iFederation, iAppTokensFactory)
 	adminEndpointServiceOperator := provideAdminEndpointServiceOperator(routerServices)
 	metricsServicePort := vvmConfig.MetricsServicePort
 	metricsService := metrics.ProvideMetricsService(vvmCtx, metricsServicePort, iMetrics)
 	metricsServiceOperator := provideMetricsServiceOperator(metricsService)
 	publicEndpointServiceOperator := providePublicEndpointServiceOperator(routerServices, metricsServiceOperator)
 	servicePipeline := provideServicePipeline(vvmCtx, operatorCommandProcessors, operatorQueryProcessors_V1, operatorQueryProcessors_V2, operatorBLOBProcessors, iAppPartsCtlPipelineService, bootstrapOperator, adminEndpointServiceOperator, publicEndpointServiceOperator, iAppStorageProvider)
-	v9 := provideMetricsServicePortGetter(metricsService)
-	v10 := provideBuiltInAppPackages(builtInAppsArtefacts)
+	v8 := provideMetricsServicePortGetter(metricsService)
+	v9 := provideBuiltInAppPackages(builtInAppsArtefacts)
+	iSysVvmStorage, err := provideIVVMAppTTLStorage(iAppStorageProvider)
+	if err != nil {
+		cleanup4()
+		cleanup3()
+		cleanup2()
+		cleanup()
+		return nil, nil, err
+	}
 	ittlStorage := storage.NewElectionsTTLStorage(iSysVvmStorage)
 	vvm := &VVM{
 		ServicePipeline:     servicePipeline,
 		APIs:                apIs,
 		IAppPartitions:      iAppPartitions,
 		AppsExtensionPoints: v2,
-		MetricsServicePort:  v9,
-		BuiltInAppsPackages: v10,
+		MetricsServicePort:  v8,
+		BuiltInAppsPackages: v9,
 		TTLStorage:          ittlStorage,
 	}
 	return vvm, func() {
@@ -299,6 +308,10 @@ func Provide(vvmCfg *VVMConfig) (voedgerVM *VoedgerVM, err error) {
 		return nil, err
 	}
 	return voedgerVM, nil
+}
+
+func provideStateOpts() state.StateOpts {
+	return state.StateOpts{}
 }
 
 func provideIVVMAppTTLStorage(prov istorage.IAppStorageProvider) (storage.ISysVvmStorage, error) {
@@ -373,7 +386,9 @@ func provideBasicAsyncActualizerConfig(
 
 	broker in10n.IN10nBroker, federation2 federation.IFederation,
 
-	opts ...state.StateOptFunc,
+	asyncActualizersRetryDelay actualizers.RetryDelay,
+	stateCfg state.StateOpts,
+	emailSender state.IEmailSender,
 ) actualizers.BasicAsyncActualizerConfig {
 	return actualizers.BasicAsyncActualizerConfig{
 		VvmName:       string(vvm),
@@ -382,9 +397,11 @@ func provideBasicAsyncActualizerConfig(
 		Metrics:       metrics2,
 		Broker:        broker,
 		Federation:    federation2,
-		Opts:          opts,
+		StateOpts:     stateCfg,
 		IntentsLimit:  actualizers.DefaultIntentsLimit,
 		FlushInterval: actualizerFlushInterval,
+		RetryDelay:    asyncActualizersRetryDelay,
+		EmailSender:   emailSender,
 	}
 }
 
@@ -423,9 +440,7 @@ func provideAppPartitions(
 	builtinAppsArtefacts BuiltInAppsArtefacts,
 	vvmName processors.VVMName, imetrics2 imetrics.IMetrics,
 
-	iTime timeu.ITime,
-	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
-) (ap appparts.IAppPartitions, cleanup func()) {
+) (ap appparts.IAppPartitions, cleanup func(), err error) {
 
 	eef := engines.ProvideExtEngineFactories(engines.ExtEngineFactoriesConfig{
 		StatelessResources: sr,
@@ -443,8 +458,6 @@ func provideAppPartitions(
 		sch,
 		eef,
 		bf,
-		iTime,
-		seqStorageAdapter,
 	)
 }
 
@@ -480,12 +493,12 @@ func provideAppPartsCtlPipelineService(ctl apppartsctl.IAppPartitionsController)
 
 func provideIAppStorageUncachingProviderFactory(factory istorage.IAppStorageFactory, vvmCfg *VVMConfig) IAppStorageUncachingProviderFactory {
 	return func() istorage.IAppStorageProvider {
-		return provider.Provide(factory, vvmCfg.KeyspaceNameSuffix)
+		return provider.Provide(factory, vvmCfg.KeyspaceIsolationSuffix)
 	}
 }
 
-func provideStorageFactory(vvmConfig *VVMConfig) (provider2 istorage.IAppStorageFactory, err error) {
-	return vvmConfig.StorageFactory()
+func provideStorageFactory(vvmConfig *VVMConfig, time timeu.ITime) (provider2 istorage.IAppStorageFactory, err error) {
+	return vvmConfig.StorageFactory(time)
 }
 
 func provideSubjectGetterFunc() iauthnzimpl.SubjectGetterFunc {
@@ -571,8 +584,8 @@ func provideMetricsServiceOperator(ms metrics.MetricsService) MetricsServiceOper
 }
 
 // TODO: consider vvmIdx
-func provideIFederation(cfg *VVMConfig, vvmPortSource *VVMPortSource) (federation.IFederation, func()) {
-	return federation.New(func() *url.URL {
+func provideIFederation(vvmCtx context.Context, cfg *VVMConfig, vvmPortSource *VVMPortSource) (federation.IFederation, func()) {
+	return federation.New(vvmCtx, func() *url.URL {
 		if cfg.FederationURL != nil {
 			return cfg.FederationURL
 		}
@@ -615,8 +628,8 @@ func provideVVMApps(builtInApps []appparts.BuiltInApp) (vvmApps VVMApps) {
 }
 
 func provideBuiltInAppsArtefacts(vvmConfig *VVMConfig, apis builtinapps.APIs, cfgs AppConfigsTypeEmpty,
-	appEPs map[appdef.AppQName]extensionpoints.IExtensionPoint) (BuiltInAppsArtefacts, error) {
-	return vvmConfig.VVMAppsBuilder.BuildAppsArtefacts(apis, cfgs, appEPs)
+	appEPs map[appdef.AppQName]extensionpoints.IExtensionPoint, schemasCache ISchemasCache) (BuiltInAppsArtefacts, error) {
+	return vvmConfig.VVMAppsBuilder.BuildAppsArtefacts(apis, cfgs, appEPs, schemasCache)
 }
 
 // extModuleURLs is filled here
@@ -650,7 +663,7 @@ func parseSidecarAppSubDir(fullPath string, basePath string, out_extModuleURLs m
 		}
 	}
 
-	dirAST, err := parser.ParsePackageDir(modulePath, os.DirFS(fullPath).(coreutils.IReadFS), ".")
+	dirAST, err := parser.ParsePackageDir(modulePath, os.DirFS(fullPath).(filesu.IReadFS), ".")
 	if err == nil {
 		asts = append(asts, dirAST)
 	} else if !errors.Is(err, parser.ErrDirContainsNoSchemaFiles) {
@@ -866,10 +879,10 @@ func provideQueryProcessors_V1(qpCount istructs.NumQueryProcessors, qc QueryChan
 
 func provideQueryProcessors_V2(qpCount istructs.NumQueryProcessors, qc QueryChannel_V2, appParts appparts.IAppPartitions, qpFactory query2.ServiceFactory, imetrics2 imetrics.IMetrics,
 	vvm processors.VVMName, mpq MaxPrepareQueriesType, authn iauthnz.IAuthenticator,
-	tokens itokens.ITokens, federation2 federation.IFederationForQP, federationForState federation.IFederation, statelessResources istructsmem.IStatelessResources, secretReader isecrets.ISecretReader) OperatorQueryProcessors_V2 {
+	tokens itokens.ITokens, federation2 federation.IFederation, statelessResources istructsmem.IStatelessResources, secretReader isecrets.ISecretReader) OperatorQueryProcessors_V2 {
 	forks := make([]pipeline.ForkOperatorOptionFunc, qpCount)
 	for i := 0; i < int(qpCount); i++ {
-		forks[i] = pipeline.ForkBranch(pipeline.ServiceOperator(qpFactory(iprocbus.ServiceChannel(qc), appParts, int(mpq), imetrics2, string(vvm), authn, tokens, federation2, federationForState, statelessResources, secretReader)))
+		forks[i] = pipeline.ForkBranch(pipeline.ServiceOperator(qpFactory(iprocbus.ServiceChannel(qc), appParts, int(mpq), imetrics2, string(vvm), authn, tokens, federation2, statelessResources, secretReader)))
 	}
 	return pipeline.ForkOperator(pipeline.ForkSame, forks[0], forks[1:]...)
 }

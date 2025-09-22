@@ -17,12 +17,14 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/timeu"
+	retrier "github.com/voedger/voedger/pkg/goutils/retry"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/irates"
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
+// IAppPartitions
 type apps struct {
 	mx                     sync.RWMutex
 	vvmCtx                 context.Context
@@ -35,6 +37,7 @@ type apps struct {
 	apps                   map[appdef.AppQName]*appRT
 	iTime                  timeu.ITime
 	seqStorageAdapter      isequencer.IVVMSeqStorageAdapter
+	partBorrowRetryCfg     retrier.Config
 }
 
 func newAppPartitions(
@@ -60,10 +63,37 @@ func newAppPartitions(
 		apps:                   map[appdef.AppQName]*appRT{},
 		iTime:                  iTime,
 		seqStorageAdapter:      seqStorageAdapter,
+		partBorrowRetryCfg:     retrier.NewConfig(AppPartitionBorrowRetryDelay, AppPartitionBorrowRetryDelay),
 	}
 	a.asyncActualizersRunner.SetAppPartitions(a)
 	a.schedulerRunner.SetAppPartitions(a)
-	return a, a.cleanup
+	a.partBorrowRetryCfg.OnError = func(attempt int, delay time.Duration, opErr error) (retry bool, err error) {
+		if !errors.Is(err, ErrNotAvailableEngines) {
+			return true, nil
+		}
+		// notest: ErrNotAvailableEngines is only possible in [borrowedPartition.borrow]
+		return false, opErr
+	}
+	return a, func() {
+		select {
+		case <-a.vvmCtx.Done():
+		default:
+			panic("vvmCtx must be closed before calling cleanup()")
+		}
+
+		var wg sync.WaitGroup
+		for _, app := range a.apps {
+			for _, part := range app.parts {
+				wg.Add(1)
+				go func(p *appPartitionRT) {
+					defer wg.Done()
+					p.actualizers.Wait()
+					p.schedulers.Wait()
+				}(part)
+			}
+		}
+		wg.Wait()
+	}, err
 }
 
 func (aps *apps) AppDef(name appdef.AppQName) (appdef.IAppDef, error) {
@@ -212,18 +242,9 @@ func (aps *apps) UpgradeAppDef(name appdef.AppQName, def appdef.IAppDef) {
 }
 
 func (aps *apps) WaitForBorrow(ctx context.Context, name appdef.AppQName, id istructs.PartitionID, proc ProcessorKind) (IAppPartition, error) {
-	for ctx.Err() == nil {
-		ap, err := aps.Borrow(name, id, proc)
-		if err == nil {
-			return ap, nil
-		}
-		if errors.Is(err, ErrNotAvailableEngines) {
-			time.Sleep(AppPartitionBorrowRetryDelay)
-			continue
-		}
-		return nil, err
-	}
-	return nil, ctx.Err()
+	return retrier.Retry(ctx, aps.partBorrowRetryCfg, func() (IAppPartition, error) {
+		return aps.Borrow(name, id, proc)
+	})
 }
 
 func (aps *apps) WorkedActualizers(app appdef.AppQName) iter.Seq2[istructs.PartitionID, []appdef.QName] {

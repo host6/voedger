@@ -3,11 +3,10 @@
  * @author Denis Gribanov
  */
 
-package coreutils
+package httpu
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -20,39 +19,16 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-
-	"github.com/voedger/voedger/pkg/appdef"
 )
-
-func TestNewHTTPError(t *testing.T) {
-	require := require.New(t)
-	t.Run("simple", func(t *testing.T) {
-		sysErr := NewHTTPError(http.StatusInternalServerError, errors.New("test error"))
-		require.Empty(sysErr.Data)
-		require.Equal(http.StatusInternalServerError, sysErr.HTTPStatus)
-		require.Equal("test error", sysErr.Message)
-		require.Equal(appdef.NullQName, sysErr.QName)
-		require.JSONEq(`{"sys.Error":{"HTTPStatus":500,"Message":"test error"}}`, sysErr.ToJSON_APIV1())
-	})
-
-	t.Run("formatted", func(t *testing.T) {
-		sysErr := NewHTTPErrorf(http.StatusInternalServerError, "test ", "error")
-		require.Empty(sysErr.Data)
-		require.Equal(http.StatusInternalServerError, sysErr.HTTPStatus)
-		require.Equal("test error", sysErr.Message)
-		require.Equal(appdef.NullQName, sysErr.QName)
-		require.JSONEq(`{"sys.Error":{"HTTPStatus":500,"Message":"test error"}}`, sysErr.ToJSON_APIV1())
-	})
-}
 
 func TestHTTP(t *testing.T) {
 	require := require.New(t)
 
-	listener, err := net.Listen("tcp", ServerAddress(0))
+	listener, err := net.Listen("tcp", localhostDynamic)
 	require.NoError(err)
 	var handler func(w http.ResponseWriter, r *http.Request)
 	server := &http.Server{
-		Addr: ServerAddress(0),
+		Addr: localhostDynamic,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handler(w, r)
 		}),
@@ -187,7 +163,7 @@ func TestHTTP(t *testing.T) {
 			if tc.customURL != "" {
 				url = federationURL.String() + tc.customURL
 			}
-			resp, _ := httpClient.Req(url, "world", tc.opts...)
+			resp, _ := httpClient.Req(context.Background(), url, "world", tc.opts...)
 			req := &http.Request{}
 			tc.verify(t, resp, req)
 		})
@@ -203,12 +179,12 @@ func TestHTTPReqWithOptions(t *testing.T) {
 	var handler func(w http.ResponseWriter, r *http.Request)
 
 	ts := http.Server{
-		Addr: ServerAddress(0),
+		Addr: localhostDynamic,
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			handler(w, r)
 		}),
 	}
-	ln, err := net.Listen("tcp", ServerAddress(0))
+	ln, err := net.Listen("tcp", localhostDynamic)
 	require.NoError(err)
 	go ts.Serve(ln) // nolint errcheck
 	defer func() { require.NoError(ts.Shutdown(context.Background())) }()
@@ -223,7 +199,7 @@ func TestHTTPReqWithOptions(t *testing.T) {
 			gotReq = r
 			w.WriteHeader(http.StatusOK)
 		}
-		_, _ = httpClient.Req(url, "body",
+		_, _ = httpClient.Req(context.Background(), url, "body",
 			WithHeaders("A", "a", "B", "b"),
 			WithCookies("c1", "v1", "c2", "v2"),
 		)
@@ -244,7 +220,7 @@ func TestHTTPReqWithOptions(t *testing.T) {
 			gotReq = r
 			w.WriteHeader(http.StatusOK)
 		}
-		_, _ = httpClient.Req(url, "body",
+		_, _ = httpClient.Req(context.Background(), url, "body",
 			WithAuthorizeBy("tok"),
 			WithCookies(Authorization, "tok"),
 			WithoutAuth(),
@@ -256,34 +232,13 @@ func TestHTTPReqWithOptions(t *testing.T) {
 		}
 	})
 
-	t.Run("WithRetryOnAnyError retries on failure", func(t *testing.T) {
-		var callCount int
-		handler = func(w http.ResponseWriter, r *http.Request) {
-			callCount++
-			if callCount == 1 {
-				hj, ok := w.(http.Hijacker)
-				require.True(ok)
-				conn, _, err := hj.Hijack()
-				require.NoError(err)
-				conn.Close()
-				return
-			}
-			_, err := w.Write([]byte("retried"))
-			require.NoError(err)
-		}
-		resp, err := httpClient.Req(url, "body", WithRetryOnAnyError(time.Second, 10*time.Millisecond))
-		require.NoError(err)
-		require.Equal("retried", resp.Body)
-		require.Equal(2, callCount)
-	})
-
 	t.Run("WithResponseHandler is called", func(t *testing.T) {
 		var handlerCalled bool
 		handler = func(w http.ResponseWriter, r *http.Request) {
 			_, err := w.Write([]byte("ok"))
 			require.NoError(err)
 		}
-		_, _ = httpClient.Req(url, "body", WithResponseHandler(func(resp *http.Response) { handlerCalled = true }))
+		_, _ = httpClient.Req(context.Background(), url, "body", WithResponseHandler(func(resp *http.Response) { handlerCalled = true }))
 		require.True(handlerCalled)
 	})
 
@@ -295,7 +250,7 @@ func TestHTTPReqWithOptions(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		}
 		body := strings.NewReader("custom body")
-		_, _ = httpClient.ReqReader(url, body)
+		_, _ = httpClient.ReqReader(context.Background(), url, body)
 		require.Equal("custom body", gotBody)
 	})
 
@@ -307,29 +262,19 @@ func TestHTTPReqWithOptions(t *testing.T) {
 			require.NoError(err)
 			handlerCalled = true
 		}
-		_, _ = httpClient.Req(url, "body", WithLongPolling())
+		_, _ = httpClient.Req(context.Background(), url, "body", WithLongPolling())
 		require.True(handlerCalled)
 	})
 
-	t.Run("WithDeadlineOn503 and default WithSkipRetryOn503", func(t *testing.T) {
+	t.Run("WithMaxRetryDurationOn503 and default WithSkipRetryOn503", func(t *testing.T) {
 		var callCount int
 		handler = func(w http.ResponseWriter, r *http.Request) {
 			callCount++
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		_, err := httpClient.Req(url, "body", WithDeadlineOn503(50*time.Millisecond))
+		_, err := httpClient.Req(context.Background(), url, "body", WithMaxRetryDurationOn503(50*time.Millisecond))
 		require.Error(err)
 		require.GreaterOrEqual(callCount, 1)
-	})
-
-	t.Run("WithExpectedCode and error message matching", func(t *testing.T) {
-		handler = func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusBadRequest)
-			_, err := w.Write([]byte(`{"sys.Error":{"HTTPStatus":400,"Message":"foo bar error"}}`))
-			require.NoError(err)
-		}
-		_, err := httpClient.Req(url, "body", WithExpectedCode(http.StatusBadRequest, "foo", "bar"))
-		require.NoError(err)
 	})
 
 	t.Run("concurrent requests", func(t *testing.T) {
@@ -344,7 +289,7 @@ func TestHTTPReqWithOptions(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				resp, err := httpClient.Req(url, "body")
+				resp, err := httpClient.Req(context.Background(), url, "body")
 				require.NoError(err)
 				require.Equal("ok", resp.Body)
 			}()
@@ -352,4 +297,50 @@ func TestHTTPReqWithOptions(t *testing.T) {
 		wg.Wait()
 		require.Equal(int32(10), count)
 	})
+
+	t.Run("default options validation", func(t *testing.T) {
+		t.Run("WithDiscardResponse and WithResponseHandler", func(t *testing.T) {
+			require.Panics(func() {
+				//nolint errcheck
+				httpClient.Req(context.Background(), url, "body", WithDiscardResponse(), WithResponseHandler(func(*http.Response) {}))
+			})
+		})
+		t.Run("WithMaxRetryDurationOn503 and WithSkipRetryOn503", func(t *testing.T) {
+			require.Panics(func() {
+				//nolint errcheck
+				httpClient.Req(context.Background(), url, "body", WithMaxRetryDurationOn503(time.Millisecond), WithSkipRetryOn503())
+			})
+		})
+	})
+}
+
+func TestContextCanceled(t *testing.T) {
+	require := require.New(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	count := 0
+	ts := http.Server{
+		Addr: localhostDynamic,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			count++
+			w.WriteHeader(http.StatusServiceUnavailable)
+			if count < 5 {
+				return
+			}
+			cancel()
+		}),
+	}
+	ln, err := net.Listen("tcp", localhostDynamic)
+	require.NoError(err)
+	go ts.Serve(ln) // nolint errcheck
+	defer func() { require.NoError(ts.Shutdown(context.Background())) }()
+	url := "http://" + ln.Addr().String()
+
+	httpClient, cleanup := NewIHTTPClient()
+	defer cleanup()
+
+	resp, err := httpClient.Req(ctx, url, "body")
+	require.ErrorIs(err, context.Canceled)
+	require.Nil(resp)
 }

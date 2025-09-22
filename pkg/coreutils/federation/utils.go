@@ -12,13 +12,14 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
+	"slices"
 	"strings"
 	"sync"
 
 	"github.com/voedger/voedger/pkg/coreutils"
-	"github.com/voedger/voedger/pkg/coreutils/utils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
 )
@@ -59,7 +60,7 @@ func ListenSSEEvents(ctx context.Context, body io.Reader) (offsetsChan OffsetsCh
 				channelID = in10n.ChannelID(data)
 				close(subscribed)
 			} else {
-				offset, err := strconv.ParseUint(data, utils.DecimalBase, utils.BitSize64)
+				offset, err := strconvu.ParseUint64(data)
 				if err != nil {
 					// notest
 					panic(fmt.Sprint("failed to parse offset", data, err))
@@ -73,46 +74,43 @@ func ListenSSEEvents(ctx context.Context, body io.Reader) (offsetsChan OffsetsCh
 	return offsetsChan, channelID, func() { wg.Wait() }
 }
 
-func HTTPRespToFuncResp(httpResp *coreutils.HTTPResponse, httpRespErr error) (res *coreutils.FuncResponse, err error) {
-	isUnexpectedCode := errors.Is(httpRespErr, coreutils.ErrUnexpectedStatusCode)
-	if httpRespErr != nil && !isUnexpectedCode {
+func HTTPRespToFuncResp(httpResp *httpu.HTTPResponse, httpRespErr error) (funcResp *FuncResponse, err error) {
+	if httpRespErr != nil && !errors.Is(httpRespErr, httpu.ErrUnexpectedStatusCode) {
 		return nil, httpRespErr
 	}
 	if httpResp == nil {
+		// WithDiscardResponse
 		return nil, nil
 	}
-	if isUnexpectedCode {
-		funcError, err := getFuncError(httpResp)
-		if err != nil {
-			return nil, err
-		}
-		return nil, funcError
-	}
-	res = &coreutils.FuncResponse{
-		CommandResponse: coreutils.CommandResponse{
+
+	funcResp = &FuncResponse{
+		CommandResponse: CommandResponse{
 			NewIDs:    map[string]istructs.RecordID{},
 			CmdResult: map[string]interface{}{},
 		},
-		HTTPResponse: httpResp,
+		HTTPResponse: *httpResp,
 	}
-	if len(httpResp.Body) == 0 {
-		return res, nil
-	}
-	if strings.HasPrefix(httpResp.HTTPResp.Request.URL.Path, "/api/v2/") {
-		// TODO: eliminate this after https://github.com/voedger/voedger/issues/1313
-		if httpResp.HTTPResp.Header.Get(coreutils.ContentType) == coreutils.ContentType_ApplicationJSON {
-			if err = json.Unmarshal([]byte(httpResp.Body), &res.QPv2Response); err == nil {
-				err = json.Unmarshal([]byte(httpResp.Body), &res.CommandResponse)
-			}
+	if len(httpResp.Body) > 0 {
+		if err = json.Unmarshal([]byte(httpResp.Body), &funcResp); err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response body: %w. Body:\n%s", err, httpResp.Body)
 		}
-	} else {
-		err = json.Unmarshal([]byte(httpResp.Body), &res)
 	}
-	if err != nil {
-		return nil, fmt.Errorf("IFederation: failed to unmarshal response body to FuncResponse: %w. Body:\n%s", err, httpResp.Body)
+
+	var sysErr coreutils.SysError
+	if errors.As(funcResp.SysError, &sysErr) {
+		if !slices.Contains(httpResp.Opts.ExpectedHTTPCodes(), sysErr.HTTPStatus) {
+			return nil, unexpectedStatusErr(httpResp.Opts.ExpectedHTTPCodes(), sysErr.HTTPStatus, funcResp.SysError)
+		}
+		return funcResp, nil
 	}
-	if res.SysError.HTTPStatus > 0 && res.ExpectedSysErrorCode() > 0 && res.ExpectedSysErrorCode() != res.SysError.HTTPStatus {
-		return nil, fmt.Errorf("sys.Error actual status %d, expected %v: %s", res.SysError.HTTPStatus, res.ExpectedSysErrorCode(), res.SysError.Message)
+
+	if !slices.Contains(httpResp.Opts.ExpectedHTTPCodes(), httpResp.HTTPResp.StatusCode) {
+		return nil, unexpectedStatusErr(httpResp.Opts.ExpectedHTTPCodes(), httpResp.HTTPResp.StatusCode, funcResp.SysError)
 	}
-	return res, nil
+
+	return funcResp, funcResp.SysError
+}
+
+func unexpectedStatusErr(expectedCodes []int, actualCode int, sysErr error) error {
+	return fmt.Errorf("status %d, expected %v: %w", actualCode, expectedCodes, sysErr)
 }

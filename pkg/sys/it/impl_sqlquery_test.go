@@ -16,6 +16,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/registry"
@@ -167,14 +168,12 @@ func TestSqlQuery_plog(t *testing.T) {
 	})
 	t.Run("Should return error when field not found in def", func(t *testing.T) {
 		body := `{"args":{"Query":"select abracadabra from sys.plog"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "field 'abracadabra' not found in def")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("field 'abracadabra' not found in def"))
 	})
 
 	t.Run("select operation is allowed only", func(t *testing.T) {
 		body := `{"args":{"Query":"update sys.plog set a = 1"}}`
-		vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect400("'select' operation is expected"))
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect400("'select' operation is expected"))
 	})
 }
 
@@ -236,9 +235,7 @@ func TestSqlQuery_wlog(t *testing.T) {
 	})
 	t.Run("Should return error when field not found in def", func(t *testing.T) {
 		body := `{"args":{"Query":"select abracadabra from sys.wlog"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "field 'abracadabra' not found in def")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("field 'abracadabra' not found in def"))
 	})
 }
 
@@ -250,45 +247,31 @@ func TestSqlQuery_readLogParams(t *testing.T) {
 
 	t.Run("Should return error when limit value not parsable", func(t *testing.T) {
 		body := `{"args":{"Query":"select * from sys.plog limit 7.1"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, `strconv.ParseInt: parsing "7.1": invalid syntax`)
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500(`strconv.ParseInt: parsing "7.1": invalid syntax`))
 	})
 	t.Run("Should return error when limit value invalid", func(t *testing.T) {
 		body := `{"args":{"Query":"select * from sys.plog limit -3"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "limit must be greater than -2")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("limit must be greater than -2"))
 	})
 	t.Run("Should return error when Offset value not parsable", func(t *testing.T) {
 		body := `{"args":{"Query":"select * from sys.plog where Offset >= 2.1"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, `strconv.ParseUint: parsing "2.1": invalid syntax`)
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500(`strconv.ParseUint: parsing "2.1": invalid syntax`))
 	})
 	t.Run("Should return error when Offset value invalid", func(t *testing.T) {
 		body := `{"args":{"Query":"select * from sys.plog where Offset >= 0"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "offset must be greater than zero")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("offset must be greater than zero"))
 	})
 	t.Run("Should return error when Offset operation not supported", func(t *testing.T) {
 		body := `{"args":{"Query":"select * from sys.plog where Offset < 2"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "unsupported operation: <")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("unsupported operation: <"))
 	})
 	t.Run("Should return error when column name not supported", func(t *testing.T) {
 		body := `{"args":{"Query":"select * from sys.plog where something >= 1"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "unsupported column name: something")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("unsupported column name: something"))
 	})
 	t.Run("Should return error when expression not supported", func(t *testing.T) {
 		body := `{"args":{"Query":"select * from sys.wlog where Offset >= 1 and something >= 5"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "unsupported expression: *sqlparser.AndExpr")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("unsupported expression: *sqlparser.AndExpr"))
 	})
 }
 
@@ -346,7 +329,7 @@ func TestSqlQuery_records(t *testing.T) {
 
 		for query, expectedError := range cases {
 			t.Run(expectedError, func(t *testing.T) {
-				vit.PostWS(ws, "q.sys.SqlQuery", query, coreutils.Expect400(expectedError))
+				vit.PostWS(ws, "q.sys.SqlQuery", query, it.Expect400(expectedError))
 			})
 		}
 	})
@@ -388,27 +371,19 @@ func TestSqlQuery_view_records(t *testing.T) {
 	})
 	t.Run("Should return error when operator not supported", func(t *testing.T) {
 		body = `{"args":{"Query":"select * from sys.CollectionView where partKey > 1"}}`
-		resp = vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "unsupported operator: >")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("unsupported operator: >"))
 	})
 	t.Run("Should return error when expression not supported", func(t *testing.T) {
 		body = `{"args":{"Query":"select * from sys.CollectionView where partKey = 1 or docQname = 'app1pkg.payments'"}}`
-		resp = vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "unsupported expression: *sqlparser.OrExpr")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("unsupported expression: *sqlparser.OrExpr"))
 	})
 	t.Run("Should return error when field does not exist in value def", func(t *testing.T) {
 		body = `{"args":{"Query":"select abracadabra from sys.CollectionView where PartKey = 1"}}`
-		resp = vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "field 'abracadabra' does not exist in 'sys.CollectionView' value def")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("field 'abracadabra' does not exist in 'sys.CollectionView' value def"))
 	})
 	t.Run("Should return error when field does not exist in key def", func(t *testing.T) {
 		body = `{"args":{"Query":"select * from sys.CollectionView where partKey = 1"}}`
-		resp = vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "field 'partKey' does not exist in 'sys.CollectionView' key def")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("field 'partKey' does not exist in 'sys.CollectionView' key def"))
 	})
 }
 
@@ -420,13 +395,11 @@ func TestSqlQuery(t *testing.T) {
 
 	t.Run("Should return error when script invalid", func(t *testing.T) {
 		body := `{"args":{"Query":" "}}`
-		vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect400("invalid query format"))
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect400("invalid query format"))
 	})
 	t.Run("Should return error when source of data unsupported", func(t *testing.T) {
 		body := `{"args":{"Query":"select * from git.hub"}}`
-		resp := vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect500())
-
-		resp.RequireError(t, "do not know how to read from the requested git.hub, TypeKind_null")
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("do not know how to read from the requested git.hub, TypeKind_null"))
 	})
 	t.Run("Should read sys.wlog from other workspace", func(t *testing.T) {
 		wsOne := vit.PostWS(ws, "q.sys.SqlQuery", fmt.Sprintf(`{"args":{"Query":"select * from %d.sys.wlog"}}`, ws.Owner.ProfileWSID))
@@ -437,7 +410,7 @@ func TestSqlQuery(t *testing.T) {
 
 	t.Run("403 forbidden on read from non-inited workspace", func(t *testing.T) {
 		vit.PostWS(ws, "q.sys.SqlQuery", fmt.Sprintf(`{"args":{"Query":"select * from %d.sys.wlog"}}`, istructs.NonExistingRecordID),
-			coreutils.Expect403(processors.ErrWSNotInited.Message))
+			it.Expect403(processors.ErrWSNotInited.Message))
 	})
 }
 
@@ -502,7 +475,7 @@ func TestReadFromAnDifferentLocations(t *testing.T) {
 		// request to the different app -> use sys token to avoid 403
 		sysPrincipal := vit.GetSystemPrincipal(istructs.AppQName_test1_app1)
 		body := fmt.Sprintf(`{"args":{"Query":"select * from sys.registry.a%d.registry.Login where id = %d"},"elements":[{"fields":["Result"]}]}`, appWSNumber, loginID)
-		resp := vit.PostWS(oneAppWS, "q.sys.SqlQuery", body, coreutils.WithAuthorizeBy(sysPrincipal.Token))
+		resp := vit.PostWS(oneAppWS, "q.sys.SqlQuery", body, httpu.WithAuthorizeBy(sysPrincipal.Token))
 		loginHash := registry.GetLoginHash(prn.Login.Name)
 		require.Contains(resp.SectionRow()[0].(string), fmt.Sprintf(`"LoginHash":"%s"`, loginHash))
 	})
@@ -514,7 +487,7 @@ func TestReadFromAnDifferentLocations(t *testing.T) {
 		// request to the different app -> use sys token to avoid 403
 		sysPrincipal := vit.GetSystemPrincipal(istructs.AppQName_test1_app1)
 		body := fmt.Sprintf(`{"args":{"Query":"select * from sys.registry.\"login\".registry.Login where id = %d"},"elements":[{"fields":["Result"]}]}`, loginID)
-		resp := vit.PostWS(oneAppWS, "q.sys.SqlQuery", body, coreutils.WithAuthorizeBy(sysPrincipal.Token))
+		resp := vit.PostWS(oneAppWS, "q.sys.SqlQuery", body, httpu.WithAuthorizeBy(sysPrincipal.Token))
 		loginHash := registry.GetLoginHash(prn.Login.Name)
 		require.Contains(resp.SectionRow()[0].(string), fmt.Sprintf(`"LoginHash":"%s"`, loginHash))
 	})
@@ -549,22 +522,22 @@ func TestAuthnz(t *testing.T) {
 		pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, ws.Owner.Name, istructs.CurrentClusterID())
 		appWSNumber := pseudoWSID.BaseWSID() % istructs.WSID(registryAppStructs.NumAppWorkspaces())
 		body := fmt.Sprintf(`{"args":{"Query":"select * from sys.registry.a%d.registry.Login where id = %d"},"elements":[{"fields":["Result"]}]}`, appWSNumber, loginID)
-		vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect403())
+		vit.PostWS(ws, "q.sys.SqlQuery", body, httpu.Expect403())
 	})
 
 	t.Run("doc", func(t *testing.T) {
 		body := `{"args":{"Query":"select * from app1pkg.TestDeniedCDoc.123"},"elements":[{"fields":["Result"]}]}`
-		vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect403())
+		vit.PostWS(ws, "q.sys.SqlQuery", body, httpu.Expect403())
 	})
 
 	t.Run("field", func(t *testing.T) {
 		// denied
 		body := `{"args":{"Query":"select DeniedFld2 from app1pkg.TestCDocWithDeniedFields.123"},"elements":[{"fields":["Result"]}]}`
-		vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect403())
+		vit.PostWS(ws, "q.sys.SqlQuery", body, httpu.Expect403())
 
 		// allowed, just expect 400 not found
 		body = `{"args":{"Query":"select Fld1 from app1pkg.TestCDocWithDeniedFields.123"},"elements":[{"fields":["Result"]}]}`
-		vit.PostWS(ws, "q.sys.SqlQuery", body, coreutils.Expect400("record with ID '123' not found"))
+		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect400("record with ID '123' not found"))
 	})
 }
 
@@ -587,8 +560,8 @@ func TestReadODocs(t *testing.T) {
 		"unloggedArgs":{"sys.ID":6}
 	}`
 	resp := vit.Func(fmt.Sprintf("api/v2/apps/test1/app1/workspaces/%d/commands/app1pkg.CmdODocOne", ws.WSID), body,
-		coreutils.WithMethod(http.MethodPost),
-		coreutils.WithAuthorizeBy(ws.Owner.Token),
+		httpu.WithMethod(http.MethodPost),
+		httpu.WithAuthorizeBy(ws.Owner.Token),
 	)
 	odoc1ID := resp.NewIDs["1"]
 	odoc1ORec11ID := resp.NewIDs["2"]
@@ -596,8 +569,8 @@ func TestReadODocs(t *testing.T) {
 
 	body = `{"args":{"sys.ID": 1,"odocIntFld": 47},"unloggedArgs":{"sys.ID":2}}`
 	resp = vit.Func(fmt.Sprintf("api/v2/apps/test1/app1/workspaces/%d/commands/app1pkg.CmdODocOne", ws.WSID), body,
-		coreutils.WithMethod(http.MethodPost),
-		coreutils.WithAuthorizeBy(ws.Owner.Token),
+		httpu.WithMethod(http.MethodPost),
+		httpu.WithAuthorizeBy(ws.Owner.Token),
 	)
 	odoc2ID := resp.NewID()
 

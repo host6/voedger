@@ -46,13 +46,13 @@ func Example() {
 	appConfigs.AddBuiltInAppConfig(istructs.AppQName_test1_app1, adb_1_v1).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 	appConfigs.AddBuiltInAppConfig(istructs.AppQName_test1_app2, adb_2_v1).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-	appStructs := istructsmem.Provide(
+	appStructsProvider := istructsmem.Provide(
 		appConfigs,
 		iratesce.TestBucketsFactory,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
 		provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0)
 
-	appParts := appparts.NewForTests(appStructs)
+	appParts := appparts.NewForTests(appStructsProvider)
 
 	report := func(part appparts.IAppPartition) {
 		fmt.Println(part.App(), "partition", part.ID())

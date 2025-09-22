@@ -65,15 +65,16 @@ func ExampleIAppPartition_IsLimitExceeded() {
 	appConfigs := istructsmem.AppConfigsType{}
 	appConfigs.AddBuiltInAppConfig(istructs.AppQName_test1_app1, adb).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-	appStructs := istructsmem.Provide(
+	appStructsProvider := istructsmem.Provide(
 		appConfigs,
 		iratesce.TestBucketsFactory,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
 		provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0)
 
-	appParts, cleanupParts := appparts.New2(
-		context.Background(),
-		appStructs,
+	vvmCtx, cancel := context.WithCancel(context.Background())
+	appParts, cleanup, err := appparts.New2(
+		vvmCtx,
+		appStructsProvider,
 		appparts.NullSyncActualizerFactory,
 		appparts.NullActualizerRunner,
 		appparts.NullSchedulerRunner,
@@ -81,8 +82,10 @@ func ExampleIAppPartition_IsLimitExceeded() {
 		iratesce.TestBucketsFactory,
 		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
-	defer cleanupParts()
-
+	defer func() {
+		cancel()
+		cleanup()
+	}()
 	appParts.DeployApp(istructs.AppQName_test1_app1, nil, app, 1, appparts.PoolSize(1, 1, 1, 1), istructs.DefaultNumAppWorkspaces)
 	appParts.DeployAppPartitions(istructs.AppQName_test1_app1, []istructs.PartitionID{1})
 

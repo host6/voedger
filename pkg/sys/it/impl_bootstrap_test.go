@@ -14,9 +14,10 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/btstrp"
 	"github.com/voedger/voedger/pkg/cluster"
-	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/testingu"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iblobstoragestg"
 	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istorage/mem"
@@ -124,7 +125,7 @@ func getTestCfg(numParts istructs.NumAppPartitions, numAppWS istructs.NumAppWork
 		}),
 		it.WithVVMConfig(func(cfg *vvm.VVMConfig) {
 			// use predefined storage
-			cfg.StorageFactory = func() (provider istorage.IAppStorageFactory, err error) {
+			cfg.StorageFactory = func(timeu.ITime) (provider istorage.IAppStorageFactory, err error) {
 				return storage, nil
 			}
 		}),
@@ -142,7 +143,7 @@ func TestDeployAppErrors(t *testing.T) {
 	t.Run("sys/cluster can not be deployed by c.cluster.DeployApp", func(t *testing.T) {
 		body := fmt.Sprintf(`{"args":{"AppQName":"%s","NumPartitions":1,"NumAppWorkspaces":1}}`, istructs.AppQName_sys_cluster)
 		vit.PostApp(istructs.AppQName_sys_cluster, clusterapp.ClusterAppPseudoWSID, "c.cluster.DeployApp", body,
-			coreutils.WithAuthorizeBy(sysToken), coreutils.Expect400()).Println()
+			httpu.WithAuthorizeBy(sysToken), httpu.Expect400()).Println()
 	})
 
 	var test1App1DeploymentDescriptor appparts.AppDeploymentDescriptor
@@ -158,8 +159,8 @@ func TestDeployAppErrors(t *testing.T) {
 			istructs.AppQName_test1_app1,
 			test1App1DeploymentDescriptor.NumParts+1, test1App1DeploymentDescriptor.NumAppWorkspaces)
 		resp := vit.PostApp(istructs.AppQName_sys_cluster, clusterapp.ClusterAppPseudoWSID, "c.cluster.DeployApp", body,
-			coreutils.WithAuthorizeBy(sysToken),
-			coreutils.Expect409(),
+			httpu.WithAuthorizeBy(sysToken),
+			httpu.Expect409(),
 		)
 		resp.Println()
 		require.Empty(resp.NewIDs)
@@ -170,8 +171,8 @@ func TestDeployAppErrors(t *testing.T) {
 			istructs.AppQName_test1_app1,
 			test1App1DeploymentDescriptor.NumParts, test1App1DeploymentDescriptor.NumAppWorkspaces+1)
 		resp := vit.PostApp(istructs.AppQName_sys_cluster, clusterapp.ClusterAppPseudoWSID, "c.cluster.DeployApp", body,
-			coreutils.WithAuthorizeBy(sysToken),
-			coreutils.Expect409(),
+			httpu.WithAuthorizeBy(sysToken),
+			httpu.Expect409(),
 		)
 		resp.Println()
 		require.Empty(resp.NewIDs)
@@ -180,8 +181,8 @@ func TestDeployAppErrors(t *testing.T) {
 	t.Run("400 bad request on wrong appQName", func(t *testing.T) {
 		body := `{"args":{"AppQName":"wrong","NumPartitions":1,"NumAppWorkspaces":1}}`
 		vit.PostApp(istructs.AppQName_sys_cluster, clusterapp.ClusterAppPseudoWSID, "c.cluster.DeployApp", body,
-			coreutils.WithAuthorizeBy(sysToken),
-			coreutils.Expect400(),
+			httpu.WithAuthorizeBy(sysToken),
+			httpu.Expect400(),
 		).Println()
 	})
 }

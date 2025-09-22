@@ -14,21 +14,22 @@ import (
 	"golang.org/x/exp/slices"
 
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/coreutils/federation"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/sys/invite"
 	it "github.com/voedger/voedger/pkg/vit"
 )
 
-func InitiateEmailVerification(vit *it.VIT, prn *it.Principal, entity appdef.QName, field, email string, targetWSID istructs.WSID, opts ...coreutils.ReqOptFunc) (token, code string) {
-	return InitiateEmailVerificationFunc(vit, func() *coreutils.FuncResponse {
+func InitiateEmailVerification(vit *it.VIT, prn *it.Principal, entity appdef.QName, field, email string, targetWSID istructs.WSID, opts ...httpu.ReqOptFunc) (token, code string) {
+	return InitiateEmailVerificationFunc(vit, func() *federation.FuncResponse {
 		body := fmt.Sprintf(`{"args":{"Entity":"%s","Field":"%s","Email":"%s","TargetWSID":%d},"elements":[{"fields":["VerificationToken"]}]}`, entity, field, email, targetWSID)
 		return vit.PostApp(prn.AppQName, prn.ProfileWSID, "q.sys.InitiateEmailVerification", body, opts...)
 	})
 }
 
-func InitiateEmailVerificationFunc(vit *it.VIT, f func() *coreutils.FuncResponse) (token, code string) {
+func InitiateEmailVerificationFunc(vit *it.VIT, f func() *federation.FuncResponse) (token, code string) {
 	resp := f()
 	emailMessage := vit.CaptureEmail()
 	r := regexp.MustCompile(`(?P<code>\d{6})`)
@@ -77,9 +78,9 @@ func InitiateInvitationByEMail(vit *it.VIT, ws *it.AppWorkspace, expireDatetime 
 	return vit.PostWS(ws, "c.sys.InitiateInvitationByEMail", body).NewID()
 }
 
-func InitiateJoinWorkspace(vit *it.VIT, ws *it.AppWorkspace, inviteID istructs.RecordID, login *it.Principal, verificationCode string, opts ...coreutils.ReqOptFunc) {
+func InitiateJoinWorkspace(vit *it.VIT, ws *it.AppWorkspace, inviteID istructs.RecordID, login *it.Principal, verificationCode string, opts ...httpu.ReqOptFunc) {
 	vit.T.Helper()
-	opts = append(opts, coreutils.WithAuthorizeBy(login.Token))
+	opts = append(opts, httpu.WithAuthorizeBy(login.Token))
 	vit.PostWS(ws, "c.sys.InitiateJoinWorkspace", fmt.Sprintf(`{"args":{"InviteID":%d,"VerificationCode":"%s"}}`, inviteID, verificationCode), opts...)
 }
 

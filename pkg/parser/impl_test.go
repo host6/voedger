@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -2733,7 +2734,8 @@ func Test_RatesAndLimits(t *testing.T) {
 		typ := w.Type(appdef.NewQName("pkg", "r"))
 		r, ok := typ.(appdef.IRate)
 		require.True(ok)
-		require.NotNil(r)
+		require.EqualValues(1, r.Count())
+		require.Equal(time.Hour, r.Period())
 		require.True(r.Scope(appdef.RateScope_AppPartition))
 		require.False(r.Scope(appdef.RateScope_Workspace))
 		require.False(r.Scope(appdef.RateScope_IP))
@@ -3156,7 +3158,8 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
 		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
 	statelessResources := istructsmem.NewStatelessResources()
-	appParts, cleanup := appparts.New2(context.Background(), appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
+	vvmCtx, cancel := context.WithCancel(context.Background())
+	appParts, cleanup, err := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
 		engines.ProvideExtEngineFactories(
 			engines.ExtEngineFactoriesConfig{
 				AppConfigs:         cfgs,
@@ -3164,7 +3167,10 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
 		irates.NullBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter())
-	defer cleanup()
+	defer func() {
+		cancel()
+		cleanup()
+	}()
 	appParts.DeployApp(appQName, nil, appDef, 1, [4]uint{1, 1, 1, 1}, 1)
 	appParts.DeployAppPartitions(appQName, []istructs.PartitionID{1})
 	borrowedAppPart, err := appParts.Borrow(appQName, 1, appparts.ProcessorKind_Command)
@@ -3209,7 +3215,8 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
 		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
 	statelessResources := istructsmem.NewStatelessResources()
-	appParts, cleanup := appparts.New2(context.Background(), appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
+	vvmCtx, cancel := context.WithCancel(context.Background())
+	appParts, cleanup, err := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
 		engines.ProvideExtEngineFactories(
 			engines.ExtEngineFactoriesConfig{
 				AppConfigs:         cfgs,
@@ -3217,7 +3224,10 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
 		irates.NullBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter())
-	defer cleanup()
+	defer func() {
+		cancel()
+		cleanup()
+	}()
 	appParts.DeployApp(appQName, nil, appDef, 1, [4]uint{1, 1, 1, 1}, 1)
 	appParts.DeployAppPartitions(appQName, []istructs.PartitionID{1})
 	borrowedAppPart, err := appParts.Borrow(appQName, 1, appparts.ProcessorKind_Command)

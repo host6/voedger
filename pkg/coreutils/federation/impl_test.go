@@ -6,6 +6,7 @@
 package federation
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -17,6 +18,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/testingu/require"
 	"github.com/voedger/voedger/pkg/istructs"
 )
@@ -24,7 +26,7 @@ import (
 func TestFederationFunc(t *testing.T) {
 	require := require.New(t)
 
-	listener, err := net.Listen("tcp", coreutils.ServerAddress(0))
+	listener, err := net.Listen("tcp", httpu.LocalhostDynamic())
 	require.NoError(err)
 	var handler func(w http.ResponseWriter, r *http.Request)
 	server := &http.Server{
@@ -44,7 +46,7 @@ func TestFederationFunc(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	federationURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	require.NoError(err)
-	federation, cleanup := New(func() *url.URL {
+	federation, cleanup := New(context.Background(), func() *url.URL {
 		return federationURL
 	}, coreutils.NilAdminPortGetter)
 	defer cleanup()
@@ -81,7 +83,7 @@ func TestFederationFunc(t *testing.T) {
 			name        string
 			handler     func(body string, w http.ResponseWriter, r *http.Request)
 			expectedErr error
-			opts        []coreutils.ReqOptFunc
+			opts        []httpu.ReqOptFunc
 		}{
 			{
 				name: "basic error",
@@ -90,14 +92,11 @@ func TestFederationFunc(t *testing.T) {
 					_, err := w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"sys.SomeErrorQName","Data":"additional data"}}`))
 					require.NoError(err)
 				},
-				expectedErr: coreutils.FuncError{
-					SysError: coreutils.SysError{
-						HTTPStatus: 500,
-						QName:      appdef.NewQName("sys", "SomeErrorQName"),
-						Message:    "something gone wrong",
-						Data:       "additional data",
-					},
-					ExpectedHTTPCodes: []int{http.StatusOK, http.StatusCreated},
+				expectedErr: coreutils.SysError{
+					HTTPStatus: 500,
+					QName:      appdef.NewQName("sys", "SomeErrorQName"),
+					Message:    "something gone wrong",
+					Data:       "additional data",
 				},
 			},
 			{
@@ -107,15 +106,8 @@ func TestFederationFunc(t *testing.T) {
 					_, err := w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"errored QName","Data":"additional data"}}`))
 					require.NoError(err)
 				},
-				expectedErr: coreutils.FuncError{
-					SysError: coreutils.SysError{
-						HTTPStatus: 500,
-						QName:      appdef.NewQName("<err>", "errored QName"),
-						Message:    "something gone wrong",
-						Data:       "additional data",
-					},
-					ExpectedHTTPCodes: []int{http.StatusOK, http.StatusCreated},
-				},
+				expectedErr: errors.New(`failed to unmarshal response body: convert error: string «errored QName» to qualified name. Body:
+{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"errored QName","Data":"additional data"}}`),
 			},
 			{
 				name: "wrong response JSON",
@@ -124,22 +116,7 @@ func TestFederationFunc(t *testing.T) {
 					_, err = w.Write([]byte(`wrong JSON`))
 					require.NoError(err)
 				},
-				expectedErr: errors.New("IFederation: failed to unmarshal response body to FuncErr: invalid character 'w' looking for beginning of value. Body:\nwrong JSON"),
-			},
-			{
-				name: "non-OK status is expected",
-				handler: func(body string, w http.ResponseWriter, r *http.Request) {
-					w.WriteHeader(http.StatusOK)
-					_, err = w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"errored QName","Data":"additional data"}}`))
-					require.NoError(err)
-				},
-				expectedErr: coreutils.FuncError{
-					SysError: coreutils.SysError{
-						HTTPStatus: http.StatusOK,
-					},
-					ExpectedHTTPCodes: []int{http.StatusInternalServerError},
-				},
-				opts: []coreutils.ReqOptFunc{coreutils.WithExpectedCode(http.StatusInternalServerError)},
+				expectedErr: errors.New("failed to unmarshal response body: invalid character 'w' looking for beginning of value. Body:\nwrong JSON"),
 			},
 		}
 
@@ -151,9 +128,9 @@ func TestFederationFunc(t *testing.T) {
 					c.handler(string(body), w, r)
 				}
 				resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, c.opts...)
-				var fe coreutils.FuncError
-				if errors.As(err, &fe) {
-					require.Equal(c.expectedErr, err, c.name)
+				var se coreutils.SysError
+				if errors.As(err, &se) {
+					require.Equal(c.expectedErr, se, c.name)
 				} else {
 					require.Equal(c.expectedErr.Error(), err.Error(), c.name)
 				}
@@ -172,32 +149,9 @@ func TestFederationFunc(t *testing.T) {
 				_, err = w.Write([]byte(`{"sys.Error":{"HTTPStatus":500,"Message":"something gone wrong","QName":"sys.SomeErrorQName","Data":"additional data"}}`))
 				require.NoError(err)
 			}
-			resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, coreutils.WithExpectedCode(http.StatusInternalServerError))
+			resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, httpu.WithExpectedCode(http.StatusInternalServerError))
 			require.NoError(err)
 			resp.Println()
-			resp.RequireContainsError(t, "something")
-			resp.RequireError(t, "something gone wrong")
-		})
-		t.Run("ExpectedErrorContains", func(t *testing.T) {
-			errorMessage := "non-expected"
-			handler = func(w http.ResponseWriter, r *http.Request) {
-				_, err := io.ReadAll(r.Body)
-				require.NoError(err)
-				w.WriteHeader(http.StatusInternalServerError)
-				fmt.Fprintf(w, `{"sys.Error":{"HTTPStatus":500,"Message":"%s","QName":"sys.SomeErrorQName","Data":"additional data"}}`,
-					errorMessage)
-			}
-			resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, coreutils.WithExpectedCode(http.StatusInternalServerError,
-				"expected error message"))
-			require.Error(err)
-			require.Nil(resp)
-
-			errorMessage = "expected error message"
-			resp, err = federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, coreutils.WithExpectedCode(http.StatusInternalServerError,
-				"expected error message"))
-			require.NoError(err)
-			resp.RequireContainsError(t, "expected")
-			resp.RequireError(t, "expected error message")
 		})
 	})
 
@@ -209,7 +163,7 @@ func TestFederationFunc(t *testing.T) {
 			_, err = w.Write([]byte(`{"sections":[{"type":"","elements":[[[["Hello", "world"]]],[[["next"]]]]}]}`))
 			require.NoError(err)
 		}
-		resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, coreutils.WithExpectedCode(http.StatusInternalServerError))
+		resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, httpu.WithExpectedCode(http.StatusInternalServerError))
 		require.NoError(err)
 		resp.Println()
 		require.Equal("Hello", resp.SectionRow()[0].(string))
@@ -223,7 +177,7 @@ func TestFederationFunc(t *testing.T) {
 			require.NoError(err)
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		_, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, coreutils.Expect503())
+		_, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, httpu.Expect503())
 		require.NoError(err)
 	})
 
@@ -235,8 +189,41 @@ func TestFederationFunc(t *testing.T) {
 			_, err = w.Write([]byte(`{"sections":[{"type":"","elements":[[[["Hello", "world"]]],[[["next"]]]]}]}`))
 			require.NoError(err)
 		}
-		resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, coreutils.WithDiscardResponse())
+		resp, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, httpu.WithDiscardResponse())
 		require.NoError(err)
 		require.Nil(resp)
+	})
+	t.Run("context cancel during retry on 503", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		federation, cleanup := New(ctx, func() *url.URL {
+			return federationURL
+		}, coreutils.NilAdminPortGetter)
+		defer cleanup()
+		counter := 0
+		handler = func(w http.ResponseWriter, _ *http.Request) {
+			counter++
+			w.WriteHeader(http.StatusServiceUnavailable)
+			if counter < 5 {
+				return
+			}
+			cancel()
+		}
+		_, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, httpu.WithRetryOn503())
+		require.ErrorIs(err, context.Canceled)
+	})
+}
+
+func TestPanicOnGETAndDiscardResponse(t *testing.T) {
+	require := require.New(t)
+	federationURL, err := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", 123))
+	require.NoError(err)
+	federation, cleanup := New(context.Background(), func() *url.URL {
+		return federationURL
+	}, coreutils.NilAdminPortGetter)
+	defer cleanup()
+
+	require.Panics(func() {
+		//nolint errcheck
+		federation.Func("abc", "", httpu.WithMethod(http.MethodGet), httpu.WithDiscardResponse())
 	})
 }
