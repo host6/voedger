@@ -1,1 +1,3 @@
 Resolves issue 'rate counter from vsql is always zero'
+
+Resolves #4135 rate counter from vsql is always zero
