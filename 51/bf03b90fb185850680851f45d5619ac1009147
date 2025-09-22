@@ -1,1 +1,3 @@
 Resolves issue 'projectors: Test_AsynchronousActualizer_ErrorAndRestore test fails sometimes'
+
+Resolves #1713 projectors: Test_AsynchronousActualizer_ErrorAndRestore test fails sometimes
