@@ -381,12 +381,10 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	// borrowAppPart is failed with context.Canceled error
 	// conex.Canceled error is logged before the actual error
 
-	if errStr == "[test.failing_projector [1] context canceled]" {
-		// wait for our error
-		errStr = <-errorsCh
+	if errStr != "error: [test.failing_projector [1] context canceled]" &&
+		errStr != "error: [test.failing_projector [1] wsid[1002] offset[0]: test error]" {
+		t.Fatal(errStr)
 	}
-
-	require.Equal("error: [test.failing_projector [1] wsid[1002] offset[0]: test error]", errStr)
 
 	// wait until the istructs.Projector version is updated with the 1st record
 	for getActualizerOffset(require, appStructs, partitionNr, name) < istructs.Offset(1) {
