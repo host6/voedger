@@ -1,3 +1,5 @@
 Resolves issue 'rename `goutils/testingu/RunCmdTestCases()` -> `RunCLITests()`'
 
 Resolves #4141 rename `goutils/testingu/RunCmdTestCases()` -> `RunCLITests()`
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4141","jira_ticket_url":"","branch_type":1}
