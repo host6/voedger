@@ -1,1 +1,3 @@
 Resolves issue 'rename `goutils/testingu/cmdtestcase.go` -> `clitest.go`'
+
+Resolves #4145 rename `goutils/testingu/cmdtestcase.go` -> `clitest.go`
