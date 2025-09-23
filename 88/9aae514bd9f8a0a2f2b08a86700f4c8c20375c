@@ -1,3 +1,5 @@
 Resolves issue 'rename `goutils/testingu/cmdtestcase.go` -> `clitest.go`'
 
 Resolves #4145 rename `goutils/testingu/cmdtestcase.go` -> `clitest.go`
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4145","jira_ticket_url":"","branch_type":1}
