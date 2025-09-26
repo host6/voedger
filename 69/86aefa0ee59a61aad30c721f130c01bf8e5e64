@@ -1,0 +1,1 @@
+Resolves issue 'APIv2 n10n: extract cookie->header auth token func to reuse it among blobs and n10n'
