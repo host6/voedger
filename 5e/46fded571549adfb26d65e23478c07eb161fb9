@@ -1,3 +1,5 @@
 Resolves issue 'APIv2 n10n: extract cookie->header auth token func to reuse it among blobs and n10n'
 
 Resolves #4163 APIv2 n10n: extract cookie->header auth token func to reuse it among blobs and n10n
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/4163","jira_ticket_url":"","branch_type":2}
