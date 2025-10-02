@@ -1,1 +1,3 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1708","branch_type":1}
+
+[AIR-1708] Voedger: implement `coreutils.AppWSNumber(wsid) uint32)`
