@@ -1,3 +1,5 @@
 [AIR-1715] router: do pseudoWSID->appWSID conversion on BLOBs url paths
 
 https://untill.atlassian.net/browse/AIR-1715
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1715","branch_type":2}
