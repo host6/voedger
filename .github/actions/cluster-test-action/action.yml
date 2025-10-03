@@ -41,7 +41,7 @@ runs:
       run: |
         attempts=3
 
-        if [ "CLUSTER_TYPE" == "n5" ]; then
+        if [ "$CLUSTER_TYPE" == "n5" ]; then
             hostName="app-node-2"
         else
             hostName="node-2" 
@@ -58,8 +58,8 @@ runs:
           fi
   
           if [ "$i" -lt "$attempts" ]; then
-            echo "Retrying in 2 seconds..."
-            sleep 20
+            echo "Retrying in 100 seconds..."
+            sleep 100
           else
             echo "Maximum attempts reached. Website is not available."
             exit 1
