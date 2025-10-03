@@ -38,8 +38,13 @@ type Subscription struct {
 
 type n10nWorkpiece struct {
 	IN10NMessage
-	n10nBroker          in10n.IN10nBroker
-	channelID           in10n.ChannelID
-	createChannelParams in10nmem.CreateChannelParamsType
-	responseWriter      bus.IResponseWriter
+	n10nBroker               in10n.IN10nBroker
+	channelID                in10n.ChannelID
+	createChannelParams      in10nmem.CreateChannelParamsType
+	responseWriter           bus.IResponseWriter
+	subscribedProjectionKeys []in10n.ProjectionKey
+}
+
+type responseSender struct {
+	pipeline.NOOP
 }

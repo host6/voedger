@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
@@ -44,12 +45,23 @@ func sendChannelIDSSEEvent(ctx context.Context, work pipeline.IWorkpiece) (err e
 
 func subscribe(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	for _, projection := range n10nWP.createChannelParams.ProjectionKey {
-		if err = n10nWP.n10nBroker.Subscribe(n10nWP.channelID, projection); err != nil {
+	for _, projectionKey := range n10nWP.createChannelParams.ProjectionKey {
+		if err = n10nWP.n10nBroker.Subscribe(n10nWP.channelID, projectionKey); err != nil {
 			return coreutils.NewHTTPErrorf(n10nErrorToStatusCode(err), "subscribe failed: %w", err)
 		}
+		n10nWP.subscribedProjectionKeys = append(n10nWP.subscribedProjectionKeys, projectionKey)
 	}
 	return nil
+}
+
+func (rs *responseSender) OnErr(err error, work interface{}, _ pipeline.IWorkpieceContext) (newErr error) {
+	n10nWP := work.(*n10nWorkpiece)
+	for _, subscribedKey := range n10nWP.subscribedProjectionKeys {
+		if err = n10nWP.n10nBroker.Unsubscribe(n10nWP.channelID, subscribedKey); err != nil {
+			logger.Error(fmt.Sprintf("failed to unsubscribe key %#v: %s", subscribedKey, err))
+		}
+	}
+	return coreutils.WrapSysError(err, http.StatusBadRequest)
 }
 
 func (m *N10NMessage) ExpiresIn() time.Duration {

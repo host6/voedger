@@ -21,6 +21,7 @@ func Provide(iN10N in10n.IN10nBroker) ServiceFactory {
 				pipeline.WireFunc("initResponse", initResponse),
 				pipeline.WireFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),
 				pipeline.WireFunc("subscribe", subscribe),
+				pipeline.WireSyncOperator("responseSender", &responseSender{}),
 			)
 
 			for vvmCtx.Err() == nil {
