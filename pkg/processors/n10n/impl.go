@@ -14,6 +14,8 @@ import (
 
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/in10n"
+	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
@@ -33,7 +35,7 @@ func newChannel(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 
 func initResponse(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.responseWriter = n10nWP.Responder().InitResponse(http.StatusOK) // actually does not metter bu need to match bus contract
+	n10nWP.responseWriter = n10nWP.Responder().InitResponse(http.StatusOK) // actually does not matter but need to match the bus contract
 	return nil
 
 }
@@ -54,14 +56,50 @@ func subscribe(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	return nil
 }
 
-func (rs *responseSender) OnErr(err error, work interface{}, _ pipeline.IWorkpieceContext) (newErr error) {
+func getVVMAndRequestCombinedCtx(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	mergedCtx, cancel := context.WithCancel(context.Background())
+	n10nWP.vvmAndRequestCombinedCtx = mergedCtx
+	go func() {
+		select {
+		case <-ctx.Done():
+			cancel()
+		case <-n10nWP.RequestCtx().Done():
+			cancel()
+		}
+	}()
+	return nil
+}
+
+func watchChannel(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	n10nWP.n10nBroker.WatchChannel(n10nWP.vvmAndRequestCombinedCtx, n10nWP.channelID, func(projection in10n.ProjectionKey, offset istructs.Offset) {
+		sseMessage := fmt.Sprintf("event: %s\ndata: %d\n\n", projection.ToJSON(), offset)
+		if err := n10nWP.responseWriter.Write(sseMessage); err != nil {
+			// could happen if router stopped to listen for bus
+			// more likely request ctx is closed
+			// WatchChannel will exit in this case
+			logger.Error("failed to send sse message:", sseMessage)
+		}
+	})
+	return nil
+}
+
+func (rs *finishResponse) DoSync(_ context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	n10nWP.responseWriter.Close(n10nWP.resultErr)
+	return nil
+}
+
+func (rs *finishResponse) OnErr(err error, work interface{}, _ pipeline.IWorkpieceContext) (newErr error) {
 	n10nWP := work.(*n10nWorkpiece)
 	for _, subscribedKey := range n10nWP.subscribedProjectionKeys {
 		if err = n10nWP.n10nBroker.Unsubscribe(n10nWP.channelID, subscribedKey); err != nil {
 			logger.Error(fmt.Sprintf("failed to unsubscribe key %#v: %s", subscribedKey, err))
 		}
 	}
-	return coreutils.WrapSysError(err, http.StatusBadRequest)
+	n10nWP.resultErr = coreutils.WrapSysError(err, http.StatusBadRequest)
+	return nil
 }
 
 func (m *N10NMessage) ExpiresIn() time.Duration {

@@ -6,6 +6,7 @@
 package n10n
 
 import (
+	"context"
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -29,6 +30,7 @@ type IN10NMessage interface {
 	Subscriptions() []Subscription
 	URLPayload() string
 	Responder() bus.IResponder
+	RequestCtx() context.Context
 }
 
 type Subscription struct {
@@ -43,8 +45,10 @@ type n10nWorkpiece struct {
 	createChannelParams      in10nmem.CreateChannelParamsType
 	responseWriter           bus.IResponseWriter
 	subscribedProjectionKeys []in10n.ProjectionKey
+	vvmAndRequestCombinedCtx context.Context
+	resultErr                error
 }
 
-type responseSender struct {
+type finishResponse struct {
 	pipeline.NOOP
 }
