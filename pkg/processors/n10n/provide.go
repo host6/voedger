@@ -18,7 +18,6 @@ func Provide(iN10N in10n.IN10nBroker) ServiceFactory {
 			n10nPipeline := pipeline.NewSyncPipeline(vvmCtx, "Notifications Processor",
 				pipeline.WireFunc("getCreateChannelParams", getCreateChannelParams),
 				pipeline.WireFunc("newChannel", newChannel),
-				pipeline.WireFunc("initResponse", initResponse),
 				pipeline.WireFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),
 				pipeline.WireFunc("subscribe", subscribe),
 				pipeline.WireFunc("getVVMAndRequestCombinedCtx", getVVMAndRequestCombinedCtx),

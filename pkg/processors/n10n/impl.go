@@ -33,16 +33,12 @@ func newChannel(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	return err
 }
 
-func initResponse(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.responseWriter = n10nWP.Responder().InitResponse(http.StatusOK) // actually does not matter but need to match the bus contract
-	return nil
-
-}
-
 func sendChannelIDSSEEvent(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	return n10nWP.responseWriter.Write(fmt.Sprintf("event: channelId\ndata: %s\n\n", n10nWP.channelID))
+	n10nWP.sseMessenger, err = n10nWP.SSEResponseIniter().SendChannelIDSSEMessage(
+		fmt.Sprintf("event: channelId\ndata: %s\n\n", n10nWP.channelID),
+	)
+	return err
 }
 
 func subscribe(ctx context.Context, work pipeline.IWorkpiece) (err error) {
