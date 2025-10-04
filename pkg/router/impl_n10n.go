@@ -16,6 +16,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/strconvu"
+	"github.com/voedger/voedger/pkg/iprocbus"
 
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/in10nmem"
@@ -25,7 +26,7 @@ import (
 /*
 curl -G --data-urlencode "payload={\"SubjectLogin\": \"paa\", \"ProjectionKey\":[{\"App\":\"Application\",\"Projection\":\"paa.price\",\"WS\":1}, {\"App\":\"Application\",\"Projection\":\"paa.wine_price\",\"WS\":1}]}" https://alpha2.dev.untill.ru/n10n/channel -H "Content-Type: application/json"
 */
-func (s *httpService) subscribeAndWatchHandler() http.HandlerFunc {
+func (s *httpService) subscribeAndWatchHandler(procBus iprocbus.IProcBus) http.HandlerFunc {
 	return func(rw http.ResponseWriter, req *http.Request) {
 		var (
 			urlParams in10nmem.CreateChannelParamsType
@@ -56,6 +57,10 @@ func (s *httpService) subscribeAndWatchHandler() http.HandlerFunc {
 			WriteTextResponse(rw, "streaming unsupported!", http.StatusInternalServerError)
 			return
 		}
+
+		procBus.Submit()
+
+
 		channel, err = s.n10n.NewChannel(urlParams.SubjectLogin, hours24)
 		if err != nil {
 			logger.Error(err)
