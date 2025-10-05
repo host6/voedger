@@ -189,7 +189,7 @@ func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[
 
 		// req's BaseContext is router service's context. See service.Start()
 		// router app closing or client disconnected -> req.Context() is done
-		// will create new cancellable context and cancel it if http section send is failed.
+		// will create new cancellable context and cancel it if write to http socket is failed.
 		// requestCtx.Done() -> SendRequest2 implementation will notify the handler that the consumer has left us
 		requestCtx, cancel := context.WithCancel(req.Context())
 		defer cancel() // to avoid context leak

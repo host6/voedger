@@ -22,6 +22,7 @@ type Request struct {
 	Body     []byte
 	AppQName appdef.AppQName
 	Host     string // used by authenticator to emit Host principal
+	IsN10N   bool
 
 	// apiV2
 	Query          map[string]string

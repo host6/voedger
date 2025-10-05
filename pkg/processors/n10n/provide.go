@@ -18,12 +18,13 @@ func Provide(iN10N in10n.IN10nBroker) ServiceFactory {
 			n10nPipeline := pipeline.NewSyncPipeline(vvmCtx, "Notifications Processor",
 				pipeline.WireFunc("getCreateChannelParams", getCreateChannelParams),
 				pipeline.WireFunc("newChannel", newChannel),
+				pipeline.WireFunc("initResponse", initResponse),
 				pipeline.WireFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),
 				pipeline.WireFunc("subscribe", subscribe),
-				pipeline.WireFunc("getVVMAndRequestCombinedCtx", getVVMAndRequestCombinedCtx),
 				pipeline.WireFunc("watchChannel", watchChannel),
 				pipeline.WireSyncOperator("finishResponse", &finishResponse{}),
 			)
+			defer n10nPipeline.Close()
 
 			for vvmCtx.Err() == nil {
 				select {
@@ -36,6 +37,10 @@ func Provide(iN10N in10n.IN10nBroker) ServiceFactory {
 						// notest: all error must be handled
 						panic(err)
 					}
+					if wp.responseWriter != nil {
+						wp.responseWriter.Close(nil)
+					}
+					wp.Release()
 				case <-vvmCtx.Done():
 					return
 				}

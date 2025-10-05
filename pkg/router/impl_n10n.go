@@ -58,8 +58,23 @@ func (s *httpService) subscribeAndWatchHandler(reqSender bus.IRequestSender) htt
 			return
 		}
 
+		reqBus := bus.Request{
+			Method: http.MethodGet,
+			Header: map[string]string{},
+			Query:  map[string]string{},
+			IsN10N: true,
+		}
+		for k, v := range req.Header {
+			reqBus.Header[k] = v[0]
+		}
+		for k, v := range req.URL.Query() {
+			reqBus.Query[k] = v[0]
+		}
 
-		reqSender.SendRequest(req.Context(), reqBus)
+		respCh, respMeta, respErr, err := reqSender.SendRequest(req.Context(), reqBus)
+		if err != nil {
+			
+		}
 
 		channel, err = s.n10n.NewChannel(urlParams.SubjectLogin, hours24)
 		if err != nil {

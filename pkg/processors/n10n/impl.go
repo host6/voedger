@@ -33,12 +33,17 @@ func newChannel(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	return err
 }
 
+func initResponse(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	n10nWP.responseWriter = n10nWP.ResponseSender().InitResponse(http.StatusOK)
+	return nil
+}
+
 func sendChannelIDSSEEvent(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.sseMessenger, err = n10nWP.SSEResponseIniter().SendChannelIDSSEMessage(
+	return n10nWP.responseWriter.Write(
 		fmt.Sprintf("event: channelId\ndata: %s\n\n", n10nWP.channelID),
 	)
-	return err
 }
 
 func subscribe(ctx context.Context, work pipeline.IWorkpiece) (err error) {
@@ -52,24 +57,10 @@ func subscribe(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	return nil
 }
 
-func getVVMAndRequestCombinedCtx(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	n10nWP := work.(*n10nWorkpiece)
-	mergedCtx, cancel := context.WithCancel(context.Background())
-	n10nWP.vvmAndRequestCombinedCtx = mergedCtx
-	go func() {
-		select {
-		case <-ctx.Done():
-			cancel()
-		case <-n10nWP.RequestCtx().Done():
-			cancel()
-		}
-	}()
-	return nil
-}
-
 func watchChannel(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.n10nBroker.WatchChannel(n10nWP.vvmAndRequestCombinedCtx, n10nWP.channelID, func(projection in10n.ProjectionKey, offset istructs.Offset) {
+	// RequestCtx tracks both http request and VVM contexts
+	n10nWP.n10nBroker.WatchChannel(n10nWP.RequestCtx(), n10nWP.channelID, func(projection in10n.ProjectionKey, offset istructs.Offset) {
 		sseMessage := fmt.Sprintf("event: %s\ndata: %d\n\n", projection.ToJSON(), offset)
 		if err := n10nWP.responseWriter.Write(sseMessage); err != nil {
 			// could happen if router stopped to listen for bus
