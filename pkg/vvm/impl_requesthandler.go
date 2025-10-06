@@ -19,6 +19,7 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/processors"
 	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
+	"github.com/voedger/voedger/pkg/processors/n10n"
 	queryprocessor "github.com/voedger/voedger/pkg/processors/query"
 	"github.com/voedger/voedger/pkg/processors/query2"
 )
@@ -26,8 +27,12 @@ import (
 func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IProcBus,
 	cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx_v1 QueryProcessorsChannelGroupIdxType_V1,
 	qpcgIdx_v2 QueryProcessorsChannelGroupIdxType_V2,
-	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps) bus.RequestHandler {
+	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps, n10n.ServiceFactory) bus.RequestHandler {
 	return func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+		if request.IsN10N {
+			handleN10N(requestCtx, request.Body, responder)
+			return
+		}
 		if logger.IsVerbose() {
 			// FIXME: eliminate this. Unlogged params are logged
 			logger.Verbose("request body:\n", string(request.Body))
@@ -111,4 +116,8 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 			}
 		}
 	}
+}
+
+func handleN10N(requestCtx context.Context, IN10NProc n10n.IN10NProc, body []byte, responder bus.IResponder) {
+	n10n.NewIN10NMessage(requestCtx, body, responder)
 }

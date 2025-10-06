@@ -12,7 +12,11 @@ import (
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
-func Provide(iN10N in10n.IN10nBroker) ServiceFactory {
+func NewIN10NProc(n10nBroker in10n.IN10nBroker) IN10NProc {
+	return &implIN10NProc{n10nBroker: n10nBroker}
+}
+
+func New(iN10N in10n.IN10nBroker) ServiceFactory {
 	return func(n10nChannel N10NChannel) pipeline.IService {
 		return pipeline.NewService(func(vvmCtx context.Context) {
 			n10nPipeline := pipeline.NewSyncPipeline(vvmCtx, "Notifications Processor",

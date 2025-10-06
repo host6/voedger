@@ -10,14 +10,19 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"time"
 
+	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
+
+func (m *implIN10NProc) Handle(requestCtx context.Context, body []byte, responder bus.IResponder) error {
+
+}
+
 
 func getCreateChannelParams(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
@@ -35,7 +40,7 @@ func newChannel(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 
 func initResponse(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.responseWriter = n10nWP.ResponseSender().InitResponse(http.StatusOK)
+	n10nWP.responseWriter = n10nWP.Responder().InitResponse(http.StatusOK)
 	return nil
 }
 
@@ -89,16 +94,16 @@ func (rs *finishResponse) OnErr(err error, work interface{}, _ pipeline.IWorkpie
 	return nil
 }
 
-func (m *N10NMessage) ExpiresIn() time.Duration {
-	return m.expiresIn
+func (m *N10NMessage) RequestCtx() context.Context {
+	return m.requestCtx
 }
 
-func (m *N10NMessage) Subscriptions() []Subscription {
-	return m.subscriptions
+func (m *N10NMessage) Responder() bus.IResponder {
+	return m.responder
 }
 
-func (m *N10NMessage) URLPayload() string {
-	return m.urlPayload
+func (m *N10NMessage) Body() []byte {
+	return m.body
 }
 
 func (m *n10nWorkpiece) Release() {}

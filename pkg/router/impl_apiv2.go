@@ -150,7 +150,7 @@ func (s *httpService) registerHandlersV2() {
 	// [~server.n10n/cmp.routerCreateChannelHandler~impl]
 	s.router.HandleFunc(fmt.Sprintf("/api/v2/apps/{%s}/{%s}/notifications",
 		URLPlaceholder_appOwner, URLPlaceholder_appName),
-		corsHandler(requestHandlerV2_notifications_subscribeAndWatch(s.numsAppsWorkspaces, s.n10n, s.appTokensFactory))).
+		corsHandler(requestHandlerV2_notifications_subscribeAndWatch(s.numsAppsWorkspaces, s.n10n, s.appTokensFactory, s.requestSender))).
 		Methods(http.MethodOptions, http.MethodPost).Name("notifications subscribe + watch")
 
 	// notifications unsubscribe /api/v2/apps/{owner}/{app}/notifications/{channelId}/workspaces/{wsid}/subscriptions/{entity}
@@ -259,69 +259,82 @@ func authorize(appTokensFactory payloads.IAppTokensFactory, busRequest bus.Reque
 }
 
 func requestHandlerV2_notifications_subscribeAndWatch(numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces,
-	n10n in10n.IN10nBroker, appTokensFactory payloads.IAppTokensFactory) http.HandlerFunc {
+	n10n in10n.IN10nBroker, appTokensFactory payloads.IAppTokensFactory, reqSender bus.IRequestSender) http.HandlerFunc {
 	return withRequestValidation(numsAppsWorkspaces, func(req *http.Request, rw http.ResponseWriter, data validatedData) {
-		flusher, ok := rw.(http.Flusher)
+		_, ok := rw.(http.Flusher)
 		if !ok {
 			// notest
 			WriteTextResponse(rw, "streaming unsupported!", http.StatusInternalServerError)
 			return
 		}
-
-		busRequest := createBusRequest(req.Method, data, req)
-		principalPayload, err := authorize(appTokensFactory, busRequest)
-		if err != nil {
-			// [~server.n10n/err.routerCreateChannelInvalidToken~impl]
-			ReplyCommonError(rw, err.Error(), http.StatusUnauthorized)
-			return
+		busRequest := bus.Request{
+			Method: http.MethodGet,
+			Header: map[string]string{},
+			Query:  map[string]string{},
+			IsN10N: true,
 		}
-
-		subscriptions, expiresIn, err := parseN10nArgs(string(busRequest.Body))
-		if err != nil {
-			ReplyCommonError(rw, err.Error(), http.StatusBadRequest)
-			return
+		for k, v := range req.Header {
+			busRequest.Header[k] = v[0]
 		}
-
-		subjectLogin := istructs.SubjectLogin(principalPayload.Login)
-		channel, err := n10n.NewChannel(subjectLogin, expiresIn)
-		if err != nil {
-			ReplyCommonError(rw, "create new channel failed: "+err.Error(), http.StatusInternalServerError)
-			return
+		for k, v := range req.URL.Query() {
+			busRequest.Query[k] = v[0]
 		}
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
 
-		rw.Header().Set("Content-Type", "text/event-stream")
-		rw.Header().Set("Cache-Control", "no-cache")
-		rw.Header().Set("Connection", "keep-alive")
+		// busRequest := createBusRequest(req.Method, data, req)
+		// principalPayload, err := authorize(appTokensFactory, busRequest)
+		// if err != nil {
+		// 	// [~server.n10n/err.routerCreateChannelInvalidToken~impl]
+		// 	ReplyCommonError(rw, err.Error(), http.StatusUnauthorized)
+		// 	return
+		// }
 
-		if _, err = fmt.Fprintf(rw, "event: channelId\ndata: %s\n\n", channel); err != nil {
-			// notest
-			logger.Error("failed to write created channel id to client:", err)
-			return
-		}
-		flusher.Flush()
+		// subscriptions, expiresIn, err := parseN10nArgs(string(busRequest.Body))
+		// if err != nil {
+		// 	ReplyCommonError(rw, err.Error(), http.StatusBadRequest)
+		// 	return
+		// }
 
-		subscribedProjectionKeys := []in10n.ProjectionKey{}
+		// subjectLogin := istructs.SubjectLogin(principalPayload.Login)
+		// channel, err := n10n.NewChannel(subjectLogin, expiresIn)
+		// if err != nil {
+		// 	ReplyCommonError(rw, "create new channel failed: "+err.Error(), http.StatusInternalServerError)
+		// 	return
+		// }
 
-		for i, sub := range subscriptions {
-			projectionKey := in10n.ProjectionKey{
-				App:        busRequest.AppQName,
-				Projection: sub.entity,
-				WS:         sub.wsid,
-			}
-			err := n10n.Subscribe(channel, projectionKey)
-			if err != nil {
-				for _, subscribedKey := range subscribedProjectionKeys {
-					if err = n10n.Unsubscribe(channel, subscribedKey); err != nil {
-						logger.Error(fmt.Sprintf("failed to unsubscribe key %#v: %s", subscribedKey, err))
-					}
-				}
-				ReplyCommonError(rw, fmt.Sprintf("subscriptions[%d]: subscribe failed: %s", i, err), http.StatusInternalServerError)
-				return
-			}
-			subscribedProjectionKeys = append(subscribedProjectionKeys, projectionKey)
-		}
+		// rw.Header().Set("Content-Type", "text/event-stream")
+		// rw.Header().Set("Cache-Control", "no-cache")
+		// rw.Header().Set("Connection", "keep-alive")
 
-		serveN10NChannel(req.Context(), rw, flusher, channel, n10n, subjectLogin)
+		// if _, err = fmt.Fprintf(rw, "event: channelId\ndata: %s\n\n", channel); err != nil {
+		// 	// notest
+		// 	logger.Error("failed to write created channel id to client:", err)
+		// 	return
+		// }
+		// flusher.Flush()
+
+		// subscribedProjectionKeys := []in10n.ProjectionKey{}
+
+		// for i, sub := range subscriptions {
+		// 	projectionKey := in10n.ProjectionKey{
+		// 		App:        busRequest.AppQName,
+		// 		Projection: sub.entity,
+		// 		WS:         sub.wsid,
+		// 	}
+		// 	err := n10n.Subscribe(channel, projectionKey)
+		// 	if err != nil {
+		// 		for _, subscribedKey := range subscribedProjectionKeys {
+		// 			if err = n10n.Unsubscribe(channel, subscribedKey); err != nil {
+		// 				logger.Error(fmt.Sprintf("failed to unsubscribe key %#v: %s", subscribedKey, err))
+		// 			}
+		// 		}
+		// 		ReplyCommonError(rw, fmt.Sprintf("subscriptions[%d]: subscribe failed: %s", i, err), http.StatusInternalServerError)
+		// 		return
+		// 	}
+		// 	subscribedProjectionKeys = append(subscribedProjectionKeys, projectionKey)
+		// }
+
+		// serveN10NChannel(req.Context(), rw, flusher, channel, n10n, subjectLogin)
 	})
 }
 
