@@ -59,6 +59,7 @@ func (p *implIN10NProc) HandleAsync(requestCtx context.Context, body []byte, res
 				logger.Error("failed to send sse message:", sseMessage)
 			}
 		})
+		n10nWP.responseWriter.Close(nil)
 	}()
 }
 
