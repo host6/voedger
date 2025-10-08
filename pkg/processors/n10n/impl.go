@@ -7,10 +7,12 @@ package n10n
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/logger"
@@ -31,10 +33,37 @@ func (m *implIN10NProc) Handle(requestCtx context.Context, body []byte, responde
 	return err
 }
 
-func getCreateChannelParams(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+func parseRequest(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	if err = json.Unmarshal(n10nWP.body, &n10nWP.createChannelParams); err != nil {
-		return work, fmt.Errorf("cannot unmarshal input payload %w", err)
+	n10nArgs := n10nArgs{}
+	if err := coreutils.JSONUnmarshalDisallowUnknownFields(n10nWP.body, &n10nArgs); err != nil {
+		return work, fmt.Errorf("failed to unmarshal request body: %w", err)
+	}
+	if n10nArgs.ExpiresInSeconds == 0 {
+		n10nArgs.ExpiresInSeconds = defaultN10NExpiresInSeconds
+	} else if n10nArgs.ExpiresInSeconds < 0 {
+		return work, fmt.Errorf("invalid expiresIn value %d", n10nArgs.ExpiresInSeconds)
+	}
+	n10nWP.expiresIn = time.Duration(n10nArgs.ExpiresInSeconds) * time.Second
+	if len(n10nArgs.Subscriptions) == 0 {
+		return work, errors.New("no subscriptions provided")
+	}
+	for i, subscr := range n10nArgs.Subscriptions {
+		if len(subscr.Entity) == 0 || len(subscr.WSIDNumber.String()) == 0 {
+			return work, fmt.Errorf("subscriptions[%d]: entity and\\or wsid is not provided", i)
+		}
+		wsid, err := coreutils.ClarifyJSONWSID(subscr.WSIDNumber)
+		if err != nil {
+			return work, err
+		}
+		entity, err := appdef.ParseQName(subscr.Entity)
+		if err != nil {
+			return work, fmt.Errorf("subscriptions[%d]: failed to parse entity %s as a QName: %w", i, subscr.Entity, err)
+		}
+		n10nWP.subscriptions = append(n10nWP.subscriptions, subscription{
+			entity: entity,
+			wsid:   wsid,
+		})
 	}
 	return work, nil
 }

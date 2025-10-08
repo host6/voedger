@@ -7,11 +7,12 @@ package n10n
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/in10n"
-	"github.com/voedger/voedger/pkg/in10nmem"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
@@ -36,7 +37,8 @@ type n10nWorkpiece struct {
 	responder                bus.IResponder
 	n10nBroker               in10n.IN10nBroker
 	channelID                in10n.ChannelID
-	createChannelParams      in10nmem.CreateChannelParamsType
+	subscriptions            []subscription
+	expiresIn                time.Duration
 	subscribedProjectionKeys []in10n.ProjectionKey
 	resultErr                error
 	responseWriter           bus.IResponseWriter
@@ -45,4 +47,19 @@ type n10nWorkpiece struct {
 
 type finishResponse struct {
 	pipeline.NOOP
+}
+
+type n10nArgs struct {
+	Subscriptions    []subscriptionJSON `json:"subscriptions"`
+	ExpiresInSeconds int64              `json:"expiresIn"`
+}
+
+type subscriptionJSON struct {
+	Entity     string      `json:"entity"`
+	WSIDNumber json.Number `json:"wsid"`
+}
+
+type subscription struct {
+	entity appdef.QName
+	wsid   istructs.WSID
 }

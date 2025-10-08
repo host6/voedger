@@ -268,10 +268,12 @@ func requestHandlerV2_notifications_subscribeAndWatch(numsAppsWorkspaces map[app
 			return
 		}
 		busRequest := bus.Request{
-			Method: http.MethodGet,
-			Header: map[string]string{},
-			Query:  map[string]string{},
-			IsN10N: true,
+			Method:  http.MethodGet,
+			Header:  map[string]string{},
+			Query:   map[string]string{},
+			IsN10N:  true,
+			Body:    data.body,
+			IsAPIV2: true,
 		}
 		for k, v := range req.Header {
 			busRequest.Header[k] = v[0]

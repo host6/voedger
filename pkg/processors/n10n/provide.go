@@ -14,7 +14,7 @@ import (
 
 func NewIN10NProc(vvmCtx context.Context, n10nBroker in10n.IN10nBroker) IN10NProc {
 	n10nPipeline := pipeline.NewAsyncPipeline(vvmCtx, "Notifications Processor",
-		pipeline.WireAsyncFunc("getCreateChannelParams", getCreateChannelParams),
+		pipeline.WireAsyncFunc("getCreateChannelParams", parseRequest),
 		pipeline.WireAsyncFunc("newChannel", newChannel),
 		pipeline.WireAsyncFunc("initResponse", initResponse),
 		pipeline.WireAsyncFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),

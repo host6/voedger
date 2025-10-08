@@ -48,7 +48,7 @@ func reply_v2(requestCtx context.Context, w http.ResponseWriter, responseCh <-ch
 			return
 		}
 
-		toSend := ""
+ 		toSend := ""
 
 		if respMode == bus.RespondMode_ApiArray {
 			if elemsCount > 0 {
