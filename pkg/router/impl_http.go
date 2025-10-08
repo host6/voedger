@@ -204,7 +204,7 @@ func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[
 			return
 		}
 
-		initResponse(rw, responseMeta.ContentType, responseMeta.StatusCode)
+		initResponse(rw, responseMeta)
 		reply_v1(requestCtx, rw, responseCh, responseErr, responseMeta.ContentType, cancel, request, responseMeta.Mode())
 	})
 }
@@ -231,8 +231,14 @@ func checkHandler() http.HandlerFunc {
 	}
 }
 
-func initResponse(w http.ResponseWriter, contentType string, statusCode int) {
-	w.Header().Set(httpu.ContentType, contentType)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(statusCode)
+func initResponse(w http.ResponseWriter, responseMeta bus.ResponseMeta) {
+	switch responseMeta.Mode() {
+	case bus.RespondMode_Streaming:
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+	case bus.RespondMode_Single, bus.RespondMode_ApiArray:
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+	}
+	w.Header().Set(httpu.ContentType, responseMeta.ContentType)
+	w.WriteHeader(responseMeta.StatusCode)
 }

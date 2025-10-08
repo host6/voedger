@@ -29,10 +29,13 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 	qpcgIdx_v2 QueryProcessorsChannelGroupIdxType_V2,
 	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps, n10nProc n10n.IN10NProc) bus.RequestHandler {
 	return func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+		token, err := bus.GetPrincipalToken(request)
+		if err != nil {
+			bus.ReplyAccessDeniedUnauthorized(responder, err.Error())
+			return
+		}
 		if request.IsN10N {
-			if err := n10nProc.Handle(requestCtx, request.Body, responder); err != nil {
-				logger.Error("n10n proc:", err)
-			}
+			n10nProc.Handle(requestCtx, request.Body, responder, token, request.AppQName)
 			return
 		}
 		if logger.IsVerbose() {
@@ -42,12 +45,6 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 
 		if !vvmApps.Exists(request.AppQName) {
 			bus.ReplyBadRequest(responder, "unknown app "+request.AppQName.String())
-			return
-		}
-
-		token, err := bus.GetPrincipalToken(request)
-		if err != nil {
-			bus.ReplyAccessDeniedUnauthorized(responder, err.Error())
 			return
 		}
 

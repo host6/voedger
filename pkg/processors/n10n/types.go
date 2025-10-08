@@ -12,18 +12,22 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
+	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
 type IN10NProc interface {
-	Handle(requestCtx context.Context, body []byte, responder bus.IResponder) error
+	Handle(requestCtx context.Context, body []byte, responder bus.IResponder, token string, appQName appdef.AppQName)
 }
 
 type implIN10NProc struct {
-	n10nBroker in10n.IN10nBroker
-	pipeline   pipeline.IAsyncPipeline
+	n10nBroker       in10n.IN10nBroker
+	pipeline         pipeline.IAsyncPipeline
+	authenticator    iauthnz.IAuthenticator
+	appTokensFactory payloads.IAppTokensFactory
 }
 
 type Subscription struct {
@@ -35,14 +39,16 @@ type n10nWorkpiece struct {
 	body                     []byte
 	requestCtx               context.Context
 	responder                bus.IResponder
-	n10nBroker               in10n.IN10nBroker
 	channelID                in10n.ChannelID
 	subscriptions            []subscription
 	expiresIn                time.Duration
 	subscribedProjectionKeys []in10n.ProjectionKey
 	resultErr                error
 	responseWriter           bus.IResponseWriter
-	doneCh                   chan (any)
+	token                    string
+	subjectLogin             istructs.SubjectLogin
+	appQName                 appdef.AppQName
+	doneAndErr               chan error
 }
 
 type finishResponse struct {

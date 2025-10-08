@@ -8,22 +8,27 @@ package n10n
 import (
 	"context"
 
+	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/in10n"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
-func NewIN10NProc(vvmCtx context.Context, n10nBroker in10n.IN10nBroker) IN10NProc {
-	n10nPipeline := pipeline.NewAsyncPipeline(vvmCtx, "Notifications Processor",
+func NewIN10NProc(vvmCtx context.Context, n10nBroker in10n.IN10nBroker, authenticator iauthnz.IAuthenticator, appTokensFactory payloads.IAppTokensFactory) IN10NProc {
+	proc := &implIN10NProc{
+		n10nBroker:       n10nBroker,
+		authenticator:    authenticator,
+		appTokensFactory: appTokensFactory,
+	}
+	proc.pipeline = pipeline.NewAsyncPipeline(vvmCtx, "Notifications Processor",
+		pipeline.WireAsyncFunc("getSubjectLogin", proc.getSubjectLogin),
 		pipeline.WireAsyncFunc("getCreateChannelParams", parseRequest),
-		pipeline.WireAsyncFunc("newChannel", newChannel),
+		pipeline.WireAsyncFunc("newChannel", proc.newChannel),
 		pipeline.WireAsyncFunc("initResponse", initResponse),
 		pipeline.WireAsyncFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),
-		pipeline.WireAsyncFunc("subscribe", subscribe),
-		pipeline.WireAsyncFunc("watchChannel", watchChannel),
+		pipeline.WireAsyncFunc("subscribe", proc.subscribe),
+		pipeline.WireAsyncFunc("watchChannel", proc.watchChannel),
 		pipeline.WireAsyncOperator("finishResponse", &finishResponse{}),
 	)
-	return &implIN10NProc{
-		n10nBroker: n10nBroker,
-		pipeline:   n10nPipeline,
-	}
+	return proc
 }

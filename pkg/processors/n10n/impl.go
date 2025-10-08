@@ -18,19 +18,44 @@ import (
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
-func (m *implIN10NProc) Handle(requestCtx context.Context, body []byte, responder bus.IResponder) error {
+func (p *implIN10NProc) Handle(requestCtx context.Context, body []byte, responder bus.IResponder, token string, appQName appdef.AppQName) {
 	wp := &n10nWorkpiece{
 		body:       body,
 		requestCtx: requestCtx,
 		responder:  responder,
-		n10nBroker: m.n10nBroker,
+		token:      token,
+		appQName:   appQName,
 	}
-	err := m.pipeline.SendAsync(wp)
-	<-wp.doneCh
-	return err
+	if err := p.pipeline.SendAsync(wp); err != nil {
+		// notest: cannot happen, all errors are handled
+		panic(err)
+	}
+	// if err := <-wp.doneAndErr; err != nil {
+	// 	if wp.responseWriter == nil {
+	// 		if _, err := initResponse(wp.requestCtx, wp); err != nil {
+	// 			// notest: no error possible here
+	// 			panic(err)
+	// 		}
+	// 	}
+	// 	wp.responseWriter.Close(err)
+	// }
+	logger.Info("")
+}
+
+func (p *implIN10NProc) getSubjectLogin(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	appTokens := p.appTokensFactory.New(n10nWP.appQName)
+	principalPayload := payloads.PrincipalPayload{}
+	_, err = appTokens.ValidateToken(n10nWP.token, &principalPayload)
+	if err != nil {
+		return work, coreutils.NewHTTPError(http.StatusUnauthorized, err)
+	}
+	n10nWP.subjectLogin = istructs.SubjectLogin(principalPayload.Login)
+	return work, nil
 }
 
 func parseRequest(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
@@ -68,15 +93,15 @@ func parseRequest(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeli
 	return work, nil
 }
 
-func newChannel(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+func (p *implIN10NProc) newChannel(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.channelID, err = n10nWP.n10nBroker.NewChannel(n10nWP.createChannelParams.SubjectLogin, hours24)
+	n10nWP.channelID, err = p.n10nBroker.NewChannel(n10nWP.subjectLogin, n10nWP.expiresIn)
 	return work, err
 }
 
 func initResponse(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.responseWriter = n10nWP.responder.InitResponse(http.StatusOK)
+	n10nWP.responseWriter = n10nWP.responder.InitEventStream()
 	return work, nil
 }
 
@@ -87,10 +112,15 @@ func sendChannelIDSSEEvent(ctx context.Context, work pipeline.IWorkpiece) (outWo
 	)
 }
 
-func subscribe(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+func (p *implIN10NProc) subscribe(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	for _, projectionKey := range n10nWP.createChannelParams.ProjectionKey {
-		if err = n10nWP.n10nBroker.Subscribe(n10nWP.channelID, projectionKey); err != nil {
+	for _, sub := range n10nWP.subscriptions {
+		projectionKey := in10n.ProjectionKey{
+			App:        n10nWP.appQName,
+			Projection: sub.entity,
+			WS:         sub.wsid,
+		}
+		if err = p.n10nBroker.Subscribe(n10nWP.channelID, projectionKey); err != nil {
 			return work, coreutils.NewHTTPErrorf(n10nErrorToStatusCode(err), "subscribe failed: %w", err)
 		}
 		n10nWP.subscribedProjectionKeys = append(n10nWP.subscribedProjectionKeys, projectionKey)
@@ -98,10 +128,10 @@ func subscribe(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.
 	return work, nil
 }
 
-func watchChannel(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
+func (p *implIN10NProc) watchChannel(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
 	n10nWP := work.(*n10nWorkpiece)
 	// RequestCtx tracks both http request and VVM contexts
-	n10nWP.n10nBroker.WatchChannel(n10nWP.requestCtx, n10nWP.channelID, func(projection in10n.ProjectionKey, offset istructs.Offset) {
+	p.n10nBroker.WatchChannel(n10nWP.requestCtx, n10nWP.channelID, func(projection in10n.ProjectionKey, offset istructs.Offset) {
 		sseMessage := fmt.Sprintf("event: %s\ndata: %d\n\n", projection.ToJSON(), offset)
 		if err := n10nWP.responseWriter.Write(sseMessage); err != nil {
 			// could happen if router stopped to listen for bus
@@ -116,11 +146,16 @@ func watchChannel(ctx context.Context, work pipeline.IWorkpiece) (outWork pipeli
 func (rs *finishResponse) DoAsync(_ context.Context, work pipeline.IWorkpiece) (outWork pipeline.IWorkpiece, err error) {
 	n10nWP := work.(*n10nWorkpiece)
 	n10nWP.responseWriter.Close(n10nWP.resultErr)
-	close(n10nWP.doneCh)
 	return work, nil
 }
 
+func (rs *finishResponse) OnErr(err error, work interface{}, context pipeline.IWorkpieceContext) (newErr error) {
+	logger.Error(err)
+	return nil
+}
+
 func (rs *finishResponse) OnError(_ context.Context, err error) {
+	logger.Error(err)
 	// n10nWP := work.(*n10nWorkpiece)
 	// for _, subscribedKey := range n10nWP.subscribedProjectionKeys {
 	// 	if err = n10nWP.n10nBroker.Unsubscribe(n10nWP.channelID, subscribedKey); err != nil {

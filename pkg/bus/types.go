@@ -44,6 +44,7 @@ type RespondMode int
 const (
 	RespondMode_ApiArray RespondMode = iota
 	RespondMode_Single
+	RespondMode_Streaming
 )
 
 type implIRequestSender struct {

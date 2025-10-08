@@ -5,9 +5,6 @@
 
 package n10n
 
-import "time"
-
 const (
-	hours24                     = 24 * time.Hour
 	defaultN10NExpiresInSeconds = 60 * 60 * 24 // 24 hours
 )
