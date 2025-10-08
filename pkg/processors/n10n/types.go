@@ -20,12 +20,11 @@ import (
 )
 
 type IN10NProc interface {
-	Handle(requestCtx context.Context, body []byte, responder bus.IResponder, token string, appQName appdef.AppQName)
+	HandleAsync(requestCtx context.Context, body []byte, responder bus.IResponder, token string, appQName appdef.AppQName)
 }
 
 type implIN10NProc struct {
 	n10nBroker       in10n.IN10nBroker
-	pipeline         pipeline.IAsyncPipeline
 	authenticator    iauthnz.IAuthenticator
 	appTokensFactory payloads.IAppTokensFactory
 }

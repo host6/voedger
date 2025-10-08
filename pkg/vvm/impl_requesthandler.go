@@ -35,7 +35,7 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 			return
 		}
 		if request.IsN10N {
-			n10nProc.Handle(requestCtx, request.Body, responder, token, request.AppQName)
+			n10nProc.HandleAsync(requestCtx, request.Body, responder, token, request.AppQName)
 			return
 		}
 		if logger.IsVerbose() {
