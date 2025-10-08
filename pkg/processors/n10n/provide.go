@@ -12,43 +12,18 @@ import (
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
-func NewIN10NProc(n10nBroker in10n.IN10nBroker) IN10NProc {
-	return &implIN10NProc{n10nBroker: n10nBroker}
-}
-
-func New(iN10N in10n.IN10nBroker) ServiceFactory {
-	return func(n10nChannel N10NChannel) pipeline.IService {
-		return pipeline.NewService(func(vvmCtx context.Context) {
-			n10nPipeline := pipeline.NewSyncPipeline(vvmCtx, "Notifications Processor",
-				pipeline.WireFunc("getCreateChannelParams", getCreateChannelParams),
-				pipeline.WireFunc("newChannel", newChannel),
-				pipeline.WireFunc("initResponse", initResponse),
-				pipeline.WireFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),
-				pipeline.WireFunc("subscribe", subscribe),
-				pipeline.WireFunc("watchChannel", watchChannel),
-				pipeline.WireSyncOperator("finishResponse", &finishResponse{}),
-			)
-			defer n10nPipeline.Close()
-
-			for vvmCtx.Err() == nil {
-				select {
-				case intf := <-n10nChannel:
-					wp := &n10nWorkpiece{
-						IN10NMessage: intf.(IN10NMessage),
-						n10nBroker:   iN10N,
-					}
-					if err := n10nPipeline.SendSync(wp); err != nil {
-						// notest: all error must be handled
-						panic(err)
-					}
-					if wp.responseWriter != nil {
-						wp.responseWriter.Close(nil)
-					}
-					wp.Release()
-				case <-vvmCtx.Done():
-					return
-				}
-			}
-		})
+func NewIN10NProc(vvmCtx context.Context, n10nBroker in10n.IN10nBroker) IN10NProc {
+	n10nPipeline := pipeline.NewAsyncPipeline(vvmCtx, "Notifications Processor",
+		pipeline.WireAsyncFunc("getCreateChannelParams", getCreateChannelParams),
+		pipeline.WireAsyncFunc("newChannel", newChannel),
+		pipeline.WireAsyncFunc("initResponse", initResponse),
+		pipeline.WireAsyncFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),
+		pipeline.WireAsyncFunc("subscribe", subscribe),
+		pipeline.WireAsyncFunc("watchChannel", watchChannel),
+		pipeline.WireAsyncOperator("finishResponse", &finishResponse{}),
+	)
+	return &implIN10NProc{
+		n10nBroker: n10nBroker,
+		pipeline:   n10nPipeline,
 	}
 }

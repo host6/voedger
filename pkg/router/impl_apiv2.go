@@ -586,7 +586,9 @@ func requestHandlerV2_table(reqSender bus.IRequestSender, apiPath processors.API
 				panic(err)
 			}
 			busRequest.DocID = istructs.IDType(docID)
+
 		}
+		busRequest.IsN10N = true
 		busRequest.IsAPIV2 = true
 		busRequest.APIPath = int(apiPath)
 		busRequest.QName = appdef.NewQName(data.vars[URLPlaceholder_pkg], data.vars[URLPlaceholder_table])

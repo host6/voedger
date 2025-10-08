@@ -27,10 +27,12 @@ import (
 func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IProcBus,
 	cpchIdx CommandProcessorsChannelGroupIdxType, qpcgIdx_v1 QueryProcessorsChannelGroupIdxType_V1,
 	qpcgIdx_v2 QueryProcessorsChannelGroupIdxType_V2,
-	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps, n10n.ServiceFactory) bus.RequestHandler {
+	cpAmount istructs.NumCommandProcessors, vvmApps VVMApps, n10nProc n10n.IN10NProc) bus.RequestHandler {
 	return func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		if request.IsN10N {
-			handleN10N(requestCtx, request.Body, responder)
+			if err := n10nProc.Handle(requestCtx, request.Body, responder); err != nil {
+				logger.Error("n10n proc:", err)
+			}
 			return
 		}
 		if logger.IsVerbose() {
@@ -116,8 +118,4 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 			}
 		}
 	}
-}
-
-func handleN10N(requestCtx context.Context, IN10NProc n10n.IN10NProc, body []byte, responder bus.IResponder) {
-	n10n.NewIN10NMessage(requestCtx, body, responder)
 }

@@ -20,8 +20,9 @@ type IN10NProc interface {
 	Handle(requestCtx context.Context, body []byte, responder bus.IResponder) error
 }
 
-type implIN10NProc struct{
+type implIN10NProc struct {
 	n10nBroker in10n.IN10nBroker
+	pipeline   pipeline.IAsyncPipeline
 }
 
 type Subscription struct {
@@ -39,6 +40,7 @@ type n10nWorkpiece struct {
 	subscribedProjectionKeys []in10n.ProjectionKey
 	resultErr                error
 	responseWriter           bus.IResponseWriter
+	doneCh                   chan (any)
 }
 
 type finishResponse struct {
