@@ -138,6 +138,8 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		cleanup()
 		return nil, nil, err
 	}
+	blobAppStoragePtr := provideBlobAppStoragePtr(iAppStorageProvider)
+	iblobStorage := provideBlobStorage(blobAppStoragePtr, iTime)
 	apIs := builtinapps.APIs{
 		ITokens:             iTokens,
 		IAppStructsProvider: iAppStructsProvider,
@@ -146,6 +148,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		IFederation:         iFederation,
 		ITime:               iTime,
 		SidecarApps:         v4,
+		IBLOBStorage:        iblobStorage,
 	}
 	iSchemasCache := vvmConfig.SchemasCache
 	builtInAppsArtefacts, err := provideBuiltInAppsArtefacts(vvmConfig, apIs, appConfigsTypeEmpty, v2, iSchemasCache)
@@ -175,11 +178,9 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 	operatorQueryProcessors_V2 := provideQueryProcessors_V2(numQueryProcessors, queryChannel_V2, iAppPartitions, query2ServiceFactory, iMetrics, vvmName, maxPrepareQueriesType, iAuthenticator, iTokens, iFederation, iStatelessResources, iSecretReader)
 	numBLOBProcessors := vvmConfig.NumBLOBProcessors
 	blobServiceChannel := provideBLOBChannel(serviceChannelFactory)
-	blobAppStoragePtr := provideBlobAppStoragePtr(iAppStorageProvider)
-	blobStorage := provideBlobStorage(blobAppStoragePtr, iTime)
 	blobMaxSizeType := vvmConfig.BLOBMaxSize
 	wLimiterFactory := provideWLimiterFactory(blobMaxSizeType)
-	operatorBLOBProcessors := provideOpBLOBProcessors(numBLOBProcessors, blobServiceChannel, blobStorage, wLimiterFactory)
+	operatorBLOBProcessors := provideOpBLOBProcessors(numBLOBProcessors, blobServiceChannel, iblobStorage, wLimiterFactory)
 	iAppPartitionsController, cleanup4, err := apppartsctl.New(iAppPartitions)
 	if err != nil {
 		cleanup3()
@@ -219,7 +220,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		cleanup()
 		return nil, nil, err
 	}
-	routerServices := provideRouterServices(routerParams, sendTimeout, in10nBroker, iRequestHandler, quotas, wLimiterFactory, blobStorage, cache, iRequestSender, vvmPortSource, v7, iTokens, iFederation, iAppTokensFactory)
+	routerServices := provideRouterServices(routerParams, sendTimeout, in10nBroker, iRequestHandler, quotas, wLimiterFactory, iblobStorage, cache, iRequestSender, vvmPortSource, v7, iTokens, iFederation, iAppTokensFactory)
 	adminEndpointServiceOperator := provideAdminEndpointServiceOperator(routerServices)
 	metricsServicePort := vvmConfig.MetricsServicePort
 	metricsService := metrics.ProvideMetricsService(vvmCtx, metricsServicePort, iMetrics)
@@ -801,7 +802,7 @@ func provideBlobAppStoragePtr(astp istorage.IAppStorageProvider) iblobstoragestg
 	return new(istorage.IAppStorage)
 }
 
-func provideBlobStorage(bas iblobstoragestg.BlobAppStoragePtr, time timeu.ITime) BlobStorage {
+func provideBlobStorage(bas iblobstoragestg.BlobAppStoragePtr, time timeu.ITime) iblobstorage.IBLOBStorage {
 	return iblobstoragestg.Provide(bas, time)
 }
 
@@ -811,7 +812,7 @@ func provideRouterAppStoragePtr(astp istorage.IAppStorageProvider) dbcertcache.R
 
 // port 80 -> [0] is http server, port 443 -> [0] is https server, [1] is acme server
 func provideRouterServices(rp router.RouterParams, sendTimeout bus.SendTimeout, broker in10n.IN10nBroker, blobRequestHandler blobprocessor.IRequestHandler, quotas in10n.Quotas,
-	wLimiterFactory blobprocessor.WLimiterFactory, blobStorage BlobStorage,
+	wLimiterFactory blobprocessor.WLimiterFactory, blobStorage iblobstorage.IBLOBStorage,
 	autocertCache autocert.Cache, requestSender bus.IRequestSender, vvmPortSource *VVMPortSource,
 	numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces, iTokens itokens.ITokens, federation2 federation.IFederation,
 	appTokensFactory payloads.IAppTokensFactory) RouterServices {
@@ -861,7 +862,7 @@ func provideCommandChannelFactory(sch ServiceChannelFactory) CommandChannelFacto
 }
 
 func provideOpBLOBProcessors(numBLOBWorkers istructs.NumBLOBProcessors, blobServiceChannel blobprocessor.BLOBServiceChannel,
-	blobStorage BlobStorage, wLimiterFactory blobprocessor.WLimiterFactory) OperatorBLOBProcessors {
+	blobStorage iblobstorage.IBLOBStorage, wLimiterFactory blobprocessor.WLimiterFactory) OperatorBLOBProcessors {
 	forks := make([]pipeline.ForkOperatorOptionFunc, numBLOBWorkers)
 	for i := 0; i < int(numBLOBWorkers); i++ {
 		forks[i] = pipeline.ForkBranch(pipeline.ServiceOperator(blobprocessor.ProvideService(blobServiceChannel, blobStorage,
