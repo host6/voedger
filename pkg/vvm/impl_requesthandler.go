@@ -35,7 +35,17 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 			return
 		}
 		if request.IsN10N {
-			n10nProc.HandleAsync(requestCtx, request.Body, responder, token, request.AppQName)
+			n10nArgs := n10n.N10NProcArgs{
+				Body:             request.Body,
+				Token:            token,
+				Mehtod:           request.Method,
+				EntityFromURL:    request.QName,
+				WSID:             request.WSID,
+				Responder:        responder,
+				AppQName:         request.AppQName,
+				ChannelIDFromURL: request.Resource,
+			}
+			n10nProc.Handle(requestCtx, n10nArgs)
 			return
 		}
 		if logger.IsVerbose() {

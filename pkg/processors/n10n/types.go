@@ -19,7 +19,7 @@ import (
 )
 
 type IN10NProc interface {
-	HandleAsync(requestCtx context.Context, body []byte, responder bus.IResponder, token string, appQName appdef.AppQName)
+	Handle(requestCtx context.Context, args N10NProcArgs)
 }
 
 type implIN10NProc struct {
@@ -45,6 +45,9 @@ type n10nWorkpiece struct {
 	token                    string
 	subjectLogin             istructs.SubjectLogin
 	appQName                 appdef.AppQName
+	principalPayload         payloads.PrincipalPayload
+	entityFromURL            appdef.QName
+	wsidFromURL              istructs.WSID
 }
 
 type n10nArgs struct {
@@ -60,4 +63,15 @@ type subscriptionJSON struct {
 type subscription struct {
 	entity appdef.QName
 	wsid   istructs.WSID
+}
+
+type N10NProcArgs struct {
+	Body             []byte
+	Token            string
+	Mehtod           string
+	EntityFromURL    appdef.QName
+	WSID             istructs.WSID
+	Responder        bus.IResponder
+	AppQName         appdef.AppQName
+	ChannelIDFromURL string
 }

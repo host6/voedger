@@ -26,7 +26,7 @@ type Request struct {
 
 	// apiV2
 	Query          map[string]string
-	QName          appdef.QName // e.g. DocName, extension QName, role Qname
+	QName          appdef.QName // e.g. DocName, extension QName, role Qname, view to subscribe on
 	WorkspaceQName appdef.QName // actually wsKind
 	IsAPIV2        bool
 	DocID          istructs.IDType

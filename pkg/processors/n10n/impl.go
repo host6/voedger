@@ -18,48 +18,42 @@ import (
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
-func (p *implIN10NProc) HandleAsync(requestCtx context.Context, body []byte, responder bus.IResponder, token string, appQName appdef.AppQName) {
-	pipeline := pipeline.NewSyncPipeline(requestCtx, "Notifications Processor",
-		pipeline.WireFunc("getSubjectLogin", p.getSubjectLogin),
-		pipeline.WireFunc("getCreateChannelParams", parseRequest),
-		pipeline.WireFunc("newChannel", p.newChannel),
-		pipeline.WireFunc("initResponse", initResponse),
-		pipeline.WireFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),
-		pipeline.WireFunc("subscribe", p.subscribe),
-	)
+func (p *implIN10NProc) Handle(requestCtx context.Context, args N10NProcArgs) {
+	var pipeline pipeline.ISyncPipeline
+	switch args.Mehtod {
+	case http.MethodPost:
+		pipeline = subscribeAndWatchPipeline(requestCtx, p)
+	case http.MethodPut:
+		pipeline = subscribeExtraPipeline(requestCtx, p)
+	case http.MethodDelete:
+		pipeline = unsubscribePipeline(requestCtx, p)
+	default:
+		// notest: excluded by router rule
+		panic("unexpected method " + args.Mehtod)
+	}
+	defer pipeline.Close()
 	n10nWP := &n10nWorkpiece{
-		body:       body,
-		requestCtx: requestCtx,
-		responder:  responder,
-		token:      token,
-		appQName:   appQName,
+		body:          args.Body,
+		requestCtx:    requestCtx,
+		responder:     args.Responder,
+		token:         args.Token,
+		appQName:      args.AppQName,
+		entityFromURL: args.EntityFromURL,
+		wsidFromURL:   args.WSID,
+		channelID:     in10n.ChannelID(args.ChannelIDFromURL),
 	}
 	err := pipeline.SendSync(n10nWP)
 	if err != nil {
-		unsubscribe(p, n10nWP)
+		unsubscribeOnErr(p, n10nWP)
 		reportError(n10nWP, err)
 		return
 	}
-	go func() {
-		// unsubscribe and channel cleanup is done within WatchChannel
-		p.n10nBroker.WatchChannel(n10nWP.requestCtx, n10nWP.channelID, func(projection in10n.ProjectionKey, offset istructs.Offset) {
-			sseMessage := fmt.Sprintf("event: %s\ndata: %d\n\n", projection.ToJSON(), offset)
-			if err := n10nWP.responseWriter.Write(sseMessage); err != nil {
-				// could happen if router stopped to listen for bus
-				// more likely request ctx is closed
-				// WatchChannel will exit in this case
-				logger.Error("failed to send sse message:", sseMessage)
-			}
-		})
-		n10nWP.responseWriter.Close(nil)
-	}()
 }
 
-func unsubscribe(p *implIN10NProc, n10nWP *n10nWorkpiece) {
+func unsubscribeOnErr(p *implIN10NProc, n10nWP *n10nWorkpiece) {
 	for _, subscribedKey := range n10nWP.subscribedProjectionKeys {
 		if err := p.n10nBroker.Unsubscribe(n10nWP.channelID, subscribedKey); err != nil {
 			logger.Error(fmt.Sprintf("failed to unsubscribe key %#v: %s", subscribedKey, err))
@@ -68,42 +62,44 @@ func unsubscribe(p *implIN10NProc, n10nWP *n10nWorkpiece) {
 }
 
 func reportError(n10nWP *n10nWorkpiece, err error) {
+	logger.Error(err)
 	if n10nWP.responseWriter == nil {
-		logger.Error(err)
 		bus.ReplyErrDef(n10nWP.responder, err, http.StatusBadRequest)
 		return
 	}
 	n10nWP.responseWriter.Close(err)
 }
 
-func (p *implIN10NProc) getSubjectLogin(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+func (p *implIN10NProc) validateToken(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
 	appTokens := p.appTokensFactory.New(n10nWP.appQName)
-	principalPayload := payloads.PrincipalPayload{}
-	_, err = appTokens.ValidateToken(n10nWP.token, &principalPayload)
-	if err != nil {
-		return coreutils.NewHTTPError(http.StatusUnauthorized, err)
-	}
-	n10nWP.subjectLogin = istructs.SubjectLogin(principalPayload.Login)
+	_, err = appTokens.ValidateToken(n10nWP.token, &n10nWP.principalPayload)
+	err = coreutils.WrapSysError(err, http.StatusUnauthorized)
+	return err
+}
+
+func (p *implIN10NProc) getSubjectLogin(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	n10nWP.subjectLogin = istructs.SubjectLogin(n10nWP.principalPayload.Login)
 	return nil
 }
 
-func parseRequest(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+func parseSubscribeAndWatchArgs(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	n10nArgs := n10nArgs{}
-	if err := coreutils.JSONUnmarshalDisallowUnknownFields(n10nWP.body, &n10nArgs); err != nil {
+	subscribeAndWatchArgs := n10nArgs{}
+	if err := coreutils.JSONUnmarshalDisallowUnknownFields(n10nWP.body, &subscribeAndWatchArgs); err != nil {
 		return fmt.Errorf("failed to unmarshal request body: %w", err)
 	}
-	if n10nArgs.ExpiresInSeconds == 0 {
-		n10nArgs.ExpiresInSeconds = defaultN10NExpiresInSeconds
-	} else if n10nArgs.ExpiresInSeconds < 0 {
-		return fmt.Errorf("invalid expiresIn value %d", n10nArgs.ExpiresInSeconds)
+	if subscribeAndWatchArgs.ExpiresInSeconds == 0 {
+		subscribeAndWatchArgs.ExpiresInSeconds = defaultN10NExpiresInSeconds
+	} else if subscribeAndWatchArgs.ExpiresInSeconds < 0 {
+		return fmt.Errorf("invalid expiresIn value %d", subscribeAndWatchArgs.ExpiresInSeconds)
 	}
-	n10nWP.expiresIn = time.Duration(n10nArgs.ExpiresInSeconds) * time.Second
-	if len(n10nArgs.Subscriptions) == 0 {
+	n10nWP.expiresIn = time.Duration(subscribeAndWatchArgs.ExpiresInSeconds) * time.Second
+	if len(subscribeAndWatchArgs.Subscriptions) == 0 {
 		return errors.New("no subscriptions provided")
 	}
-	for i, subscr := range n10nArgs.Subscriptions {
+	for i, subscr := range subscribeAndWatchArgs.Subscriptions {
 		if len(subscr.Entity) == 0 || len(subscr.WSIDNumber.String()) == 0 {
 			return fmt.Errorf("subscriptions[%d]: entity and\\or wsid is not provided", i)
 		}
@@ -156,6 +152,99 @@ func (p *implIN10NProc) subscribe(ctx context.Context, work pipeline.IWorkpiece)
 		n10nWP.subscribedProjectionKeys = append(n10nWP.subscribedProjectionKeys, projectionKey)
 	}
 	return nil
+}
+
+func (p *implIN10NProc) watchChannel(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	go func() {
+		// unsubscribe and channel cleanup is done within WatchChannel
+		p.n10nBroker.WatchChannel(n10nWP.requestCtx, n10nWP.channelID, func(projection in10n.ProjectionKey, offset istructs.Offset) {
+			sseMessage := fmt.Sprintf("event: %s\ndata: %d\n\n", projection.ToJSON(), offset)
+			if err := n10nWP.responseWriter.Write(sseMessage); err != nil {
+				// could happen if router stopped to listen for bus
+				// more likely request ctx is closed
+				// WatchChannel will exit in this case
+				logger.Error("failed to send sse message:", sseMessage)
+			}
+		})
+		n10nWP.responseWriter.Close(nil)
+	}()
+	return nil
+}
+
+func (p *implIN10NProc) replyOK(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	return n10nWP.responder.Respond(bus.ResponseMeta{StatusCode: http.StatusOK}, nil)
+}
+
+func reply204NoContent(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	return n10nWP.responder.Respond(bus.ResponseMeta{StatusCode: http.StatusNoContent}, nil)
+}
+
+func (p *implIN10NProc) unsubscribe(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	projectionKey := in10n.ProjectionKey{
+		App:        n10nWP.appQName,
+		Projection: n10nWP.entityFromURL,
+		WS:         n10nWP.wsidFromURL,
+	}
+	return p.n10nBroker.Unsubscribe(n10nWP.channelID, projectionKey)
+}
+
+func denyBody(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	if len(n10nWP.body) > 0 {
+		return errors.New("unexpected body")
+	}
+	return nil
+}
+
+func addProjectionKeyFromURL(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	n10nWP.subscriptions = append(n10nWP.subscriptions, subscription{
+		entity: n10nWP.entityFromURL,
+		wsid:   n10nWP.wsidFromURL,
+	})
+	return nil
+}
+
+func setChannelIDFromURL(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	n10nWP.channelID = in10n.ChannelID(n10nWP.entityFromURL.String())
+	return nil
+}
+
+func subscribeAndWatchPipeline(requestCtx context.Context, p *implIN10NProc) pipeline.ISyncPipeline {
+	return pipeline.NewSyncPipeline(requestCtx, "Subscribe and Watch Processor",
+		pipeline.WireFunc("validateToken", p.validateToken),
+		pipeline.WireFunc("getSubjectLogin", p.getSubjectLogin),
+		pipeline.WireFunc("parseSubscribeAndWatchArgs", parseSubscribeAndWatchArgs),
+		pipeline.WireFunc("newChannel", p.newChannel),
+		pipeline.WireFunc("initResponse", initResponse),
+		pipeline.WireFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),
+		pipeline.WireFunc("subscribe", p.subscribe),
+		pipeline.WireFunc("go WatchChannel", p.watchChannel),
+	)
+}
+
+func subscribeExtraPipeline(requestCtx context.Context, p *implIN10NProc) pipeline.ISyncPipeline {
+	return pipeline.NewSyncPipeline(requestCtx, "Subscribe on Extra View Processor",
+		pipeline.WireFunc("validateToken", p.validateToken),
+		pipeline.WireFunc("denyBody", denyBody),
+		pipeline.WireFunc("addProjectionKeyFromURL", addProjectionKeyFromURL),
+		pipeline.WireFunc("subscribe", p.subscribe),
+		pipeline.WireFunc("replyOK", p.replyOK),
+	)
+}
+
+func unsubscribePipeline(requestCtx context.Context, p *implIN10NProc) pipeline.ISyncPipeline {
+	return pipeline.NewSyncPipeline(requestCtx, "Unsubscribe Processor",
+		pipeline.WireFunc("validateToken", p.validateToken),
+		pipeline.WireFunc("denyBody", denyBody),
+		pipeline.WireFunc("unsubscribe", p.unsubscribe),
+		pipeline.WireFunc("reply204NoContent", reply204NoContent),
+	)
 }
 
 func (m *n10nWorkpiece) Release() {}

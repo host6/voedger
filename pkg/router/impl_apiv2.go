@@ -278,9 +278,18 @@ func requestHandlerV2_notifications_subscribeAndWatch(numsAppsWorkspaces map[app
 // handles both unsubscribe and subscribe to an extra view
 func requestHandlerV2_notifications(numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces, reqSender bus.IRequestSender) http.HandlerFunc {
 	return withValidateForN10N(numsAppsWorkspaces, func(req *http.Request, rw http.ResponseWriter, data validatedData) {
+		var err error
 		busRequest := createBusRequest(data, req)
+		vars := mux.Vars(req)
+		busRequest.Resource = vars[URLPlaceholder_channelID]
 		busRequest.IsAPIV2 = true
 		busRequest.IsN10N = true
+		busRequest.QName, err = appdef.ParseQName(vars[URLPlaceholder_view])
+		if err != nil {
+			ReplyCommonError(rw, err.Error(), http.StatusBadRequest)
+			return
+		}
+
 		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
 
 		// if _, err := authorize(appTokensFactory, busRequest); err != nil {
@@ -295,14 +304,9 @@ func requestHandlerV2_notifications(numsAppsWorkspaces map[appdef.AppQName]istru
 		// 	return
 		// }
 
-		// vars := mux.Vars(req)
-		// channelID := vars[URLPlaceholder_channelID]
 
-		// entity, err := appdef.ParseQName(vars[URLPlaceholder_view])
-		// if err != nil {
-		// 	ReplyCommonError(rw, err.Error(), http.StatusBadRequest)
-		// 	return
-		// }
+
+
 
 		// projectionKey := in10n.ProjectionKey{
 		// 	App:        busRequest.AppQName,
