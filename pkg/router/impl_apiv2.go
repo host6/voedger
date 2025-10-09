@@ -265,19 +265,19 @@ func requestHandlerV2_notifications_subscribeAndWatch(numsAppsWorkspaces map[app
 			WriteTextResponse(rw, "streaming unsupported!", http.StatusInternalServerError)
 			return
 		}
+		busRequest := createBusRequest(req.Method, data, req)
 		busRequest := bus.Request{
 			Method:   http.MethodGet,
-			Header:   map[string]string{},
+			Header:   data.header,
 			Query:    map[string]string{},
 			IsN10N:   true,
 			Body:     data.body,
 			IsAPIV2:  true,
 			AppQName: data.appQName,
-		}
-		for k, v := range req.Header {
-			busRequest.Header[k] = v[0]
+
 		}
 		for k, v := range req.URL.Query() {
+			// FIXME: зачем???
 			busRequest.Query[k] = v[0]
 		}
 		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
