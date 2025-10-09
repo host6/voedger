@@ -16,7 +16,6 @@ import (
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
-	"github.com/voedger/voedger/pkg/pipeline"
 )
 
 type IN10NProc interface {
@@ -42,16 +41,10 @@ type n10nWorkpiece struct {
 	subscriptions            []subscription
 	expiresIn                time.Duration
 	subscribedProjectionKeys []in10n.ProjectionKey
-	resultErr                error
 	responseWriter           bus.IResponseWriter
 	token                    string
 	subjectLogin             istructs.SubjectLogin
 	appQName                 appdef.AppQName
-	doneAndErr               chan error
-}
-
-type finishResponse struct {
-	pipeline.NOOP
 }
 
 type n10nArgs struct {
