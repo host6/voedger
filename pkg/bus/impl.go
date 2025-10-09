@@ -92,7 +92,7 @@ func handlePanic(r interface{}) error {
 	}
 }
 
-func (r *implIResponder) InitResponse(statusCode int) IResponseWriter {
+func (r *implIResponder) StreamJSON(statusCode int) IResponseWriter {
 	r.checkStarted()
 	select {
 	case r.responseMetaCh <- ResponseMeta{ContentType: httpu.ContentType_ApplicationJSON, StatusCode: statusCode}:
@@ -103,12 +103,12 @@ func (r *implIResponder) InitResponse(statusCode int) IResponseWriter {
 	return r.respWriter
 }
 
-func (r *implIResponder) InitEventStream() IResponseWriter {
+func (r *implIResponder) StreamEvents() IResponseWriter {
 	r.checkStarted()
 	responseMeta := ResponseMeta{
 		ContentType: httpu.ContentType_TextEventStream,
 		StatusCode:  http.StatusOK,
-		mode:        RespondMode_Streaming,
+		mode:        RespondMode_StreamEvents,
 	}
 	select {
 	case r.responseMetaCh <- responseMeta:

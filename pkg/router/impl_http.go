@@ -233,10 +233,10 @@ func checkHandler() http.HandlerFunc {
 
 func initResponse(w http.ResponseWriter, responseMeta bus.ResponseMeta) {
 	switch responseMeta.Mode() {
-	case bus.RespondMode_Streaming:
+	case bus.RespondMode_StreamEvents:
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Header().Set("Connection", "keep-alive")
-	case bus.RespondMode_Single, bus.RespondMode_ApiArray:
+	case bus.RespondMode_Single, bus.RespondMode_StreamJSON:
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 	}
 	w.Header().Set(httpu.ContentType, responseMeta.ContentType)

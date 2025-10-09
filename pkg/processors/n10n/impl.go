@@ -42,7 +42,7 @@ func (p *implIN10NProc) HandleAsync(requestCtx context.Context, body []byte, res
 	}
 	err := pipeline.SendSync(n10nWP)
 	if n10nWP.responseWriter == nil {
-		n10nWP.responseWriter = responder.InitEventStream()
+		n10nWP.responseWriter = responder.StreamEvents()
 	}
 	if err != nil {
 		logger.Error(err)
@@ -118,7 +118,7 @@ func (p *implIN10NProc) newChannel(ctx context.Context, work pipeline.IWorkpiece
 
 func initResponse(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.responseWriter = n10nWP.responder.InitEventStream()
+	n10nWP.responseWriter = n10nWP.responder.StreamEvents()
 	return nil
 }
 

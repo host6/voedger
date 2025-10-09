@@ -35,7 +35,7 @@ func reply_v2(requestCtx context.Context, w http.ResponseWriter, responseCh <-ch
 
 	// ApiArray and no elems -> {"results":[]}
 
-	if respMode == bus.RespondMode_ApiArray {
+	if respMode == bus.RespondMode_StreamJSON {
 		if sendSuccess = writeResponse(w, `{"results":[`); !sendSuccess {
 			return
 		}
@@ -48,9 +48,9 @@ func reply_v2(requestCtx context.Context, w http.ResponseWriter, responseCh <-ch
 			return
 		}
 
- 		toSend := ""
+		toSend := ""
 
-		if respMode == bus.RespondMode_ApiArray {
+		if respMode == bus.RespondMode_StreamJSON {
 			if elemsCount > 0 {
 				if sendSuccess = writeResponse(w, ","); !sendSuccess {
 					return
@@ -89,7 +89,7 @@ func reply_v2(requestCtx context.Context, w http.ResponseWriter, responseCh <-ch
 		elemsCount++
 	}
 
-	if respMode == bus.RespondMode_ApiArray {
+	if respMode == bus.RespondMode_StreamJSON {
 		if sendSuccess = writeResponse(w, "]"); !sendSuccess {
 			return
 		}
@@ -111,7 +111,7 @@ func reply_v2(requestCtx context.Context, w http.ResponseWriter, responseCh <-ch
 		}
 	}
 
-	if sendSuccess && respMode == bus.RespondMode_ApiArray {
+	if sendSuccess && respMode == bus.RespondMode_StreamJSON {
 		sendSuccess = writeResponse(w, "}")
 	}
 }

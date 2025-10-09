@@ -21,14 +21,17 @@ type IRequestSender interface {
 type RequestHandler func(requestCtx context.Context, request Request, responder IResponder)
 
 type IResponder interface {
+	// for queries
 	// panics if called >1 times or after Respond or InitEventStream
 	// ContentType is ApplicationJSON
-	InitResponse(statusCode int) IResponseWriter
+	StreamJSON(statusCode int) IResponseWriter
 
+	// for SSE
 	// panics if called >1 times or after Respond or InitResponse
 	// ContentType is text/event-stream
-	InitEventStream() IResponseWriter
+	StreamEvents() IResponseWriter
 
+	// for commands
 	// panics if called >1 times or after InitResponse or InitEventStream
 	Respond(responseMeta ResponseMeta, obj any) error
 }
