@@ -267,10 +267,6 @@ func requestHandlerV2_notifications_subscribeAndWatch(numsAppsWorkspaces map[app
 		busRequest := createBusRequest(data, req)
 		busRequest.IsAPIV2 = true
 		busRequest.IsN10N = true
-		for k, v := range req.URL.Query() {
-			// FIXME: �����???
-			busRequest.Query[k] = v[0]
-		}
 		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
 	})
 }
@@ -291,50 +287,6 @@ func requestHandlerV2_notifications(numsAppsWorkspaces map[appdef.AppQName]istru
 		}
 
 		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
-
-		// if _, err := authorize(appTokensFactory, busRequest); err != nil {
-		// 	// [~server.n10n/err.routerAddSubscriptionInvalidToken~impl]
-		// 	// [~server.n10n/err.routerUnsubscribeInvalidToken~impl]
-		// 	ReplyCommonError(rw, err.Error(), http.StatusUnauthorized)
-		// 	return
-		// }
-
-		// if len(busRequest.Body) > 0 {
-		// 	ReplyCommonError(rw, "unexpected body on n10n unsubscribe", http.StatusBadRequest)
-		// 	return
-		// }
-
-
-
-
-
-		// projectionKey := in10n.ProjectionKey{
-		// 	App:        busRequest.AppQName,
-		// 	Projection: entity,
-		// 	WS:         data.wsid,
-		// }
-
-		// code := http.StatusOK
-		// switch req.Method {
-		// case http.MethodPut:
-		// 	err = n10n.Subscribe(in10n.ChannelID(channelID), projectionKey)
-		// case http.MethodDelete:
-		// 	err = n10n.Unsubscribe(in10n.ChannelID(channelID), projectionKey)
-		// 	code = http.StatusNoContent
-		// default:
-		// 	// notest: guarded by the rule for the url path
-		// 	panic("unexpected method " + req.Method)
-		// }
-
-		// if err != nil {
-		// 	code = http.StatusInternalServerError
-		// 	if errors.Is(err, in10n.ErrChannelDoesNotExist) {
-		// 		code = http.StatusNotFound
-		// 	}
-		// 	ReplyCommonError(rw, "failed to unsubscribe: "+err.Error(), code)
-		// 	return
-		// }
-		// rw.WriteHeader(code)
 	})
 }
 
