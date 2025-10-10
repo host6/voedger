@@ -523,7 +523,7 @@ func sendRequestAndReadResponse(req *http.Request, busRequest bus.Request, reqSe
 	}
 
 	initResponse(rw, respMeta)
-	reply_v2(requestCtx, rw, respCh, respErr, cancel, respMeta.Mode())
+	reply_v2(requestCtx, rw, respCh, respErr, cancel, respMeta)
 }
 
 func parseChangePasswordArgs(body string) (login, oldPassword, newPassword string, err error) {

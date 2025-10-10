@@ -64,6 +64,9 @@ func unsubscribeOnErr(p *implIN10NProc, n10nWP *n10nWorkpiece) {
 func reportError(n10nWP *n10nWorkpiece, err error) {
 	logger.Error(err)
 	if n10nWP.responseWriter == nil {
+		if errors.Is(err, in10n.ErrChannelDoesNotExist) {
+			err = coreutils.WrapSysError(err, http.StatusNotFound)
+		}
 		bus.ReplyErrDef(n10nWP.responder, err, http.StatusBadRequest)
 		return
 	}
@@ -133,9 +136,7 @@ func initResponse(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 
 func sendChannelIDSSEEvent(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	return n10nWP.responseWriter.Write(
-		fmt.Sprintf("event: channelId\ndata: %s\n\n", n10nWP.channelID),
-	)
+	return n10nWP.responseWriter.Write(fmt.Sprintf("event: channelId\ndata: %s\n\n", n10nWP.channelID))
 }
 
 func (p *implIN10NProc) subscribe(ctx context.Context, work pipeline.IWorkpiece) (err error) {
@@ -206,12 +207,6 @@ func addProjectionKeyFromURL(ctx context.Context, work pipeline.IWorkpiece) (err
 		entity: n10nWP.entityFromURL,
 		wsid:   n10nWP.wsidFromURL,
 	})
-	return nil
-}
-
-func setChannelIDFromURL(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.channelID = in10n.ChannelID(n10nWP.entityFromURL.String())
 	return nil
 }
 
