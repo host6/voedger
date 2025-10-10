@@ -13,10 +13,11 @@ import (
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 )
 
-func NewIN10NProc(vvmCtx context.Context, n10nBroker in10n.IN10nBroker, authenticator iauthnz.IAuthenticator, appTokensFactory payloads.IAppTokensFactory) IN10NProc {
-	return &implIN10NProc{
+func NewIN10NProc(vvmCtx context.Context, n10nBroker in10n.IN10nBroker, authenticator iauthnz.IAuthenticator, appTokensFactory payloads.IAppTokensFactory) (IN10NProc, func()) {
+	res := &implIN10NProc{
 		n10nBroker:       n10nBroker,
 		authenticator:    authenticator,
 		appTokensFactory: appTokensFactory,
 	}
+	return res, res.goroutinesWG.Wait
 }

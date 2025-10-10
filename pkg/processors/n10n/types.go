@@ -8,6 +8,7 @@ package n10n
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -26,6 +27,7 @@ type implIN10NProc struct {
 	n10nBroker       in10n.IN10nBroker
 	authenticator    iauthnz.IAuthenticator
 	appTokensFactory payloads.IAppTokensFactory
+	goroutinesWG     sync.WaitGroup
 }
 
 type Subscription struct {
