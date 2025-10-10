@@ -590,36 +590,43 @@ func (cud *cudType) Update(record istructs.IRecord) istructs.IRowWriter {
 		cud.updates[id] = rec
 	}
 
-	return &rec.changes
+	return &rec.originRec
 }
 
 // updateRecType is plan to update record
 type updateRecType struct {
-	appCfg    *AppConfigType
-	originRec recordType
-	changes   recordType
-	result    recordType
+	appCfg          *AppConfigType
+	originRec       recordType
+	originID        istructs.RecordID
+	originParentID  istructs.RecordID
+	originContainer string
+	// changes   recordType
+	// result    recordType
 }
 
 func newUpdateRec(appCfg *AppConfigType, rec istructs.IRecord) updateRecType {
+	recTyp := rec.(*recordType)
 	upd := updateRecType{
-		appCfg:    appCfg,
-		originRec: makeRecord(appCfg),
-		changes:   makeRecord(appCfg),
-		result:    makeRecord(appCfg),
+		appCfg:          appCfg,
+		originRec:       *recTyp,
+		originID:        rec.ID(),
+		originParentID:  rec.Parent(),
+		originContainer: rec.Container(),
+		// changes:   makeRecord(appCfg),
+		// result:    makeRecord(appCfg),
 	}
 	upd.originRec.copyFrom(rec.(*recordType))
 
-	upd.changes.setQName(rec.QName())
-	upd.changes.setID(rec.ID())
+	// upd.changes.setQName(rec.QName())
+	// upd.changes.setID(rec.ID())
 
-	upd.changes.setParent(rec.Parent())
-	upd.changes.setContainer(rec.Container())
-	if r, ok := rec.(*recordType); ok {
-		upd.changes.setActive(r.IsActive())
-	}
+	// upd.changes.setParent(rec.Parent())
+	// upd.changes.setContainer(rec.Container())
+	// if r, ok := rec.(*recordType); ok {
+	// 	upd.changes.setActive(r.IsActive())
+	// }
 
-	upd.result.copyFrom(&upd.originRec)
+	// upd.result.copyFrom(&upd.originRec)
 
 	return upd
 }
@@ -627,23 +634,23 @@ func newUpdateRec(appCfg *AppConfigType, rec istructs.IRecord) updateRecType {
 // build builds record changes and applies them to result record. If no errors then builds result record
 func (upd *updateRecType) build() (err error) {
 
-	upd.result.copyFrom(&upd.originRec)
+	// upd.result.copyFrom(&upd.originRec)
 
-	if upd.changes.QName() == appdef.NullQName {
+	if upd.originRec.QName() == appdef.NullQName {
 		return nil
 	}
 
-	if err = upd.changes.build(); err != nil {
+	if err = upd.originRec.build(); err != nil {
 		return err
 	}
 
-	if upd.originRec.ID() != upd.changes.ID() {
+	if upd.originRec.ID() != upd.originID {
 		return ErrUnableToUpdateSystemField(upd.originRec, appdef.SystemField_ID)
 	}
-	if (upd.changes.Parent() != istructs.NullRecordID) && (upd.changes.Parent() != upd.originRec.Parent()) {
+	if (upd.originRec.Parent() != istructs.NullRecordID) && (upd.originParentID != upd.originRec.Parent()) {
 		return ErrUnableToUpdateSystemField(upd.originRec, appdef.SystemField_ParentID)
 	}
-	if (upd.changes.Container() != "") && (upd.changes.Container() != upd.originRec.Container()) {
+	if (upd.originRec.Container() != "") && (upd.originContainer != upd.originRec.Container()) {
 		return ErrUnableToUpdateSystemField(upd.originRec, appdef.SystemField_Container)
 	}
 

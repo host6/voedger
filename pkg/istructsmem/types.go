@@ -68,7 +68,7 @@ func newRow(appCfg *AppConfigType) *rowType {
 
 // build builds the row. Must be called after all Put××× calls to build row. If there were errors during data puts, then their connection will be returned.
 // If there were no errors, then tries to form the dynoBuffer and returns the result
-func (row *rowType) build() error {
+func (row *rowType) build() (err error) {
 	if row.err != nil {
 		return row.err
 	}
@@ -78,14 +78,10 @@ func (row *rowType) build() error {
 	}
 
 	if row.dyB.IsModified() {
-		bytes, err := row.dyB.ToBytes()
-		if err != nil {
-			return err
-		}
-		row.dyB.Reset(utils.CopyBytes(bytes))
+		err = row.dyB.CommitChanges()
 	}
 
-	return nil
+	return err
 }
 
 // Checks is specified field is nullable (string- or []byte- type) and put value is nil or zero length.
@@ -159,12 +155,7 @@ func (row *rowType) copyFrom(src *rowType) {
 	row.isActive = src.isActive
 
 	if src.dyB != nil {
-		row.dyB = dynobuffers.NewBuffer(src.dyB.Scheme)
-		src.dyB.IterateFields(nil,
-			func(name string, data any) bool {
-				row.dyB.Set(name, data)
-				return true
-			})
+		row.dyB = dynobuffers.ReadBuffer(src.dyB.GetBytes(), src.dyB.Scheme)
 	}
 
 	_ = row.build()
@@ -331,7 +322,7 @@ func (row *rowType) QNameID() (istructs.QNameID, error) {
 	return row.appCfg.qNames.ID(name)
 }
 
-// Returns dynobuffer to pull
+// Returns dynobuffer to pool
 func (row *rowType) release() {
 	if row.dyB != nullDynoBuffer {
 		row.dyB.Release()
