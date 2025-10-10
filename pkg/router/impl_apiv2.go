@@ -246,16 +246,6 @@ func requestHandlerV2_create_user(numsAppsWorkspaces map[appdef.AppQName]istruct
 	})
 }
 
-func authorize(appTokensFactory payloads.IAppTokensFactory, busRequest bus.Request) (principalPayload payloads.PrincipalPayload, err error) {
-	principalToken, err := bus.GetPrincipalToken(busRequest)
-	if err != nil {
-		return principalPayload, err
-	}
-	appTokens := appTokensFactory.New(busRequest.AppQName)
-	_, err = appTokens.ValidateToken(principalToken, &principalPayload)
-	return principalPayload, err
-}
-
 func requestHandlerV2_notifications_subscribeAndWatch(numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces, reqSender bus.IRequestSender) http.HandlerFunc {
 	return withValidateForN10N(numsAppsWorkspaces, func(req *http.Request, rw http.ResponseWriter, data validatedData) {
 		_, ok := rw.(http.Flusher)
