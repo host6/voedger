@@ -15,7 +15,6 @@ import (
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/in10n"
-	"github.com/voedger/voedger/pkg/in10nmem"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
@@ -57,8 +56,6 @@ func clarifyErr(err error) error {
 	switch {
 	case errors.Is(err, in10n.ErrChannelDoesNotExist):
 		resultCode = http.StatusNotFound
-	case errors.Is(err, in10nmem.ErrMetricDoesNotExists):
-		resultCode = http.StatusBadRequest
 	case errors.Is(err, in10n.ErrQuotaExceeded_Subscriptions), errors.Is(err, in10n.ErrQuotaExceeded_SubscriptionsPerSubject),
 		errors.Is(err, in10n.ErrQuotaExceeded_Channels), errors.Is(err, in10n.ErrQuotaExceeded_ChannelsPerSubject):
 		resultCode = http.StatusTooManyRequests
@@ -84,4 +81,3 @@ func reportError(n10nWP *n10nWorkpiece, err error) {
 }
 
 func (m *n10nWorkpiece) Release() {}
-
