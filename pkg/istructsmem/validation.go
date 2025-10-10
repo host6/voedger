@@ -152,7 +152,7 @@ func validateEventCUDsIDs(ev *eventType, ids map[istructs.RecordID]*rowType) (er
 	}
 
 	for _, rec := range ev.cud.updates {
-		id := rec.changes.ID()
+		id := rec.originRec.ID()
 		if id.IsRaw() {
 			err = errors.Join(err,
 				// updated CRecord «test.CRecord» sys.ID: id «1» should not be raw
@@ -165,7 +165,7 @@ func validateEventCUDsIDs(ev *eventType, ids map[istructs.RecordID]*rowType) (er
 				validateError(ECode_InvalidRecordID,
 					ErrRecordIDUniqueViolation(id, exists, rec)))
 		}
-		ids[id] = &rec.changes.rowType
+		ids[id] = &rec.originRec.rowType
 	}
 
 	checkRefs := func(rec *recordType) (err error) {
@@ -220,7 +220,7 @@ func validateEventCUDsIDs(ev *eventType, ids map[istructs.RecordID]*rowType) (er
 
 	for _, rec := range ev.cud.updates {
 		err = errors.Join(err,
-			checkRefs(&rec.changes))
+			checkRefs(&rec.originRec))
 	}
 
 	return err
@@ -393,7 +393,7 @@ func validateEventCUDs(ev *eventType) (err error) {
 
 	for _, rec := range ev.cud.updates {
 		err = errors.Join(err,
-			validateEventCUD(ev, &rec.result))
+			validateEventCUD(ev, &rec.originRec))
 	}
 
 	return err

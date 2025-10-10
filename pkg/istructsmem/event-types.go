@@ -419,7 +419,7 @@ func (cud *cudType) applyRecs(load, store recordFunc) (err error) {
 				return err
 			}
 		}
-		if err = store(&rec.result); err != nil {
+		if err = store(&rec.originRec); err != nil {
 			return err
 		}
 	}
@@ -457,7 +457,7 @@ func (cud *cudType) enumRecs(cb func(rec istructs.ICUDRow) bool) {
 	}
 
 	for _, rec := range cud.updates {
-		if !cb(&rec.changes) {
+		if !cb(&rec.originRec) {
 			return
 		}
 	}
@@ -519,12 +519,12 @@ func regenerateIDsInRecord(rec *recordType, newIDs newIDsPlanType) (err error) {
 func regenerateIDsInUpdateRecord(rec *updateRecType, newIDs newIDsPlanType) (err error) {
 	changes := false
 
-	for name, value := range rec.changes.RecordIDs(false) {
+	for name, value := range rec.originRec.RecordIDs(false) {
 		if !value.IsRaw() {
 			continue
 		}
 		if id, ok := newIDs[value]; ok {
-			rec.changes.PutRecordID(name, id)
+			rec.originRec.PutRecordID(name, id)
 			changes = true
 		}
 	}
@@ -615,7 +615,7 @@ func newUpdateRec(appCfg *AppConfigType, rec istructs.IRecord) updateRecType {
 		// changes:   makeRecord(appCfg),
 		// result:    makeRecord(appCfg),
 	}
-	upd.originRec.copyFrom(rec.(*recordType))
+	// upd.originRec.copyFrom(rec.(*recordType))
 
 	// upd.changes.setQName(rec.QName())
 	// upd.changes.setID(rec.ID())
@@ -640,9 +640,9 @@ func (upd *updateRecType) build() (err error) {
 		return nil
 	}
 
-	if err = upd.originRec.build(); err != nil {
-		return err
-	}
+	// if err = upd.originRec.build(); err != nil {
+	// 	return err
+	// }
 
 	if upd.originRec.ID() != upd.originID {
 		return ErrUnableToUpdateSystemField(upd.originRec, appdef.SystemField_ID)
@@ -654,37 +654,38 @@ func (upd *updateRecType) build() (err error) {
 		return ErrUnableToUpdateSystemField(upd.originRec, appdef.SystemField_Container)
 	}
 
-	if upd.changes.IsActive() != upd.originRec.IsActive() {
-		upd.result.setActive(upd.changes.IsActive())
-	}
+	// if upd.changes.IsActive() != upd.originRec.IsActive() {
+	// 	upd.result.setActive(upd.changes.IsActive())
+	// }
 
-	userChanges := false
-	upd.changes.dyB.IterateFields(nil, func(name string, newData any) bool {
-		upd.result.dyB.Set(name, newData)
-		userChanges = true
-		return true
-	})
-	for n := range upd.changes.nils {
-		upd.result.dyB.Set(n, nil)
-		userChanges = true
-	}
+	// userChanges := false
+	// upd.changes.dyB.IterateFields(nil, func(name string, newData any) bool {
+	// 	upd.result.dyB.Set(name, newData)
+	// 	userChanges = true
+	// 	return true
+	// })
+	// for n := range upd.changes.nils {
+	// 	upd.result.dyB.Set(n, nil)
+	// 	userChanges = true
+	// }
 
-	if userChanges {
-		err = upd.result.build()
-	}
+	// if userChanges {
+	// 	err = upd.result.build()
+	// }
 
-	return err
+
+	return upd.originRec.build()
 }
 
 // Return dynobuffers of all recs (origin, changes and result) to pool
 func (upd *updateRecType) release() {
 	upd.originRec.release()
-	upd.changes.release()
-	upd.result.release()
+	// upd.changes.release()
+	// upd.result.release()
 }
 
 func (upd *updateRecType) String() string {
-	return fmt.Sprint("updated", upd.changes)
+	return fmt.Sprint("updated", upd.originRec)
 }
 
 // # Implements object structure

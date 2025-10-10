@@ -84,7 +84,7 @@ func storeEventCUDs(ev *eventType, buf *bytes.Buffer) {
 	count = uint16(len(ev.cud.updates)) // nolint G115 validated in [validateEventCUDs]
 	utils.WriteUint16(buf, count)
 	for _, rec := range ev.cud.updates {
-		storeEventCUD(&rec.changes, buf)
+		storeEventCUD(&rec.originRec, buf)
 	}
 }
 
@@ -282,17 +282,17 @@ func loadEventCUDs(ev *eventType, codecVer byte, buf *bytes.Buffer) (err error) 
 	}
 	for ; count > 0; count-- {
 		upd := newUpdateRec(ev.cud.appCfg, newRecord(ev.cud.appCfg))
-		if err := loadEventCUD(&upd.changes, codecVer, buf); err != nil {
+		if err := loadEventCUD(&upd.originRec, codecVer, buf); err != nil {
 			return enrichError(err, "CUD updated row")
 		}
-		id := upd.changes.ID()
-		upd.originRec.setQName(upd.changes.QName())
-		upd.originRec.setID(id)
+		// id := upd.changes.ID()
+		// upd.originRec.setQName(upd.changes.QName())
+		// upd.originRec.setID(id)
 		// ⚠ Warnings:
 		// — upd.originRec is partially constructed, not full filled!
 		// — upd.result is null record, not applicable to store!
 		// it is very important for calling code to reread upd.originRec and recall upd.build() to obtain correct upd.result
-		ev.cud.updates[id] = &upd
+		ev.cud.updates[upd.originRec.ID()] = &upd
 	}
 
 	return nil
