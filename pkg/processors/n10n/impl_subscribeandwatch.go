@@ -37,6 +37,10 @@ func (p *implIN10NProc) validateToken(ctx context.Context, work pipeline.IWorkpi
 	n10nWP := work.(*n10nWorkpiece)
 	appTokens := p.appTokensFactory.New(n10nWP.appQName)
 	_, err = appTokens.ValidateToken(n10nWP.token, &n10nWP.principalPayload)
+
+	// [~server.n10n/err.routerCreateChannelInvalidToken~impl]
+	// [~server.n10n/err.routerAddSubscriptionInvalidToken~impl]
+	// [~server.n10n/err.routerUnsubscribeInvalidToken~impl]
 	err = coreutils.WrapSysError(err, http.StatusUnauthorized)
 	return err
 }
