@@ -640,9 +640,9 @@ func (upd *updateRecType) build() (err error) {
 		return nil
 	}
 
-	// if err = upd.originRec.build(); err != nil {
-	// 	return err
-	// }
+	if err = upd.originRec.build(); err != nil {
+		return err
+	}
 
 	if upd.originRec.ID() != upd.originID {
 		return ErrUnableToUpdateSystemField(upd.originRec, appdef.SystemField_ID)
@@ -674,7 +674,7 @@ func (upd *updateRecType) build() (err error) {
 	// }
 
 
-	return upd.originRec.build()
+	return nil
 }
 
 // Return dynobuffers of all recs (origin, changes and result) to pool
