@@ -144,9 +144,7 @@ func (row *rowType) SpecifiedValues(cb func(appdef.IField, any) bool) {
 		}
 	}
 
-	// user fields
-	goOn := true
-	row.dyB.IterateFields(nil, func(name string, value any) bool {
+	handleField := func(name string, value any) bool {
 		field := row.fieldDef(name)
 		switch field.DataKind() {
 		case appdef.DataKind_RecordID:
@@ -164,12 +162,22 @@ func (row *rowType) SpecifiedValues(cb func(appdef.IField, any) bool) {
 		case appdef.DataKind_int8: // #3435 [~server.vsql.smallints/cmp.istructs~impl]
 			value = int8(value.(byte)) // nolint G115 : dynobuffers uses byte to store int8
 		}
-		goOn = cb(row.fieldDef(name), value)
-		return goOn
-	})
+		return cb(row.fieldDef(name), value)
+	}
 
-	if !goOn {
-		return
+	goOn := true
+	// user fields
+	for name, value := range row.updateFields {
+		if _, nilled := row.nils[name]; nilled {
+			continue
+		}
+		if goOn=handleField(name, value); !goOn {
+			break
+		}
+	}
+
+	if goOn {
+		row.dyB.IterateFields(nil, handleField)
 	}
 
 	for _, nilledIField := range row.nils {

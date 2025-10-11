@@ -42,21 +42,23 @@ type rowType struct {
 	dyB              *dynobuffers.Buffer
 	nils             map[string]appdef.IField // emptied string- and []bytes- fields, which values are not stored in dynobuffer
 	err              error
+	updateFields     map[string]any
 }
 
 // Makes new empty row (QName is appdef.NullQName)
 func makeRow(appCfg *AppConfigType) rowType {
 	return rowType{
-		appCfg:    appCfg,
-		typ:       appdef.NullType,
-		fields:    appdef.NullFields,
-		id:        istructs.NullRecordID,
-		parentID:  istructs.NullRecordID,
-		container: "",
-		isActive:  true,
-		dyB:       nullDynoBuffer,
-		nils:      nil,
-		err:       nil,
+		appCfg:       appCfg,
+		typ:          appdef.NullType,
+		fields:       appdef.NullFields,
+		id:           istructs.NullRecordID,
+		parentID:     istructs.NullRecordID,
+		container:    "",
+		isActive:     true,
+		dyB:          nullDynoBuffer,
+		nils:         nil,
+		err:          nil,
+		updateFields: map[string]any{},
 	}
 }
 
@@ -125,6 +127,7 @@ func (row *rowType) clear() {
 	row.release()
 	row.nils = nil
 	row.err = nil
+	row.updateFields = map[string]any{}
 }
 
 // collectError collects errors that occur when puts data into a row
@@ -257,6 +260,8 @@ func (row *rowType) putValue(name appdef.FieldName, kind appdef.DataKind, value 
 		row.collectError(ErrFieldNotFound(name, row))
 		return
 	}
+
+	row.updateFields[name] = value
 
 	switch name {
 	case appdef.SystemField_ID:
