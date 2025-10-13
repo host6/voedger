@@ -80,5 +80,7 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 	resp = vit.PostWS(ws, "c.sys.CUD", body)
 	resp.Println()
 
-	log.Println(vit.SQLQueryRows(ws, "select * from app1pkg.Root.%d", resp.NewID()))
+	log.Println(vit.SQLQueryRows(ws, "select * from app1pkg.Root.%d", resp.NewIDs["1"]))
+	log.Println(vit.SQLQueryRows(ws, "select * from app1pkg.Nested.%d", resp.NewIDs["2"]))
+	log.Println(vit.SQLQueryRows(ws, "select * from app1pkg.Third.%d", resp.NewIDs["3"]))
 }

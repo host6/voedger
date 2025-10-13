@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/untillpro/dynobuffers"
 
@@ -252,6 +253,10 @@ func (row *rowType) maskValues() {
 //
 // If field must be verified before put then collects error «field must be verified».
 func (row *rowType) putValue(name appdef.FieldName, kind appdef.DataKind, value any) {
+
+	if name == "id_options" {
+		log.Println()
+	}
 
 	if a, ok := row.typ.(appdef.IWithAbstract); ok {
 		if a.Abstract() {
