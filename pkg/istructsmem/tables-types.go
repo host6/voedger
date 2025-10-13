@@ -183,17 +183,8 @@ func (row *rowType) SpecifiedValues(cb func(appdef.IField, any) bool) {
 			break
 		}
 	}
-	// если не бегать по updateFields, то валится TestEraseString на cud update
 
 	if goOn && len(row.updateFields) == 0 {
-		// если читаем запись из БД, то updateFields пустое.
-		// надо читать из динобуфера
-		// иначе свалится TestUnlinkReference (там не прочтется CDoc в тесте после update)
-		// попробуем бегать только по dyB и только после build dyB
-
-		// а если раскаментить, то свалится TestEraseString,
-		// т.к. в валидаторе мы делаем cud.SpecifiedFields, а он должен пробежаться
-		// только по изменённым полям, а не по всем считанным
 		row.dyB.IterateFields(nil, handleField)
 	}
 
