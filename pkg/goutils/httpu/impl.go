@@ -129,17 +129,37 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 			return nil, err
 		}
 
-		if resp.StatusCode == http.StatusServiceUnavailable && opts.shouldHandle503() {
-			if opts.maxRetryDurationOn503 > 0 && time.Since(startTime) > opts.maxRetryDurationOn503 {
-				return resp, nil
+		for _, retryOnStatus := range opts.retryOnStatus {
+			if resp.StatusCode == retryOnStatus.statusCode {
+				if time.Since(startTime) > retryOnStatus.maxRetryDuration {
+					break
+				}
+				if retryOnStatus.handler != nil {
+					doRetry := retryOnStatus.handler(resp, opts)
+					if !doRetry {
+						break
+					}
+				}
+				defer resp.Body.Close()
+				if err := discardRespBody(resp); err != nil {
+					return nil, err
+				}
+				logger.Verbose(resp.StatusCode, "retrying...")
+				return nil, errRetry
 			}
-			defer resp.Body.Close()
-			if err := discardRespBody(resp); err != nil {
-				return nil, err
-			}
-			logger.Verbose("503. retrying...")
-			return nil, errHTTPStatus503
 		}
+
+		// if resp.StatusCode == http.StatusServiceUnavailable && opts.shouldHandle503() {
+		// 	if opts.maxRetryDurationOn503 > 0 && time.Since(startTime) > opts.maxRetryDurationOn503 {
+		// 		return resp, nil
+		// 	}
+		// 	defer resp.Body.Close()
+		// 	if err := discardRespBody(resp); err != nil {
+		// 		return nil, err
+		// 	}
+		// 	logger.Verbose("503. retrying...")
+		// 	return nil, errHTTPStatus503
+		// }
 		return resp, nil
 	})
 	if err != nil {

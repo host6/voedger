@@ -8,6 +8,7 @@ package httpu
 import (
 	"errors"
 	"net"
+	"net/http"
 	"syscall"
 	"time"
 )
@@ -38,9 +39,10 @@ var (
 			// https://github.com/voedger/voedger/issues/1694
 			return IsWSAEError(err, WSAECONNREFUSED)
 		}),
+		WithRetryPolicyOnStatus(http.StatusServiceUnavailable, 30*time.Second, nil),
+		WithRetryPolicyOnStatus(http.StatusServiceUnavailable, 30*time.Second, nil),
 		WithRetryErrorMatcher(func(err error) bool {
-			// retry on 503
-			return errors.Is(err, errHTTPStatus503)
+			return errors.Is(err, errRetry)
 		}),
 	}
 	LocalhostIP = net.IPv4(127, 0, 0, 1)

@@ -84,6 +84,16 @@ func WithAuthorizeBy(token string) ReqOptFunc {
 	}
 }
 
+func WithRetryPolicyOnStatus(statusCode int, maxRetryDuration time.Duration, handler func(resp *http.Response, opts IReqOpts) bool) ReqOptFunc {
+	return func(opts IReqOpts) {
+		opts.httpOpts().retryOnStatus = append(opts.httpOpts().retryOnStatus, retryOnStatus{
+			statusCode:       statusCode,
+			maxRetryDuration: maxRetryDuration,
+			handler:          handler,
+		})
+	}
+}
+
 func WithMaxRetryDurationOn503(maxRetryDuration time.Duration) ReqOptFunc {
 	return func(opts IReqOpts) {
 		opts.httpOpts().maxRetryDurationOn503 = maxRetryDuration

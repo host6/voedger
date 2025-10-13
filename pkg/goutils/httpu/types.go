@@ -53,4 +53,11 @@ type reqOpts struct {
 	appendedOpts          []ReqOptFunc
 	validators            []func(IReqOpts) (panicMessage string)
 	retryErrsMatchers     []func(err error) (retry bool)
+	retryOnStatus         []retryOnStatus
+}
+
+type retryOnStatus struct {
+	statusCode       int
+	maxRetryDuration time.Duration
+	handler          func(resp *http.Response, opts IReqOpts) (retry bool)
 }
