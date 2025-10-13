@@ -19,6 +19,7 @@ const (
 	ContentDisposition                           = "Content-Disposition"
 	Accept                                       = "Accept"
 	Origin                                       = "Origin"
+	RetryAfter                                   = "Retry-After"
 	ContentType_ApplicationJSON                  = "application/json"
 	ContentType_ApplicationXBinary               = "application/x-binary"
 	ContentType_TextPlain                        = "text/plain"
@@ -39,8 +40,21 @@ var (
 			// https://github.com/voedger/voedger/issues/1694
 			return IsWSAEError(err, WSAECONNREFUSED)
 		}),
+		WithRetryPolicyOnStatus(http.StatusBadGateway, 30*time.Second, nil),
 		WithRetryPolicyOnStatus(http.StatusServiceUnavailable, 30*time.Second, nil),
-		WithRetryPolicyOnStatus(http.StatusServiceUnavailable, 30*time.Second, nil),
+		WithRetryPolicyOnStatus(http.StatusGatewayTimeout, 30*time.Second, nil),
+		WithRetryPolicyOnStatus(http.StatusTooManyRequests, 30*time.Second, func(resp *http.Response, opts IReqOpts) bool {
+			retryAfterStr := resp.Header.Get(RetryAfter)
+			if len(retryAfterStr) == 0 {
+				return true
+			}
+			тут спать и еще за контекстом следить
+			if resp.Header.Get(RetryAfter) == "0" {
+				return false
+			}
+			return true
+		}),
+
 		WithRetryErrorMatcher(func(err error) bool {
 			return errors.Is(err, errRetry)
 		}),
