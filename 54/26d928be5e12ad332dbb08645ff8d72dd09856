@@ -1,1 +1,3 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1796","branch_type":1}
+
+[AIR-1796] voedger: Extend httpu automatic retry handling for additional temporary upstream/network errors
