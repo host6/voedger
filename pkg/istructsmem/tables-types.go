@@ -177,7 +177,7 @@ func (row *rowType) SpecifiedValues(cb func(appdef.IField, any) bool) {
 	}
 
 	if goOn {
-		row.dyB.IterateFields(nil, handleField)
+		// row.dyB.IterateFields(nil, handleField)
 	}
 
 	for _, nilledIField := range row.nils {

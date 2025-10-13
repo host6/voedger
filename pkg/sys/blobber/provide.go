@@ -73,7 +73,7 @@ func ProvideBlobberCUDValidators(cfg *istructsmem.AppConfigType) {
 				}
 				return validateErr == nil
 			})
-			return true
+			return validateErr == nil
 		})
 		return validateErr
 	})

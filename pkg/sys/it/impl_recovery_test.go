@@ -6,6 +6,7 @@
 package sys_it
 
 import (
+	"log"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -78,4 +79,6 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 	]}`
 	resp = vit.PostWS(ws, "c.sys.CUD", body)
 	resp.Println()
+
+	log.Println(vit.SQLQueryRows(ws, "select * from app1pkg.Root.%d", resp.NewID()))
 }

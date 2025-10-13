@@ -83,6 +83,10 @@ func (row *rowType) build() (err error) {
 		err = row.dyB.CommitChanges()
 	}
 
+	if err == nil {
+		row.updateFields = map[string]any{}
+	}
+
 	return err
 }
 
@@ -167,6 +171,7 @@ func (row *rowType) copyFrom(src *rowType) {
 // Returns true if no data except system fields
 func (row *rowType) empty() bool {
 	userFields := false
+	// FIXME: mey be row.dyB.IsNil() ???
 	row.dyB.IterateFields(nil,
 		func(name string, _ any) bool {
 			userFields = true
