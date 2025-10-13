@@ -85,7 +85,7 @@ func (row *rowType) build() (err error) {
 	}
 
 	if err == nil {
-		row.updateFields = map[string]any{}
+		// row.updateFields = map[string]any{}
 	}
 
 	return err
@@ -1025,6 +1025,7 @@ func (row *rowType) PutBool(name appdef.FieldName, value bool) {
 	if name == appdef.SystemField_IsActive {
 		row.setActive(value)
 		row.isActiveModified = true
+		row.updateFields[name] = value
 		return
 	}
 
