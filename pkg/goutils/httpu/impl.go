@@ -111,7 +111,7 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 
 	retrierCfg := retrier.NewConfig(httpBaseRetryDelay, httpMaxRetryDelay)
 	retrierCfg.OnError = func(attempt int, delay time.Duration, opErr error) (retry bool, abortErr error) {
-		for _, matcher := range opts.retryErrsMatchers {
+		for _, matcher := range opts.retryOnErr {
 			if matcher(opErr) {
 				return true, nil
 			}
@@ -129,37 +129,31 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 			return nil, err
 		}
 
-		for _, retryOnStatus := range opts.retryOnStatus {
-			if resp.StatusCode == retryOnStatus.statusCode {
-				if time.Since(startTime) > retryOnStatus.maxRetryDuration {
-					break
-				}
-				if retryOnStatus.handler != nil {
-					doRetry := retryOnStatus.handler(resp, opts)
-					if !doRetry {
-						break
+		for _, retryPolicy := range opts.retryOnStatus {
+			if resp.StatusCode != retryPolicy.statusCode {
+				continue
+			}
+			if time.Since(startTime) > retryPolicy.maxRetryDuration {
+				break
+			}
+			if retryPolicy.respectRetryAfter {
+				retryAfterDuration := parseRetryAfterHeader(resp)
+				if retryAfterDuration > 0 {
+					if err := discardRespBody(resp); err != nil {
+						return nil, err
+					}
+					logger.Verbose("%d. retrying after %v...", resp.StatusCode, retryAfterDuration)
+					// Sleep for the custom delay, respecting context cancellation
+					select {
+					case <-time.After(retryAfterDuration):
+					case <-ctx.Done():
+						return nil, ctx.Err()
 					}
 				}
-				defer resp.Body.Close()
-				if err := discardRespBody(resp); err != nil {
-					return nil, err
-				}
-				logger.Verbose(resp.StatusCode, "retrying...")
-				return nil, errRetry
 			}
+			logger.Verbose(resp.StatusCode, "retrying...")
+			return nil, errRetry
 		}
-
-		// if resp.StatusCode == http.StatusServiceUnavailable && opts.shouldHandle503() {
-		// 	if opts.maxRetryDurationOn503 > 0 && time.Since(startTime) > opts.maxRetryDurationOn503 {
-		// 		return resp, nil
-		// 	}
-		// 	defer resp.Body.Close()
-		// 	if err := discardRespBody(resp); err != nil {
-		// 		return nil, err
-		// 	}
-		// 	logger.Verbose("503. retrying...")
-		// 	return nil, errHTTPStatus503
-		// }
 		return resp, nil
 	})
 	if err != nil {

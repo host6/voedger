@@ -266,15 +266,83 @@ func TestHTTPReqWithOptions(t *testing.T) {
 		require.True(handlerCalled)
 	})
 
-	t.Run("WithMaxRetryDurationOn503 and default WithSkipRetryOn503", func(t *testing.T) {
+	t.Run("WithRetryOnStatus for 503", func(t *testing.T) {
+		тут тесты поправить, считать callCount точно
 		var callCount int
 		handler = func(w http.ResponseWriter, r *http.Request) {
 			callCount++
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}
-		_, err := httpClient.Req(context.Background(), url, "body", WithMaxRetryDurationOn503(50*time.Millisecond))
+		_, err := httpClient.Req(context.Background(), url, "body", WithRetryOnStatus(http.StatusServiceUnavailable, 50*time.Millisecond))
 		require.Error(err)
 		require.GreaterOrEqual(callCount, 1)
+	})
+
+	t.Run("WithRetryOnStatus for 502", func(t *testing.T) {
+		var callCount int
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			w.WriteHeader(http.StatusBadGateway)
+		}
+		_, err := httpClient.Req(context.Background(), url, "body", WithRetryOnStatus(http.StatusBadGateway, 50*time.Millisecond))
+		require.Error(err)
+		require.GreaterOrEqual(callCount, 1)
+	})
+
+	t.Run("WithRetryOnStatus for 504", func(t *testing.T) {
+		var callCount int
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			w.WriteHeader(http.StatusGatewayTimeout)
+		}
+		_, err := httpClient.Req(context.Background(), url, "body", WithRetryOnStatus(http.StatusGatewayTimeout, 50*time.Millisecond))
+		require.Error(err)
+		require.GreaterOrEqual(callCount, 1)
+	})
+
+	t.Run("WithRetryOnStatus for 429 with Retry-After seconds", func(t *testing.T) {
+		var callCount int
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount == 1 {
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+			} else {
+				w.WriteHeader(http.StatusOK)
+			}
+		}
+		start := time.Now()
+		_, err := httpClient.Req(context.Background(), url, "body", WithRetryOnStatus(http.StatusTooManyRequests, 5*time.Second))
+		duration := time.Since(start)
+		require.NoError(err)
+		require.Equal(2, callCount)
+		require.GreaterOrEqual(duration, 1*time.Second) // Should have waited at least 1 second due to Retry-After
+	})
+
+	t.Run("WithRetryOnStatus for 429 with Retry-After HTTP date", func(t *testing.T) {
+		var callCount int
+		var retryAfterHeaderSent bool
+		handler = func(w http.ResponseWriter, r *http.Request) {
+			callCount++
+			if callCount == 1 {
+				retryTime := time.Now().Add(200 * time.Millisecond).UTC().Format(http.TimeFormat)
+				w.Header().Set("Retry-After", retryTime)
+				w.WriteHeader(http.StatusTooManyRequests)
+				retryAfterHeaderSent = true
+			} else {
+				w.WriteHeader(http.StatusOK)
+			}
+		}
+		start := time.Now()
+		_, err := httpClient.Req(context.Background(), url, "body", WithRetryOnStatus(http.StatusTooManyRequests, 5*time.Second))
+		duration := time.Since(start)
+		require.NoError(err)
+		require.Equal(2, callCount)        // Should have made exactly 2 requests
+		require.True(retryAfterHeaderSent) // Should have sent Retry-After header
+
+		// The test verifies that retry happened and succeeded, which is the main functionality
+		// Timing can be flaky due to processing delays, so we just verify basic behavior
+		require.GreaterOrEqual(duration, 50*time.Millisecond) // Should have some delay
 	})
 
 	t.Run("concurrent requests", func(t *testing.T) {

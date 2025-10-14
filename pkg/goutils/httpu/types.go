@@ -52,12 +52,12 @@ type reqOpts struct {
 	customOptsProvider    func(IReqOpts) IReqOpts
 	appendedOpts          []ReqOptFunc
 	validators            []func(IReqOpts) (panicMessage string)
-	retryErrsMatchers     []func(err error) (retry bool)
+	retryOnErr            []func(err error) (retry bool)
 	retryOnStatus         []retryOnStatus
 }
 
 type retryOnStatus struct {
-	statusCode       int
-	maxRetryDuration time.Duration
-	handler          func(resp *http.Response, opts IReqOpts) (retry bool)
+	statusCode        int
+	maxRetryDuration  time.Duration
+	respectRetryAfter bool
 }

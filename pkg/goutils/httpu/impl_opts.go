@@ -84,13 +84,24 @@ func WithAuthorizeBy(token string) ReqOptFunc {
 	}
 }
 
-func WithRetryPolicyOnStatus(statusCode int, maxRetryDuration time.Duration, handler func(resp *http.Response, opts IReqOpts) bool) ReqOptFunc {
+type RetryOnStatusOpt func(*retryOnStatus)
+
+func WithRespectRetryAfter() RetryOnStatusOpt {
+	return func(policy *retryOnStatus) {
+		policy.respectRetryAfter = true
+	}
+}
+
+func WithRetryOnStatus(statusCode int, maxRetryDuration time.Duration, retryOpts ...RetryOnStatusOpt) ReqOptFunc {
 	return func(opts IReqOpts) {
-		opts.httpOpts().retryOnStatus = append(opts.httpOpts().retryOnStatus, retryOnStatus{
+		policy := retryOnStatus{
 			statusCode:       statusCode,
 			maxRetryDuration: maxRetryDuration,
-			handler:          handler,
-		})
+		}
+		for _, opt := range retryOpts {
+			opt(&policy)
+		}
+		opts.httpOpts().retryOnStatus = append(opts.httpOpts().retryOnStatus, policy)
 	}
 }
 
@@ -140,9 +151,9 @@ func WithMethod(m string) ReqOptFunc {
 	}
 }
 
-func WithRetryErrorMatcher(matcher func(err error) (retry bool)) ReqOptFunc {
+func WithRetryOnError(matcher func(err error) (retry bool)) ReqOptFunc {
 	return func(opts IReqOpts) {
-		opts.httpOpts().retryErrsMatchers = append(opts.httpOpts().retryErrsMatchers, matcher)
+		opts.httpOpts().retryOnErr = append(opts.httpOpts().retryOnErr, matcher)
 	}
 }
 
