@@ -61,7 +61,6 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 		cookies: map[string]string{},
 		validators: []func(IReqOpts) (panicMessage string){
 			optsValidator_responseHandling,
-			optsValidator_retryOn503,
 		},
 	}
 	for _, defaultOptFunc := range c.defaultOpts {
@@ -119,28 +118,58 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 		return false, fmt.Errorf("request failed: %w", opErr)
 	}
 
-	resp, err := retrier.Retry(reqCtx, retrierCfg, func() (*http.Response, error) {
-		req, err := req(ctx, opts.method, urlStr, body, opts.bodyReader, opts.headers, opts.cookies)
-		if err != nil {
-			return nil, err
-		}
-		resp, err := c.client.Do(req)
-		if err != nil {
-			return nil, err
-		}
-
-		if resp.StatusCode == http.StatusServiceUnavailable && opts.shouldHandle503() {
-			if opts.maxRetryDurationOn503 > 0 && time.Since(startTime) > opts.maxRetryDurationOn503 {
-				return resp, nil
-			}
-			defer resp.Body.Close()
-			if err := discardRespBody(resp); err != nil {
+	resp, err := c.retryWithCustomLogic(reqCtx, retrierCfg, opts, startTime, func() (*http.Response, error) {
+		for {
+			req, err := req(ctx, opts.method, urlStr, body, opts.bodyReader, opts.headers, opts.cookies)
+			if err != nil {
 				return nil, err
 			}
-			logger.Verbose("503. retrying...")
-			return nil, errHTTPStatus503
+			resp, err := c.client.Do(req)
+			if err != nil {
+				return nil, err
+			}
+
+			// Handle 429 with Retry-After before passing to retrier
+			if resp.StatusCode == http.StatusTooManyRequests && opts.shouldRetryOnStatusCode(resp.StatusCode) {
+				retryConfig := opts.getRetryConfigForStatusCode(resp.StatusCode)
+
+				// Check if max retry duration has been exceeded
+				if retryConfig.MaxRetryDuration > 0 && time.Since(startTime) > retryConfig.MaxRetryDuration {
+					// Max duration exceeded, return the response as-is
+					return resp, nil
+				}
+
+				if customDelay := parseRetryAfterHeader(resp); customDelay > 0 {
+					defer resp.Body.Close()
+					if err := discardRespBody(resp); err != nil {
+						return nil, err
+					}
+
+					logger.Verbose("%d. retrying after %v...", resp.StatusCode, customDelay)
+
+					// Sleep for the custom delay, respecting context cancellation
+					select {
+					case <-time.After(customDelay):
+						// Continue the loop to retry
+						continue
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				} else {
+					// No Retry-After header or invalid header, fall back to normal retry logic
+					defer resp.Body.Close()
+					if err := discardRespBody(resp); err != nil {
+						return nil, err
+					}
+
+					logger.Verbose("%d. retrying...", resp.StatusCode)
+					return nil, ErrRetryableStatusCode
+				}
+			}
+
+			// Return the response for normal processing
+			return resp, nil
 		}
-		return resp, nil
 	})
 	if err != nil {
 		return nil, err
@@ -171,6 +200,35 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 
 func (c *implIHTTPClient) CloseIdleConnections() {
 	c.client.CloseIdleConnections()
+}
+
+// retryWithCustomLogic handles retries for configured status codes
+func (c *implIHTTPClient) retryWithCustomLogic(ctx context.Context, retrierCfg retrier.Config, opts *reqOpts, startTime time.Time, operation func() (*http.Response, error)) (*http.Response, error) {
+	return retrier.Retry(ctx, retrierCfg, func() (*http.Response, error) {
+		resp, err := operation()
+		if err != nil {
+			return nil, err
+		}
+
+		// Check if we should retry on this status code (excluding 429 which is handled above)
+		if opts.shouldRetryOnStatusCode(resp.StatusCode) && resp.StatusCode != http.StatusTooManyRequests {
+			retryConfig := opts.getRetryConfigForStatusCode(resp.StatusCode)
+
+			// Check if max retry duration has been exceeded
+			if retryConfig.MaxRetryDuration > 0 && time.Since(startTime) > retryConfig.MaxRetryDuration {
+				return resp, nil
+			}
+
+			defer resp.Body.Close()
+			if err := discardRespBody(resp); err != nil {
+				return nil, err
+			}
+
+			logger.Verbose("%d. retrying...", resp.StatusCode)
+			return nil, ErrRetryableStatusCode
+		}
+		return resp, nil
+	})
 }
 
 func (resp *HTTPResponse) Println() {

@@ -37,20 +37,25 @@ type IHTTPClient interface {
 	CloseIdleConnections()
 }
 
+// StatusCodeRetryConfig holds retry configuration for a specific HTTP status code
+type StatusCodeRetryConfig struct {
+	StatusCode       int
+	MaxRetryDuration time.Duration
+}
+
 type reqOpts struct {
-	method                string
-	headers               map[string]string
-	cookies               map[string]string
-	expectedHTTPCodes     []int
-	responseHandler       func(httpResp *http.Response) // used if no errors and an expected status code is received
-	relativeURL           string
-	discardResp           bool
-	bodyReader            io.Reader
-	withoutAuth           bool
-	skipRetryOn503        bool
-	maxRetryDurationOn503 time.Duration
-	customOptsProvider    func(IReqOpts) IReqOpts
-	appendedOpts          []ReqOptFunc
-	validators            []func(IReqOpts) (panicMessage string)
-	retryErrsMatchers     []func(err error) (retry bool)
+	method                 string
+	headers                map[string]string
+	cookies                map[string]string
+	expectedHTTPCodes      []int
+	responseHandler        func(httpResp *http.Response) // used if no errors and an expected status code is received
+	relativeURL            string
+	discardResp            bool
+	bodyReader             io.Reader
+	withoutAuth            bool
+	statusCodeRetryConfigs []StatusCodeRetryConfig
+	customOptsProvider     func(IReqOpts) IReqOpts
+	appendedOpts           []ReqOptFunc
+	validators             []func(IReqOpts) (panicMessage string)
+	retryErrsMatchers      []func(err error) (retry bool)
 }

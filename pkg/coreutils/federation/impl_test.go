@@ -208,7 +208,7 @@ func TestFederationFunc(t *testing.T) {
 			}
 			cancel()
 		}
-		_, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, httpu.WithRetryOn503())
+		_, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, httpu.WithRetryOnStatusCode(http.StatusServiceUnavailable, 0))
 		require.ErrorIs(err, context.Canceled)
 	})
 }

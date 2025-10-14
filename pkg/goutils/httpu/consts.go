@@ -39,8 +39,8 @@ var (
 			return IsWSAEError(err, WSAECONNREFUSED)
 		}),
 		WithRetryErrorMatcher(func(err error) bool {
-			// retry on 503
-			return errors.Is(err, errHTTPStatus503)
+			// retry on retryable HTTP status codes
+			return errors.Is(err, ErrRetryableStatusCode)
 		}),
 	}
 	LocalhostIP = net.IPv4(127, 0, 0, 1)

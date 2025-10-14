@@ -84,21 +84,28 @@ func WithAuthorizeBy(token string) ReqOptFunc {
 	}
 }
 
-func WithMaxRetryDurationOn503(maxRetryDuration time.Duration) ReqOptFunc {
+// WithRetryOnStatusCode configures automatic retry for a specific HTTP status code.
+// The maxRetryDuration parameter specifies the maximum total time to spend retrying.
+// If maxRetryDuration is 0, retries will continue until the context is cancelled.
+// For 429 status codes, the Retry-After header will be respected if present.
+func WithRetryOnStatusCode(statusCode int, maxRetryDuration time.Duration) ReqOptFunc {
 	return func(opts IReqOpts) {
-		opts.httpOpts().maxRetryDurationOn503 = maxRetryDuration
-	}
-}
+		httpOpts := opts.httpOpts()
 
-func WithRetryOn503() ReqOptFunc {
-	return func(opts IReqOpts) {
-		opts.httpOpts().skipRetryOn503 = false
-	}
-}
+		// Check if configuration for this status code already exists
+		for i := range httpOpts.statusCodeRetryConfigs {
+			if httpOpts.statusCodeRetryConfigs[i].StatusCode == statusCode {
+				// Update existing configuration
+				httpOpts.statusCodeRetryConfigs[i].MaxRetryDuration = maxRetryDuration
+				return
+			}
+		}
 
-func WithSkipRetryOn503() ReqOptFunc {
-	return func(opts IReqOpts) {
-		opts.httpOpts().skipRetryOn503 = true
+		// Add new configuration
+		httpOpts.statusCodeRetryConfigs = append(httpOpts.statusCodeRetryConfigs, StatusCodeRetryConfig{
+			StatusCode:       statusCode,
+			MaxRetryDuration: maxRetryDuration,
+		})
 	}
 }
 
@@ -221,15 +228,4 @@ func (opts *reqOpts) ExpectedHTTPCodes() []int {
 
 func (opts *reqOpts) httpOpts() *reqOpts {
 	return opts
-}
-
-func (opts *reqOpts) shouldHandle503() bool {
-	return !slices.Contains(opts.expectedHTTPCodes, http.StatusServiceUnavailable) && !opts.skipRetryOn503
-}
-
-func optsValidator_retryOn503(opts IReqOpts) (panicMessage string) {
-	if opts.httpOpts().maxRetryDurationOn503 > 0 && opts.httpOpts().skipRetryOn503 {
-		return "max retry duration on 503 cannot be specified if skip on 503 is set"
-	}
-	return ""
 }

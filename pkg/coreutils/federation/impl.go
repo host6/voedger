@@ -299,7 +299,7 @@ func (f *implIFederation) WithRetry() IFederationWithRetry {
 		httpClient:         f.httpClient,
 		federationURL:      f.federationURL,
 		adminPortGetter:    f.adminPortGetter,
-		defaultReqOptFuncs: []httpu.ReqOptFunc{httpu.WithRetryOn503()},
+		defaultReqOptFuncs: []httpu.ReqOptFunc{httpu.WithRetryOnStatusCode(http.StatusServiceUnavailable, 0)},
 		vvmCtx:             f.vvmCtx,
 	}
 }
