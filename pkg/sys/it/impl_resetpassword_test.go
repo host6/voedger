@@ -6,6 +6,7 @@ package sys_it
 
 import (
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -125,7 +126,7 @@ func TestResetPasswordLimits(t *testing.T) {
 
 		// 2nd call -> limit exceeded
 		body := fmt.Sprintf(`{"args":{"AppName":"%s","Email":"%s"},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, istructs.AppQName_test1_app1, prn.Name)
-		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "q.registry.InitiateResetPasswordByEmail", body, httpu.Expect429())
+		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "q.registry.InitiateResetPasswordByEmail", body, httpu.Expect429(), httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests))
 
 		// proceed to the next minute to restore rates
 		vit.TimeAdd(time.Minute)
@@ -149,6 +150,8 @@ func TestResetPasswordLimits(t *testing.T) {
 			Period:             time.Minute,
 			MaxTokensPerPeriod: 1,
 		})
+		надо сделать, чтобы не писать каждый раз WithSkipRetryOnStatus(429), а в VIT подавать пустые ретраи
+		вытащить RetryPolicy в VVMConfig и в бою подавать ретраи, а в VIT чтоб их не было
 
 		wrongCode := code + "1"
 		wrongCodeBody := fmt.Sprintf(`{"args":{"VerificationToken":"%s","VerificationCode":"%s","ProfileWSID":%d,"AppName":"%s"},"elements":[{"fields":["VerifiedValueToken"]}]}`, token, wrongCode, profileWSID,
@@ -158,12 +161,12 @@ func TestResetPasswordLimits(t *testing.T) {
 		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "q.registry.IssueVerifiedValueTokenForResetPassword", wrongCodeBody, httpu.Expect400())
 
 		// 2nd call with wrong code -> mocked limit exceeded, 429 Too many reuqets
-		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "q.registry.IssueVerifiedValueTokenForResetPassword", wrongCodeBody, httpu.Expect429())
+		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "q.registry.IssueVerifiedValueTokenForResetPassword", wrongCodeBody, httpu.Expect429(), httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests))
 
 		// next calls with correct code -> 429 anyway
 		goodCodeBody := fmt.Sprintf(`{"args":{"VerificationToken":"%s","VerificationCode":"%s","ProfileWSID":%d,"AppName":"%s"},"elements":[{"fields":["VerifiedValueToken"]}]}`, token, code, profileWSID,
 			istructs.AppQName_test1_app1)
-		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "q.registry.IssueVerifiedValueTokenForResetPassword", goodCodeBody, httpu.Expect429())
+		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "q.registry.IssueVerifiedValueTokenForResetPassword", goodCodeBody, httpu.Expect429(), httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests))
 
 		// proceed to the next minute to restore rates
 		vit.TimeAdd(time.Minute)

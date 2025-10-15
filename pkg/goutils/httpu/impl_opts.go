@@ -99,6 +99,7 @@ func WithRetryOnStatus(statusCode int, retryOpts ...RetryOnStatusOpt) ReqOptFunc
 			opt(&policy)
 		}
 		opts.httpOpts().retryOnStatus = append(opts.httpOpts().retryOnStatus, policy)
+		opts.httpOpts().skipRetryOnStatus[statusCode] = false
 	}
 }
 

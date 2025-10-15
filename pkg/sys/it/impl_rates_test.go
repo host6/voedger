@@ -5,6 +5,7 @@
 package sys_it
 
 import (
+	"net/http"
 	"testing"
 	"time"
 
@@ -28,8 +29,8 @@ func TestRates_BasicUsage(t *testing.T) {
 	}
 
 	// 3rd is failed because per-minute rate is exceeded
-	vit.PostWS(ws, "q.app1pkg.RatedQry", bodyQry, httpu.Expect429())
-	vit.PostWS(ws, "c.app1pkg.RatedCmd", bodyCmd, httpu.Expect429())
+	vit.PostWS(ws, "q.app1pkg.RatedQry", bodyQry, httpu.Expect429(), httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests))
+	vit.PostWS(ws, "c.app1pkg.RatedCmd", bodyCmd, httpu.Expect429(), httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests))
 
 	// proceed to the next minute to restore per-minute rates
 	vit.TimeAdd(time.Minute)
@@ -41,15 +42,15 @@ func TestRates_BasicUsage(t *testing.T) {
 	}
 
 	// next are failed again because per-minute rate is exceeded again
-	vit.PostWS(ws, "q.app1pkg.RatedQry", bodyQry, httpu.Expect429())
-	vit.PostWS(ws, "c.app1pkg.RatedCmd", bodyCmd, httpu.Expect429())
+	vit.PostWS(ws, "q.app1pkg.RatedQry", bodyQry, httpu.Expect429(), httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests))
+	vit.PostWS(ws, "c.app1pkg.RatedCmd", bodyCmd, httpu.Expect429(), httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests))
 
 	// proceed to the next minute to restore per-minute rates
 	vit.TimeAdd(time.Minute)
 
 	// next are failed again because per-hour rate is exceeded
-	vit.PostWS(ws, "q.app1pkg.RatedQry", bodyQry, httpu.Expect429())
-	vit.PostWS(ws, "c.app1pkg.RatedCmd", bodyCmd, httpu.Expect429())
+	vit.PostWS(ws, "q.app1pkg.RatedQry", bodyQry, httpu.Expect429(), httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests))
+	vit.PostWS(ws, "c.app1pkg.RatedCmd", bodyCmd, httpu.Expect429(), httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests))
 
 	// proceed to the next hour to restore per-hour rates
 	vit.TimeAdd(time.Hour)

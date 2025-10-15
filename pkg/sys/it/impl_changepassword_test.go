@@ -7,6 +7,7 @@ package sys_it
 
 import (
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -113,7 +114,10 @@ func TestChangePasswordErrors(t *testing.T) {
 		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "c.registry.ChangePassword", body, httpu.Expect401()) // not 429, wrong password
 
 		// >1 calls per minute -> 429
-		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "c.registry.ChangePassword", body, httpu.Expect429())
+		vit.PostApp(istructs.AppQName_sys_registry, prn.PseudoProfileWSID, "c.registry.ChangePassword", body,
+			httpu.Expect429(),
+			httpu.WithSkipRetryOnStatus(http.StatusTooManyRequests),
+		)
 
 		// proceed to the next minute -> able to change the password again
 		vit.TimeAdd(time.Minute)

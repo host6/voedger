@@ -7,6 +7,7 @@ package federation
 
 import (
 	"context"
+	"net/http"
 	"net/url"
 
 	"github.com/voedger/voedger/pkg/goutils/httpu"
@@ -14,7 +15,7 @@ import (
 
 func New(vvmCtx context.Context, federationURL func() *url.URL, adminPortGetter func() int) (federation IFederation, cleanup func()) {
 	httpClient, cln := httpu.NewIHTTPClient(
-		httpu.WithSkipRetryOn503(),
+		httpu.WithSkipRetryOnStatus(http.StatusServiceUnavailable),
 		httpu.WithOptsValidator(httpu.DenyGETAndDiscardResponse), // to prevent discarding possible sys.Error
 	)
 	fed := &implIFederation{
