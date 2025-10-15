@@ -61,8 +61,9 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 		cookies: map[string]string{},
 		validators: []func(IReqOpts) (panicMessage string){
 			optsValidator_responseHandling,
-			optsValidator_retryOn503,
+			optsValidator_retryPoliciesConsistence,
 		},
+		skipRetryOnStatus: map[int]bool{},
 	}
 	for _, defaultOptFunc := range c.defaultOpts {
 		defaultOptFunc(opts)
@@ -130,10 +131,10 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 		}
 
 		for _, retryPolicy := range opts.retryOnStatus {
-			if resp.StatusCode != retryPolicy.statusCode {
+			if resp.StatusCode != retryPolicy.statusCode || opts.skipRetryOnStatus[resp.StatusCode] {
 				continue
 			}
-			if time.Since(startTime) > retryPolicy.maxRetryDuration {
+			if opts.maxRetryDurationOnStatus[resp.StatusCode] > 0 && time.Since(startTime) > opts.maxRetryDurationOnStatus[resp.StatusCode] {
 				break
 			}
 			if retryPolicy.respectRetryAfter {

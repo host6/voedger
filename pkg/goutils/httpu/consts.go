@@ -43,10 +43,10 @@ var (
 		WithRetryOnError(func(err error) bool {
 			return errors.Is(err, errRetry)
 		}),
-		WithRetryOnStatus(http.StatusTooManyRequests, 30*time.Second, WithRespectRetryAfter()),
-		WithRetryOnStatus(http.StatusBadGateway, 30*time.Second),
-		WithRetryOnStatus(http.StatusServiceUnavailable, 30*time.Second),
-		WithRetryOnStatus(http.StatusGatewayTimeout, 30*time.Second),
+		WithRetryOnStatus(http.StatusTooManyRequests, WithRespectRetryAfter()),
+		WithRetryOnStatus(http.StatusBadGateway),
+		WithRetryOnStatus(http.StatusServiceUnavailable),
+		WithRetryOnStatus(http.StatusGatewayTimeout),
 	}
 	LocalhostIP = net.IPv4(127, 0, 0, 1)
 )

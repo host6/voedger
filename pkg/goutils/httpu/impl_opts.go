@@ -92,12 +92,9 @@ func WithRespectRetryAfter() RetryOnStatusOpt {
 	}
 }
 
-func WithRetryOnStatus(statusCode int, maxRetryDuration time.Duration, retryOpts ...RetryOnStatusOpt) ReqOptFunc {
+func WithRetryOnStatus(statusCode int, retryOpts ...RetryOnStatusOpt) ReqOptFunc {
 	return func(opts IReqOpts) {
-		policy := retryOnStatus{
-			statusCode:       statusCode,
-			maxRetryDuration: maxRetryDuration,
-		}
+		policy := retryOnStatus{statusCode: statusCode}
 		for _, opt := range retryOpts {
 			opt(&policy)
 		}
@@ -105,21 +102,15 @@ func WithRetryOnStatus(statusCode int, maxRetryDuration time.Duration, retryOpts
 	}
 }
 
-func WithMaxRetryDurationOn503(maxRetryDuration time.Duration) ReqOptFunc {
+func WithSkipRetryOnStatus(statusCode int) ReqOptFunc {
 	return func(opts IReqOpts) {
-		opts.httpOpts().maxRetryDurationOn503 = maxRetryDuration
+		opts.httpOpts().skipRetryOnStatus[statusCode] = true
 	}
 }
 
-func WithRetryOn503() ReqOptFunc {
+func WithMaxRetryDurationOnStatus(statusCode int, maxRetryDuration time.Duration) ReqOptFunc {
 	return func(opts IReqOpts) {
-		opts.httpOpts().skipRetryOn503 = false
-	}
-}
-
-func WithSkipRetryOn503() ReqOptFunc {
-	return func(opts IReqOpts) {
-		opts.httpOpts().skipRetryOn503 = true
+		opts.httpOpts().maxRetryDurationOnStatus[statusCode] = maxRetryDuration
 	}
 }
 
@@ -232,6 +223,34 @@ func optsValidator_responseHandling(opts IReqOpts) (panicMessage string) {
 	return ""
 }
 
+func optsValidator_retryPoliciesConsistence(opts IReqOpts) (panicMessage string) {
+	for skipRetryForCode := range opts.httpOpts().skipRetryOnStatus {
+		retryPolicySpecified := false
+		for _, policy := range opts.httpOpts().retryOnStatus {
+			if policy.statusCode == skipRetryForCode {
+				retryPolicySpecified = true
+				break
+			}
+		}
+		if !retryPolicySpecified {
+			return fmt.Sprintf("skip retry for status code %d is specified but retry policy is not", skipRetryForCode)
+		}
+	}
+	for code := range opts.httpOpts().maxRetryDurationOnStatus {
+		retryPolicySpecified := false
+		for _, policy := range opts.httpOpts().retryOnStatus {
+			if policy.statusCode == code {
+				retryPolicySpecified = true
+				break
+			}
+		}
+		if !retryPolicySpecified {
+			return fmt.Sprintf("max retry duration for status code %d is specified but retry policy is not", code)
+		}
+	}
+	return ""
+}
+
 func (opts *reqOpts) Append(opt ReqOptFunc) {
 	opts.appendedOpts = append(opts.appendedOpts, opt)
 }
@@ -242,15 +261,4 @@ func (opts *reqOpts) ExpectedHTTPCodes() []int {
 
 func (opts *reqOpts) httpOpts() *reqOpts {
 	return opts
-}
-
-func (opts *reqOpts) shouldHandle503() bool {
-	return !slices.Contains(opts.expectedHTTPCodes, http.StatusServiceUnavailable) && !opts.skipRetryOn503
-}
-
-func optsValidator_retryOn503(opts IReqOpts) (panicMessage string) {
-	if opts.httpOpts().maxRetryDurationOn503 > 0 && opts.httpOpts().skipRetryOn503 {
-		return "max retry duration on 503 cannot be specified if skip on 503 is set"
-	}
-	return ""
 }
