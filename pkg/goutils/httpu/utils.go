@@ -80,7 +80,9 @@ func parseRetryAfterHeader(resp *http.Response) time.Duration {
 
 	// Try parsing as HTTP date
 	if retryTime, err := http.ParseTime(retryAfter); err == nil {
-		duration := time.Until(retryTime)
+		// according to HTTP Standard (RFC 7231) the time must be in UTC
+		nowUTC := time.Now().UTC()
+		duration := retryTime.Sub(nowUTC)
 		if duration > 0 {
 			return duration
 		}

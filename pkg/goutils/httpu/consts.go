@@ -44,9 +44,9 @@ var (
 			return errors.Is(err, errRetry)
 		}),
 		WithRetryOnStatus(http.StatusTooManyRequests, 30*time.Second, WithRespectRetryAfter()),
-		WithRetryOnStatus(http.StatusBadGateway, 30*time.Second, nil),
-		WithRetryOnStatus(http.StatusServiceUnavailable, 30*time.Second, nil),
-		WithRetryOnStatus(http.StatusGatewayTimeout, 30*time.Second, nil),
+		WithRetryOnStatus(http.StatusBadGateway, 30*time.Second),
+		WithRetryOnStatus(http.StatusServiceUnavailable, 30*time.Second),
+		WithRetryOnStatus(http.StatusGatewayTimeout, 30*time.Second),
 	}
 	LocalhostIP = net.IPv4(127, 0, 0, 1)
 )
