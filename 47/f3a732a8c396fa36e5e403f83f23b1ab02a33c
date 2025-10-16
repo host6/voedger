@@ -1,1 +1,3 @@
 Resolves issue 'APIv2 N10N: 403 forbidden if SELECT for the enity is denied'
+
+Resolves #3789 APIv2 N10N: 403 forbidden if SELECT for the enity is denied
