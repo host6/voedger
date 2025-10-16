@@ -150,8 +150,8 @@ func TestResetPasswordLimits(t *testing.T) {
 			Period:             time.Minute,
 			MaxTokensPerPeriod: 1,
 		})
-		надо сделать, чтобы не писать каждый раз WithSkipRetryOnStatus(429), а в VIT подавать пустые ретраи
-		вытащить RetryPolicy в VVMConfig и в бою подавать ретраи, а в VIT чтоб их не было
+		// надо сделать, чтобы не писать каждый раз WithSkipRetryOnStatus(429), а в VIT подавать пустые ретраи
+		// вытащить RetryPolicy в VVMConfig и в бою подавать ретраи, а в VIT чтоб их не было
 
 		wrongCode := code + "1"
 		wrongCodeBody := fmt.Sprintf(`{"args":{"VerificationToken":"%s","VerificationCode":"%s","ProfileWSID":%d,"AppName":"%s"},"elements":[{"fields":["VerifiedValueToken"]}]}`, token, wrongCode, profileWSID,

@@ -18,6 +18,7 @@ import (
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/extensionpoints"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iblobstorage"
 	"github.com/voedger/voedger/pkg/ielections"
@@ -165,7 +166,8 @@ type VVMConfig struct {
 	MetricsServicePort         metrics.MetricsServicePort
 	AsyncActualizersRetryDelay actualizers.RetryDelay
 	AdminPort                  int
-	SchemasCache               ISchemasCache // normally NullSchemasCache in production, vit.SysAppsSchemasCache in VIT tests
+	SchemasCache               ISchemasCache      // normally NullSchemasCache in production, vit.SysAppsSchemasCache in VIT tests
+	HTTPClientConfig           []httpu.ReqOptFunc // aditional to httpu.constDefaultOpts
 
 	// 0 -> dynamic port will be used, new on each vvmIdx
 	// >0 -> vVMPort+vvmIdx will be actually used
