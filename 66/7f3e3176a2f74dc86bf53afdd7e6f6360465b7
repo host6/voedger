@@ -1,3 +1,5 @@
 Resolves issue 'APIv2 N10N: 403 forbidden if SELECT for the enity is denied'
 
 Resolves #3789 APIv2 N10N: 403 forbidden if SELECT for the enity is denied
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/3789","jira_ticket_url":"","branch_type":2}
