@@ -160,23 +160,31 @@ func (row *rowType) SpecifiedValues(cb func(appdef.IField, any) bool) {
 		}
 		switch field.DataKind() {
 		case appdef.DataKind_int8: // #3435 [~server.vsql.smallints/cmp.istructs~impl]
-			value = int8(value.(byte)) // nolint G115 : dynobuffers uses byte to store int8
+			switch typed := value.(type) {
+			case int8:
+				// dynobuffers uses byte to store int8
+				value = int8(typed) // nolint G115
+			case uint8:
+				// came from updateFields
+				value = int8(typed) // nolint G115
+			}
 		}
 		return cb(row.fieldDef(name), value)
 	}
 
 	goOn := true
+
 	// user fields
 	for name, value := range row.updateFields {
 		if _, nilled := row.nils[name]; nilled {
 			continue
 		}
-		if goOn=handleField(name, value); !goOn {
+		if goOn = handleField(name, value); !goOn {
 			break
 		}
 	}
 
-	if goOn {
+	if goOn && len(row.updateFields) == 0 {
 		row.dyB.IterateFields(nil, handleField)
 	}
 

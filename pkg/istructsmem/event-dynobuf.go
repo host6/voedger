@@ -285,9 +285,6 @@ func loadEventCUDs(ev *eventType, codecVer byte, buf *bytes.Buffer) (err error) 
 		if err := loadEventCUD(&upd.originRec, codecVer, buf); err != nil {
 			return enrichError(err, "CUD updated row")
 		}
-		// id := upd.changes.ID()
-		// upd.originRec.setQName(upd.changes.QName())
-		// upd.originRec.setID(id)
 		// ⚠ Warnings:
 		// — upd.originRec is partially constructed, not full filled!
 		// — upd.result is null record, not applicable to store!

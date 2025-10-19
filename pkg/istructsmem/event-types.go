@@ -600,8 +600,6 @@ type updateRecType struct {
 	originID        istructs.RecordID
 	originParentID  istructs.RecordID
 	originContainer string
-	// changes   recordType
-	// result    recordType
 }
 
 func newUpdateRec(appCfg *AppConfigType, rec istructs.IRecord) updateRecType {
@@ -612,21 +610,7 @@ func newUpdateRec(appCfg *AppConfigType, rec istructs.IRecord) updateRecType {
 		originID:        rec.ID(),
 		originParentID:  rec.Parent(),
 		originContainer: rec.Container(),
-		// changes:   makeRecord(appCfg),
-		// result:    makeRecord(appCfg),
 	}
-	// upd.originRec.copyFrom(rec.(*recordType))
-
-	// upd.changes.setQName(rec.QName())
-	// upd.changes.setID(rec.ID())
-
-	// upd.changes.setParent(rec.Parent())
-	// upd.changes.setContainer(rec.Container())
-	// if r, ok := rec.(*recordType); ok {
-	// 	upd.changes.setActive(r.IsActive())
-	// }
-
-	// upd.result.copyFrom(&upd.originRec)
 
 	return upd
 }
@@ -634,7 +618,6 @@ func newUpdateRec(appCfg *AppConfigType, rec istructs.IRecord) updateRecType {
 // build builds record changes and applies them to result record. If no errors then builds result record
 func (upd *updateRecType) build() (err error) {
 
-	// upd.result.copyFrom(&upd.originRec)
 
 	if upd.originRec.QName() == appdef.NullQName {
 		return nil
@@ -654,24 +637,6 @@ func (upd *updateRecType) build() (err error) {
 		return ErrUnableToUpdateSystemField(upd.originRec, appdef.SystemField_Container)
 	}
 
-	// if upd.changes.IsActive() != upd.originRec.IsActive() {
-	// 	upd.result.setActive(upd.changes.IsActive())
-	// }
-
-	// userChanges := false
-	// upd.changes.dyB.IterateFields(nil, func(name string, newData any) bool {
-	// 	upd.result.dyB.Set(name, newData)
-	// 	userChanges = true
-	// 	return true
-	// })
-	// for n := range upd.changes.nils {
-	// 	upd.result.dyB.Set(n, nil)
-	// 	userChanges = true
-	// }
-
-	// if userChanges {
-	// 	err = upd.result.build()
-	// }
 
 
 	return nil
@@ -680,8 +645,6 @@ func (upd *updateRecType) build() (err error) {
 // Return dynobuffers of all recs (origin, changes and result) to pool
 func (upd *updateRecType) release() {
 	upd.originRec.release()
-	// upd.changes.release()
-	// upd.result.release()
 }
 
 func (upd *updateRecType) String() string {

@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 
 	"github.com/untillpro/dynobuffers"
 
@@ -81,6 +82,10 @@ func (row *rowType) build() (err error) {
 
 	if row.dyB.IsModified() {
 		err = row.dyB.CommitChanges()
+	}
+
+	if err == nil {
+		// row.updateFields = map[string]any{}
 	}
 
 	return err
@@ -247,6 +252,10 @@ func (row *rowType) maskValues() {
 //
 // If field must be verified before put then collects error «field must be verified».
 func (row *rowType) putValue(name appdef.FieldName, kind appdef.DataKind, value any) {
+
+	if name == "id_options" {
+		log.Println()
+	}
 
 	if a, ok := row.typ.(appdef.IWithAbstract); ok {
 		if a.Abstract() {
@@ -1015,6 +1024,7 @@ func (row *rowType) PutBool(name appdef.FieldName, value bool) {
 	if name == appdef.SystemField_IsActive {
 		row.setActive(value)
 		row.isActiveModified = true
+		row.updateFields[name] = value
 		return
 	}
 
