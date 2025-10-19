@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/untillpro/dynobuffers"
 	bytespool "github.com/valyala/bytebufferpool"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -604,9 +605,15 @@ type updateRecType struct {
 
 func newUpdateRec(appCfg *AppConfigType, rec istructs.IRecord) updateRecType {
 	recTyp := rec.(*recordType)
+
+	newRec :=newRecord(appCfg)
+	newRec.copyFrom(recTyp)
+	newRec.dyB.Release()
+	newRec.dyB = dynobuffers.NewBuffer(recTyp.dyB.Scheme)
+
 	upd := updateRecType{
 		appCfg:          appCfg,
-		originRec:       *recTyp,
+		originRec:       *newRec,
 		originID:        rec.ID(),
 		originParentID:  rec.Parent(),
 		originContainer: rec.Container(),
@@ -623,6 +630,8 @@ func (upd *updateRecType) build() (err error) {
 		return nil
 	}
 
+	// тут прикол в том, что когда мы бегаем по cud updates, мы должны получить только измнения, а там в originRec исходный dynobuffer
+	// т.е. исходные поля + изменения. А надо только измененияё
 	if err = upd.originRec.build(); err != nil {
 		return err
 	}
