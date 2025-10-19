@@ -120,6 +120,10 @@ func (c *cmdWorkpiece) borrow() (err error) {
 	return nil
 }
 
+func (c *cmdWorkpiece) SetPrincipals(prns []iauthnz.Principal) {
+	c.principals = prns
+}
+
 // releases resources:
 //   - borrowed app partition
 //   - plog event
@@ -390,6 +394,10 @@ func limitCallRate(_ context.Context, work pipeline.IWorkpiece) (err error) {
 
 func (cmdProc *cmdProc) authenticate(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	cmd := work.(*cmdWorkpiece)
+	if processors.SetPrincipalsForAnonymousOnlyFunc(cmd.appStructs.AppDef(), cmd.cmdQName, cmd.cmdMes.WSID(), cmd) {
+		// grant to anonymous -> set token == "" to avoid validating an expired token accidentally kept in cookies
+		return nil
+	}
 	req := iauthnz.AuthnRequest{
 		Host:        cmd.cmdMes.Host(),
 		RequestWSID: cmd.cmdMes.WSID(),
@@ -404,12 +412,7 @@ func (cmdProc *cmdProc) authenticate(_ context.Context, work pipeline.IWorkpiece
 
 func getPrincipalsRoles(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	cmd := work.(*cmdWorkpiece)
-	for _, prn := range cmd.principals {
-		if prn.Kind != iauthnz.PrincipalKind_Role {
-			continue
-		}
-		cmd.roles = append(cmd.roles, prn.QName)
-	}
+	cmd.roles = processors.GetRoles(cmd.principals)
 	return nil
 }
 
