@@ -598,6 +598,7 @@ func (cud *cudType) Update(record istructs.IRecord) istructs.IRowWriter {
 type updateRecType struct {
 	appCfg          *AppConfigType
 	originRec       recordType
+	resultRec       recordType // filled on build
 	originID        istructs.RecordID
 	originParentID  istructs.RecordID
 	originContainer string
@@ -606,14 +607,20 @@ type updateRecType struct {
 func newUpdateRec(appCfg *AppConfigType, rec istructs.IRecord) updateRecType {
 	recTyp := rec.(*recordType)
 
-	newRec :=newRecord(appCfg)
-	newRec.copyFrom(recTyp)
-	newRec.dyB.Release()
-	newRec.dyB = dynobuffers.NewBuffer(recTyp.dyB.Scheme)
+	newRec := makeRecord(appCfg)
+	newRec.setQName(rec.QName())
+	newRec.setID(rec.ID())
+
+	newRec.setParent(rec.Parent())
+	newRec.setContainer(rec.Container())
+	if r, ok := rec.(*recordType); ok {
+		newRec.setActive(r.IsActive())
+	}
 
 	upd := updateRecType{
 		appCfg:          appCfg,
-		originRec:       *newRec,
+		originRec:       *recTyp,
+		resultRec:       newRec,
 		originID:        rec.ID(),
 		originParentID:  rec.Parent(),
 		originContainer: rec.Container(),
@@ -625,14 +632,17 @@ func newUpdateRec(appCfg *AppConfigType, rec istructs.IRecord) updateRecType {
 // build builds record changes and applies them to result record. If no errors then builds result record
 func (upd *updateRecType) build() (err error) {
 
-
 	if upd.originRec.QName() == appdef.NullQName {
 		return nil
 	}
 
 	// тут прикол в том, что когда мы бегаем по cud updates, мы должны получить только измнения, а там в originRec исходный dynobuffer
 	// т.е. исходные поля + изменения. А надо только измененияё
-	if err = upd.originRec.build(); err != nil {
+	upd.resultRec.dyB = dynobuffers.ReadBuffer(upd.originRec.dyB.GetBytes(), upd.originRec.dyB.Scheme)
+	for k, v := range upd.originRec.updateFields {
+		upd.resultRec.dyB.Set(k, v)
+	}
+	if err = upd.resultRec.build(); err != nil {
 		return err
 	}
 
@@ -645,8 +655,6 @@ func (upd *updateRecType) build() (err error) {
 	if (upd.originRec.Container() != "") && (upd.originContainer != upd.originRec.Container()) {
 		return ErrUnableToUpdateSystemField(upd.originRec, appdef.SystemField_Container)
 	}
-
-
 
 	return nil
 }
