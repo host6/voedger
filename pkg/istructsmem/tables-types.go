@@ -184,7 +184,7 @@ func (row *rowType) SpecifiedValues(cb func(appdef.IField, any) bool) {
 		}
 	}
 
-	if goOn && len(row.updateFields) == 0 {
+	if len(row.updateFields) == 0 {
 		row.dyB.IterateFields(nil, handleField)
 	}
 
