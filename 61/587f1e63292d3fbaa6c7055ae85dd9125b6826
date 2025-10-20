@@ -1,1 +1,3 @@
 Resolves issue 'fix TestClientDisconnect_FailedToWriteResponse'
+
+Resolves #4207 fix TestClientDisconnect_FailedToWriteResponse
