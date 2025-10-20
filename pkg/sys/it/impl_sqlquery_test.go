@@ -10,7 +10,6 @@ import (
 	"log"
 	"net/http"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -95,8 +94,6 @@ func TestSqlQuery_plog(t *testing.T) {
 		vit.PostWS(ws, "c.sys.CUD", body)
 		pLogSize++
 	}
-
-	time.Sleep(ProjectionAwaitTime)
 
 	t.Run("Should read events with default Offset and limit", func(t *testing.T) {
 		require := require.New(t)
@@ -468,7 +465,7 @@ func TestReadFromAnDifferentLocations(t *testing.T) {
 		require.NoError(err)
 		prn := vit.GetPrincipal(istructs.AppQName_test1_app1, "login") // from VIT shared config
 		pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, prn.Name, istructs.CurrentClusterID())
-		appWSNumber := pseudoWSID.BaseWSID() % istructs.WSID(registryAppStructs.NumAppWorkspaces())
+		appWSNumber := coreutils.AppWSNumber(pseudoWSID, registryAppStructs.NumAppWorkspaces())
 
 		// for example read cdoc.registry.Login.LoginHash from the app workspace
 		loginID := vit.GetCDocLoginID(prn.Login)
@@ -520,7 +517,7 @@ func TestAuthnz(t *testing.T) {
 		registryAppStructs, err := vit.IAppStructsProvider.BuiltIn(istructs.AppQName_sys_registry)
 		require.NoError(t, err)
 		pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, ws.Owner.Name, istructs.CurrentClusterID())
-		appWSNumber := pseudoWSID.BaseWSID() % istructs.WSID(registryAppStructs.NumAppWorkspaces())
+		appWSNumber := coreutils.AppWSNumber(pseudoWSID, registryAppStructs.NumAppWorkspaces())
 		body := fmt.Sprintf(`{"args":{"Query":"select * from sys.registry.a%d.registry.Login where id = %d"},"elements":[{"fields":["Result"]}]}`, appWSNumber, loginID)
 		vit.PostWS(ws, "q.sys.SqlQuery", body, httpu.Expect403())
 	})

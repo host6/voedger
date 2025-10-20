@@ -95,6 +95,7 @@ var (
 		PwdSecret: testSMTPPwdSecretName,
 	}
 	QNameDocWithBLOB  = appdef.NewQName(app1PkgName, "DocWithBLOB")
+	QNameDocBLOB      = appdef.NewQName(app1PkgName, "DocBLOB")
 	QNameODocWithBLOB = appdef.NewQName(app1PkgName, "ODocWithBLOB")
 
 	// BLOBMaxSize 5
@@ -428,6 +429,9 @@ func ProvideApp1(apis builtinapps.APIs, cfg *istructsmem.AppConfigType, ep exten
 	cfg.Resources.Add(istructsmem.NewQueryFunction(appdef.NewQName(app1PkgName, "QryVoid"), istructsmem.NullQueryExec))
 
 	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app1PkgName, "CmdODocWithBLOB"), istructsmem.NullCommandExec))
+
+	cfg.Resources.Add(istructsmem.NewCommandFunction(appdef.NewQName(app1PkgName, "CmdAllowedToAnonymousOnly"), istructsmem.NullCommandExec))
+	cfg.Resources.Add(istructsmem.NewQueryFunction(appdef.NewQName(app1PkgName, "QryAllowedToAnonymousOnly"), istructsmem.NullQueryExec))
 
 	app1PackageFS := parser.PackageFS{
 		Path: App1PkgPath,

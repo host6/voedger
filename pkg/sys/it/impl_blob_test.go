@@ -112,16 +112,16 @@ func TestBlobberErrors(t *testing.T) {
 		vit.ReadBLOB(istructs.AppQName_test1_app1, ws.WSID, it.QNameDocWithBLOB, "Blob", blobID, httpu.Expect403())
 	})
 
-	t.Run("403 forbidden on blob size quota exceeded", func(t *testing.T) {
+	t.Run("413 request entity too large on blob size quota exceeded", func(t *testing.T) {
 		bigBLOB := make([]byte, 150)
 		vit.UploadBLOB(istructs.AppQName_test1_app1, ws.WSID, "test", httpu.ContentType_ApplicationXBinary, bigBLOB,
 			it.QNameDocWithBLOB, it.Field_Blob,
 			httpu.WithAuthorizeBy(ws.Owner.Token),
-			httpu.Expect403(),
+			httpu.WithExpectedCode(http.StatusRequestEntityTooLarge),
 		)
 	})
 
-	t.Run("404 not found on querying an unexsting blob", func(t *testing.T) {
+	t.Run("404 not found on querying a nonexistent blob", func(t *testing.T) {
 		vit.ReadBLOB(istructs.AppQName_test1_app1, ws.WSID, it.QNameDocWithBLOB, "Blob", 1,
 			httpu.WithAuthorizeBy(ws.Owner.Token),
 			httpu.Expect404(),
@@ -402,5 +402,32 @@ func TestODocWithBLOB(t *testing.T) {
 	require.NoError(err)
 	require.Equal(httpu.ContentType_ApplicationXBinary, blobReader.ContentType)
 	require.Equal("test", blobReader.Name)
+	require.Equal(expBLOB, actualBLOBContent)
+}
+
+func TestBLOBsPseudoWSIDToAppWSID(t *testing.T) {
+	require := require.New(t)
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+
+	expBLOB := []byte{1, 2, 3, 4, 5}
+	sysToken := vit.GetSystemPrincipal(istructs.AppQName_test1_app1).Token
+
+	// [~server.apiv2.blobs/it.TestBlobsCreate~impl]
+	// write
+	pseudoWSID := istructs.NewWSID(istructs.CurrentClusterID(), istructs.FirstPseudoBaseWSID)
+	blobID := vit.UploadBLOB(istructs.AppQName_test1_app1, pseudoWSID, "blob name", httpu.ContentType_ApplicationXBinary, expBLOB,
+		it.QNameDocBLOB, it.Field_Blob, httpu.WithAuthorizeBy(sysToken))
+
+	// put the blob into the owner field
+	body := fmt.Sprintf(`{"cuds":[{"fields":{"sys.ID": 1,"sys.QName":"app1pkg.DocBLOB","Blob":%d}}]}`, blobID)
+	ownerID := vit.PostApp(istructs.AppQName_test1_app1, pseudoWSID, "c.sys.CUD", body, httpu.WithAuthorizeBy(sysToken)).NewID()
+
+	// read, authorize over headers
+	blobReader := vit.ReadBLOB(istructs.AppQName_test1_app1, pseudoWSID, it.QNameDocBLOB, "Blob", ownerID, httpu.WithAuthorizeBy(sysToken))
+	actualBLOBContent, err := io.ReadAll(blobReader)
+	require.NoError(err)
+	require.Equal(httpu.ContentType_ApplicationXBinary, blobReader.ContentType)
+	require.Equal("blob name", blobReader.Name)
 	require.Equal(expBLOB, actualBLOBContent)
 }

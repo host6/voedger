@@ -9,6 +9,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"runtime/debug"
 	"sync"
 	"time"
@@ -91,10 +92,26 @@ func handlePanic(r interface{}) error {
 	}
 }
 
-func (r *implIResponder) InitResponse(statusCode int) IResponseWriter {
+func (r *implIResponder) StreamJSON(statusCode int) IResponseWriter {
 	r.checkStarted()
 	select {
 	case r.responseMetaCh <- ResponseMeta{ContentType: httpu.ContentType_ApplicationJSON, StatusCode: statusCode}:
+	default:
+		// do nothing if no consumer already.
+		// will get ErrNoConsumer on the next Write()
+	}
+	return r.respWriter
+}
+
+func (r *implIResponder) StreamEvents() IResponseWriter {
+	r.checkStarted()
+	responseMeta := ResponseMeta{
+		ContentType: httpu.ContentType_TextEventStream,
+		StatusCode:  http.StatusOK,
+		mode:        RespondMode_StreamEvents,
+	}
+	select {
+	case r.responseMetaCh <- responseMeta:
 	default:
 		// do nothing if no consumer already.
 		// will get ErrNoConsumer on the next Write()
@@ -110,7 +127,7 @@ func (r *implIResponder) Respond(responseMeta ResponseMeta, obj any) error {
 	responseMeta.mode = RespondMode_Single
 	select {
 	case r.responseMetaCh <- responseMeta:
-		// TODO: rework here: possible: http client disconnected, write to r.respWriter.ch successful, we're thinking that we're replied, but it is not, no socket to write to
+		// TODO: rework here: possible: http client disconnected, write to r.respWriter.ch successful, we're thinking that we're replied, but it is not: no socket to write to
 		r.respWriter.ch <- obj // buf size 1
 		close(r.respWriter.ch)
 	default:

@@ -17,10 +17,12 @@ const (
 	ContentType                                  = "Content-Type"
 	ContentDisposition                           = "Content-Disposition"
 	Accept                                       = "Accept"
+	Origin                                       = "Origin"
 	ContentType_ApplicationJSON                  = "application/json"
 	ContentType_ApplicationXBinary               = "application/x-binary"
 	ContentType_TextPlain                        = "text/plain"
 	ContentType_TextHTML                         = "text/html"
+	ContentType_TextEventStream                  = "text/event-stream"
 	ContentType_MultipartFormData                = "multipart/form-data"
 	BearerPrefix                                 = "Bearer "
 	WSAECONNRESET                  syscall.Errno = 10054

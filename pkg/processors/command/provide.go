@@ -137,11 +137,13 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 				pipeline.WireFunc("writeCUDs", cmdProc.writeCUDs),
 				pipeline.WireFunc("getCmdResultBuilder", cmdProc.getCmdResultBuilder),
 				pipeline.WireFunc("buildCommandArgs", cmdProc.buildCommandArgs),
+				pipeline.WireFunc("getHostState", cmdProc.getHostState),
 				pipeline.WireFunc("execCommand", execCommand),
 				pipeline.WireFunc("checkResponseIntent", checkResponseIntent),
 				pipeline.WireFunc("build raw event", buildRawEvent),
 				pipeline.WireFunc("eventValidators", cmdProc.eventValidators),
 				pipeline.WireFunc("validateCUDsQNames", cmdProc.validateCUDsQNames),
+				pipeline.WireFunc("getCommandCtxStorage", getCommandCtxStorage),
 				pipeline.WireFunc("cudsValidators", cmdProc.cudsValidators),
 				pipeline.WireFunc("validateCmdResult", validateCmdResult),
 				pipeline.WireFunc("getIDGenerator", getIDGenerator),
@@ -173,7 +175,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 						cmd.metrics.increase(CommandsTotal, 1.0)
 						cmdHandlingErr := cmdPipeline.SendSync(cmd)
 						if cmdHandlingErr != nil {
-							logger.Error(cmdHandlingErr)
+							logger.Error(fmt.Sprintf("%d/%s exec error: %s", cmd.cmdMes.WSID(), cmd.cmdMes.QName(), cmdHandlingErr))
 							if cmd.sequencesStarted {
 								// [~server.design.sequences/tuc.ReactualizeSequences~impl]
 								cmd.appPart.Sequencer().Actualize()

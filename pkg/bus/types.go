@@ -22,10 +22,11 @@ type Request struct {
 	Body     []byte
 	AppQName appdef.AppQName
 	Host     string // used by authenticator to emit Host principal
+	IsN10N   bool
 
 	// apiV2
 	Query          map[string]string
-	QName          appdef.QName // e.g. DocName, extension QName, role Qname
+	QName          appdef.QName // e.g. DocName, extension QName, role Qname, view to subscribe on
 	WorkspaceQName appdef.QName // actually wsKind
 	IsAPIV2        bool
 	DocID          istructs.IDType
@@ -41,8 +42,9 @@ type ResponseMeta struct {
 type RespondMode int
 
 const (
-	RespondMode_ApiArray RespondMode = iota
+	RespondMode_StreamJSON RespondMode = iota
 	RespondMode_Single
+	RespondMode_StreamEvents
 )
 
 type implIRequestSender struct {

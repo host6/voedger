@@ -17,7 +17,6 @@ import (
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/processors"
@@ -46,6 +45,7 @@ type ICommandMessage interface {
 	APIPath() processors.APIPath
 	DocID() istructs.RecordID
 	Method() string
+	Origin() string
 }
 
 type xPath string
@@ -78,7 +78,6 @@ type cmdWorkpiece struct {
 	metrics                      commandProcessorMetrics
 	syncProjectorsStart          time.Time
 	principals                   []iauthnz.Principal
-	principalPayload             payloads.PrincipalPayload
 	roles                        []appdef.QName
 	parsedCUDs                   []parsedCUD
 	wsDesc                       istructs.IRecord
@@ -94,6 +93,7 @@ type cmdWorkpiece struct {
 	reapplier                    istructs.IEventReapplier
 	sequencesStarted             bool
 	wsKind                       appdef.QName
+	commandCtxStorage            istructs.IStateValue
 }
 
 type implIDGeneratorReporter struct {
@@ -124,6 +124,7 @@ type implICommandMessage struct {
 	apiPath     processors.APIPath
 	docID       istructs.RecordID
 	method      string
+	origin      string
 }
 
 type wrongArgsCatcher struct {
@@ -140,6 +141,7 @@ type hostStateProvider struct {
 	cmdResultBuilder istructs.IObjectBuilder
 	cmdPrepareArgs   istructs.CommandPrepareArgs
 	wlogOffset       istructs.Offset
+	origin           string
 	args             istructs.IObject
 	unloggedArgs     istructs.IObject
 	partitionID      istructs.PartitionID
@@ -149,7 +151,7 @@ func newHostStateProvider(ctx context.Context, secretReader isecrets.ISecretRead
 	p := &hostStateProvider{}
 	p.state = stateprovide.ProvideCommandProcessorStateFactory()(ctx, p.getAppStructs, p.getPartititonID,
 		p.getWSID, secretReader, p.getCUD, p.getPrincipals, p.getToken, actualizers.DefaultIntentsLimit,
-		p.getCmdResultBuilder, p.getCmdPrepareArgs, p.getArgs, p.getUnloggedArgs, p.getWLogOffset, state.NullOpts)
+		p.getCmdResultBuilder, p.getCmdPrepareArgs, p.getArgs, p.getUnloggedArgs, p.getWLogOffset, state.NullOpts, p.getOrigin)
 	return p
 }
 
@@ -163,12 +165,13 @@ func (p *hostStateProvider) getToken() string                               { re
 func (p *hostStateProvider) getCmdResultBuilder() istructs.IObjectBuilder   { return p.cmdResultBuilder }
 func (p *hostStateProvider) getCmdPrepareArgs() istructs.CommandPrepareArgs { return p.cmdPrepareArgs }
 func (p *hostStateProvider) getWLogOffset() istructs.Offset                 { return p.wlogOffset }
+func (p *hostStateProvider) getOrigin() string                              { return p.origin }
 func (p *hostStateProvider) getArgs() istructs.IObject                      { return p.args }
 func (p *hostStateProvider) getUnloggedArgs() istructs.IObject              { return p.unloggedArgs }
 func (p *hostStateProvider) getPartititonID() istructs.PartitionID          { return p.partitionID }
 func (p *hostStateProvider) get(appStructs istructs.IAppStructs, wsid istructs.WSID, cud istructs.ICUD, principals []iauthnz.Principal, token string,
 	cmdResultBuilder istructs.IObjectBuilder, cmdPrepareArgs istructs.CommandPrepareArgs, wlogOffset istructs.Offset, args istructs.IObject,
-	unloggedArgs istructs.IObject, partitionID istructs.PartitionID) state.IHostState {
+	unloggedArgs istructs.IObject, partitionID istructs.PartitionID, origin string) state.IHostState {
 	p.as = appStructs
 	p.wsid = wsid
 	p.cud = cud
@@ -180,5 +183,6 @@ func (p *hostStateProvider) get(appStructs istructs.IAppStructs, wsid istructs.W
 	p.args = args
 	p.unloggedArgs = unloggedArgs
 	p.partitionID = partitionID
+	p.origin = origin
 	return p.state
 }

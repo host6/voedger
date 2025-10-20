@@ -20,6 +20,7 @@ import (
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/processors/actualizers"
 	"github.com/voedger/voedger/pkg/processors/oldacl"
+	"github.com/voedger/voedger/pkg/sys"
 	"golang.org/x/exp/maps"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -49,10 +50,11 @@ func (cm *implICommandMessage) Host() string                      { return cm.ho
 func (cm *implICommandMessage) APIPath() processors.APIPath       { return cm.apiPath }
 func (cm *implICommandMessage) DocID() istructs.RecordID          { return cm.docID }
 func (cm *implICommandMessage) Method() string                    { return cm.method }
+func (cm *implICommandMessage) Origin() string                    { return cm.origin }
 
 func NewCommandMessage(requestCtx context.Context, body []byte, appQName appdef.AppQName, wsid istructs.WSID,
 	responder bus.IResponder, partitionID istructs.PartitionID, qName appdef.QName, token string, host string, apiPath processors.APIPath,
-	docID istructs.RecordID, method string) ICommandMessage {
+	docID istructs.RecordID, method string, origin string) ICommandMessage {
 	return &implICommandMessage{
 		body:        body,
 		appQName:    appQName,
@@ -66,6 +68,7 @@ func NewCommandMessage(requestCtx context.Context, body []byte, appQName appdef.
 		apiPath:     apiPath,
 		docID:       docID,
 		method:      method,
+		origin:      origin,
 	}
 }
 
@@ -116,6 +119,10 @@ func (c *cmdWorkpiece) borrow() (err error) {
 	}
 	c.appStructs = c.appPart.AppStructs()
 	return nil
+}
+
+func (c *cmdWorkpiece) SetPrincipals(prns []iauthnz.Principal) {
+	c.principals = prns
 }
 
 // releases resources:
@@ -254,16 +261,18 @@ func (cmdProc *cmdProc) buildCommandArgs(_ context.Context, work pipeline.IWorkp
 		},
 		ArgumentUnloggedObject: cmd.unloggedArgsObject,
 	}
+	return nil
+}
 
+func (cmdProc *cmdProc) getHostState(_ context.Context, work pipeline.IWorkpiece) (err error) {
+	cmd := work.(*cmdWorkpiece)
 	hs := cmd.hostStateProvider.get(cmd.appStructs, cmd.cmdMes.WSID(), cmd.reb.CUDBuilder(),
 		cmd.principals, cmd.cmdMes.Token(), cmd.cmdResultBuilder, cmd.eca.CommandPrepareArgs, cmd.workspace.NextWLogOffset,
-		cmd.argsObject, cmd.unloggedArgsObject, cmd.cmdMes.PartitionID())
+		cmd.argsObject, cmd.unloggedArgsObject, cmd.cmdMes.PartitionID(), cmd.cmdMes.Origin())
 	hs.ClearIntents()
-
 	cmd.eca.State = hs
 	cmd.eca.Intents = hs
-
-	return
+	return nil
 }
 
 func updateIDGeneratorFromO(root istructs.IObject, findType appdef.FindType, idGen istructs.IIDGenerator) {
@@ -413,12 +422,16 @@ func limitCallRate(_ context.Context, work pipeline.IWorkpiece) (err error) {
 
 func (cmdProc *cmdProc) authenticate(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	cmd := work.(*cmdWorkpiece)
+	if processors.SetPrincipalsForAnonymousOnlyFunc(cmd.appStructs.AppDef(), cmd.cmdQName, cmd.cmdMes.WSID(), cmd) {
+		// grant to anonymous -> set token == "" to avoid validating an expired token accidentally kept in cookies
+		return nil
+	}
 	req := iauthnz.AuthnRequest{
 		Host:        cmd.cmdMes.Host(),
 		RequestWSID: cmd.cmdMes.WSID(),
 		Token:       cmd.cmdMes.Token(),
 	}
-	if cmd.principals, cmd.principalPayload, err = cmdProc.authenticator.Authenticate(cmd.cmdMes.RequestCtx(), cmd.appStructs,
+	if cmd.principals, _, err = cmdProc.authenticator.Authenticate(cmd.cmdMes.RequestCtx(), cmd.appStructs,
 		cmd.appStructs.AppTokens(), req); err != nil {
 		return coreutils.NewHTTPError(http.StatusUnauthorized, err)
 	}
@@ -427,12 +440,7 @@ func (cmdProc *cmdProc) authenticate(_ context.Context, work pipeline.IWorkpiece
 
 func getPrincipalsRoles(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	cmd := work.(*cmdWorkpiece)
-	for _, prn := range cmd.principals {
-		if prn.Kind != iauthnz.PrincipalKind_Role {
-			continue
-		}
-		cmd.roles = append(cmd.roles, prn.QName)
-	}
+	cmd.roles = processors.GetRoles(cmd.principals)
 	return nil
 }
 
@@ -670,13 +678,24 @@ func (cmdProc *cmdProc) cudsValidators(ctx context.Context, work pipeline.IWorkp
 	for _, appCUDValidator := range cmd.appStructs.CUDValidators() {
 		for rec := range cmd.rawEvent.CUDs {
 			if appCUDValidator.Match(rec, cmd.cmdMes.WSID(), cmd.cmdQName) {
-				if err := appCUDValidator.Validate(ctx, cmd.appStructs, rec, cmd.cmdMes.WSID(), cmd.cmdQName); err != nil {
+				if err := appCUDValidator.Validate(ctx, cmd.appStructs, rec, cmd.cmdMes.WSID(), cmd.cmdQName, cmd.commandCtxStorage); err != nil {
 					return coreutils.WrapSysError(err, http.StatusForbidden)
 				}
 			}
 		}
 	}
 	return nil
+}
+
+func getCommandCtxStorage(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	cmd := work.(*cmdWorkpiece)
+	skbCommandContext, err := cmd.eca.State.KeyBuilder(sys.Storage_CommandContext, sys.Storage_CommandContext)
+	if err != nil {
+		// notest
+		return err
+	}
+	cmd.commandCtxStorage, err = cmd.eca.State.MustExist(skbCommandContext)
+	return err
 }
 
 func (cmdProc *cmdProc) validateCUDsQNames(ctx context.Context, work pipeline.IWorkpiece) (err error) {

@@ -163,13 +163,13 @@ func (s *httpService) registerHandlersV1() {
 	*/
 	if s.blobRequestHandler != nil {
 		s.router.Handle(fmt.Sprintf("/blob/{%s}/{%s}/{%s:[0-9]+}", URLPlaceholder_appOwner, URLPlaceholder_appName, URLPlaceholder_wsid),
-			corsHandler(s.blobHTTPRequestHandler_Write())).
+			corsHandler(s.blobHTTPRequestHandler_Write(s.numsAppsWorkspaces))).
 			Methods("POST", "OPTIONS").
 			Name("blob write")
 
 		// allowed symbols according to see base64.URLEncoding
 		s.router.Handle(fmt.Sprintf("/blob/{%s}/{%s}/{%s:[0-9]+}/{%s:[a-zA-Z0-9-_]+}", URLPlaceholder_appOwner,
-			URLPlaceholder_appName, URLPlaceholder_wsid, URLPlaceholder_blobIDOrSUUID), corsHandler(s.blobHTTPRequestHandler_Read())).
+			URLPlaceholder_appName, URLPlaceholder_wsid, URLPlaceholder_blobIDOrSUUID), corsHandler(s.blobHTTPRequestHandler_Read(s.numsAppsWorkspaces))).
 			Methods("POST", "GET", "OPTIONS").
 			Name("blob read")
 	}
@@ -177,19 +177,19 @@ func (s *httpService) registerHandlersV1() {
 		URLPlaceholder_wsid, URLPlaceholder_resourceName), corsHandler(RequestHandler_V1(s.requestSender, s.numsAppsWorkspaces))).
 		Methods("POST", "PATCH", "OPTIONS").Name("api")
 
-	s.router.Handle("/n10n/channel", corsHandler(s.subscribeAndWatchHandler())).Methods("GET")
+	s.router.Handle("/n10n/channel", corsHandler(s.subscribeAndWatchHandler(s.requestSender))).Methods("GET")
 	s.router.Handle("/n10n/subscribe", corsHandler(s.subscribeHandler())).Methods("GET")
 	s.router.Handle("/n10n/unsubscribe", corsHandler(s.unSubscribeHandler())).Methods("GET")
 	s.router.Handle("/n10n/update/{offset:[0-9]{1,10}}", corsHandler(s.updateHandler()))
 }
 
 func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) http.HandlerFunc {
-	return withRequestValidation(numsAppsWorkspaces, func(req *http.Request, rw http.ResponseWriter, data validatedData) {
-		request := createBusRequest(req.Method, data, req)
+	return withValidateForFuncs(numsAppsWorkspaces, func(req *http.Request, rw http.ResponseWriter, data validatedData) {
+		request := createBusRequest(data, req)
 
 		// req's BaseContext is router service's context. See service.Start()
 		// router app closing or client disconnected -> req.Context() is done
-		// will create new cancellable context and cancel it if http section send is failed.
+		// will create new cancellable context and cancel it if write to http socket is failed.
 		// requestCtx.Done() -> SendRequest2 implementation will notify the handler that the consumer has left us
 		requestCtx, cancel := context.WithCancel(req.Context())
 		defer cancel() // to avoid context leak
@@ -204,7 +204,7 @@ func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[
 			return
 		}
 
-		initResponse(rw, responseMeta.ContentType, responseMeta.StatusCode)
+		initResponse(rw, responseMeta)
 		reply_v1(requestCtx, rw, responseCh, responseErr, responseMeta.ContentType, cancel, request, responseMeta.Mode())
 	})
 }
@@ -212,7 +212,7 @@ func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[
 func corsHandler(h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if logger.IsVerbose() {
-			logger.Verbose("serving ", r.Method, " ", r.URL.Path)
+			logger.Verbose("serving", r.Method, r.URL.Path, ", origin", r.Header.Get(httpu.Origin))
 		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, Authorization")
@@ -231,8 +231,14 @@ func checkHandler() http.HandlerFunc {
 	}
 }
 
-func initResponse(w http.ResponseWriter, contentType string, statusCode int) {
-	w.Header().Set(httpu.ContentType, contentType)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-	w.WriteHeader(statusCode)
+func initResponse(w http.ResponseWriter, responseMeta bus.ResponseMeta) {
+	switch responseMeta.Mode() {
+	case bus.RespondMode_StreamEvents:
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+	case bus.RespondMode_Single, bus.RespondMode_StreamJSON:
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+	}
+	w.Header().Set(httpu.ContentType, responseMeta.ContentType)
+	w.WriteHeader(responseMeta.StatusCode)
 }

@@ -11,12 +11,16 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"runtime/debug"
 	"strconv"
 	"strings"
 
+	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/strconvu"
+	"github.com/voedger/voedger/pkg/istructs"
 )
 
 var onBeforeWriteResponse func(w http.ResponseWriter) // not nil in tests only
@@ -79,4 +83,48 @@ func replyErr(rw http.ResponseWriter, err error) {
 	} else {
 		ReplyCommonError(rw, err.Error(), http.StatusInternalServerError)
 	}
+}
+
+// copies Authorization cookie (if present) to header (if missing)
+// needed for blobs and n10n.
+func GetCookieBearerAuth(req *http.Request) (cookieBearerToken string, ok bool, err error) {
+	cookie, err := req.Cookie(httpu.Authorization)
+	if errors.Is(err, http.ErrNoCookie) {
+		return "", false, nil
+	}
+	if err != nil {
+		// notest
+		return "", false, fmt.Errorf("failed to read cookie: %w", err)
+	}
+	if cookieBearerToken, err = url.QueryUnescape(cookie.Value); err != nil {
+		return "", false, fmt.Errorf("failed to unescape cookie value %q: %w", cookie.Value, err)
+	}
+	return cookieBearerToken, true, nil
+}
+
+// createBusRequest creates a bus.Request from validated data
+func createBusRequest(data validatedData, req *http.Request) bus.Request {
+	res := bus.Request{
+		Method:   req.Method,
+		WSID:     data.wsid,
+		Query:    map[string]string{},
+		Header:   data.header,
+		AppQName: data.appQName,
+		Resource: data.vars[URLPlaceholder_resourceName],
+		Body:     data.body,
+	}
+
+	if docIDStr, hasDocID := data.vars[URLPlaceholder_id]; hasDocID {
+		docIDUint64, err := strconvu.ParseUint64(docIDStr)
+		if err != nil {
+			// notest: parsed already by route regexp
+			panic(err)
+		}
+		res.DocID = istructs.IDType(docIDUint64)
+	}
+
+	for k, v := range req.URL.Query() {
+		res.Query[k] = v[0]
+	}
+	return res
 }

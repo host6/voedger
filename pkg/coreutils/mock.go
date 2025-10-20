@@ -184,6 +184,10 @@ func (m *MockState) Read(key istructs.IStateKeyBuilder, callback istructs.ValueC
 	args := m.Called(key, callback)
 	return args.Error(0)
 }
+func(m *MockState) Context() context.Context {
+	args := m.Called()
+	return args.Get(0).(context.Context)
+}
 
 type MockStateKeyBuilder struct {
 	mock.Mock
@@ -445,9 +449,13 @@ func (m *MockIntents) FindIntent(key istructs.IStateKeyBuilder) istructs.IStateV
 func (m *MockIntents) IntentsCount() int {
 	return 0
 }
-func (m *MockIntents) NewValue(key istructs.IStateKeyBuilder) (istructs.IStateValueBuilder, error) {
+func (m *MockIntents) NewValue(key istructs.IStateKeyBuilder) (builder istructs.IStateValueBuilder, err error) {
 	args := m.Called(key)
-	return args.Get(0).(istructs.IStateValueBuilder), args.Error(1)
+	if intf := args.Get(0); intf != nil {
+		builder = intf.(istructs.IStateValueBuilder)
+	}
+	err = args.Error(1)
+	return
 }
 func (m *MockIntents) UpdateValue(key istructs.IStateKeyBuilder, existingValue istructs.IStateValue) (istructs.IStateValueBuilder, error) {
 	args := m.Called(key, existingValue)

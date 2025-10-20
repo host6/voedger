@@ -8,6 +8,7 @@ import (
 	"context"
 	"net"
 	"net/url"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -59,7 +60,6 @@ type QueryChannel_V2 iprocbus.ServiceChannel
 type AdminEndpointServiceOperator pipeline.ISyncOperator
 type PublicEndpointServiceOperator pipeline.ISyncOperator
 type BlobberAppClusterID istructs.ClusterAppID
-type BlobStorage iblobstorage.IBLOBStorage
 type BlobberAppStruct istructs.IAppStructs
 type CommandProcessorsChannelGroupIdxType uint
 type QueryProcessorsChannelGroupIdxType_V1 uint
@@ -131,6 +131,7 @@ type VVM struct {
 	MetricsServicePort  func() metrics.MetricsServicePort
 	BuiltInAppsPackages []BuiltInAppPackages
 	TTLStorage          ielections.ITTLStorage[storage.TTLStorageImplKey, string]
+	BuildInfo           *debug.BuildInfo
 }
 
 type AppsExtensionPoints map[appdef.AppQName]extensionpoints.IExtensionPoint
