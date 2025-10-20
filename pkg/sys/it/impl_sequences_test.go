@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
@@ -49,7 +48,7 @@ func TestSequencesTrustLevel_0(t *testing.T) {
 		require.NoError(as.Put(pkey, ccols, []byte{1}))
 
 		// try to insert one more record
-		vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect500("Records: sequences violation"))
+		vit.PostWS(ws, "c.sys.CUD", body, it.Expect500("Records: sequences violation"))
 	})
 
 	t.Run("wlog event - protected against overwrite", func(t *testing.T) {
@@ -62,7 +61,7 @@ func TestSequencesTrustLevel_0(t *testing.T) {
 		require.NoError(as.Put(pkey, cols, []byte{1}))
 
 		// try to insert one more event
-		vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect500("PutWLog: sequences violation"))
+		vit.PostWS(ws, "c.sys.CUD", body, it.Expect500("PutWLog: sequences violation"))
 	})
 
 	t.Run("plog event - protected against overwrite", func(t *testing.T) {
@@ -78,7 +77,7 @@ func TestSequencesTrustLevel_0(t *testing.T) {
 		require.NoError(as.Put(pkey, cols, []byte{1}))
 
 		// try to insert one more event
-		vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect500("PutPLog: sequences violation"))
+		vit.PostWS(ws, "c.sys.CUD", body, it.Expect500("PutPLog: sequences violation"))
 	})
 }
 
@@ -137,7 +136,7 @@ func TestSequencesTrustLevel_1(t *testing.T) {
 		require.NoError(appStorage.Put(pkey, cols, []byte{1}))
 
 		// try to insert one more event
-		vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect500("PutWLog: sequences violation"))
+		vit.PostWS(ws, "c.sys.CUD", body, it.Expect500("PutWLog: sequences violation"))
 	})
 
 	t.Run("plog event - protected against overwrite", func(t *testing.T) {
@@ -156,7 +155,7 @@ func TestSequencesTrustLevel_1(t *testing.T) {
 		require.NoError(appStorage.Put(pkey, cols, []byte{1}))
 
 		// try to insert one more event
-		vit.PostWS(ws, "c.sys.CUD", body, coreutils.Expect500("PutPLog: sequences violation"))
+		vit.PostWS(ws, "c.sys.CUD", body, it.Expect500("PutPLog: sequences violation"))
 	})
 }
 

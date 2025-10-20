@@ -754,7 +754,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	}, timeu.NewITime())
 
 	// prepare the AppParts to borrow AppStructs
-	appParts, appPartsClean, err := appparts.New2(vvmCtx, appStructsProvider,
+	appParts, appPartsCleanup := appparts.New2(vvmCtx, appStructsProvider,
 		actualizers.NewSyncActualizerFactoryFactory(actualizers.ProvideSyncActualizerFactory(), secretReader, n10nBroker, statelessResources),
 		appparts.NullActualizerRunner,
 		appparts.NullSchedulerRunner,
@@ -813,7 +813,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	return testApp{
 		cfg:               cfg,
 		requestSender:     requestSender,
-		cancel:            func() { cancel(); appPartsClean() },
+		cancel:            func() { cancel(); appPartsCleanup() },
 		ctx:               vvmCtx,
 		done:              done,
 		cmdProcService:    cmdProcService,

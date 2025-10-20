@@ -8,13 +8,15 @@ package appparts
 import (
 	"context"
 
+	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/irates"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
 func NewTestAppParts(asp istructs.IAppStructsProvider) (IAppPartitions, func()) {
 	vvmCtx, cancel := context.WithCancel(context.Background())
-	appParts, cleanup, err := New2(
+	appParts, cleanup := New2(
 		vvmCtx,
 		asp,
 		NullSyncActualizerFactory,
@@ -22,10 +24,9 @@ func NewTestAppParts(asp istructs.IAppStructsProvider) (IAppPartitions, func()) 
 		NullSchedulerRunner,
 		NullExtensionEngineFactories,
 		irates.NullBucketsFactory,
+		testingu.MockTime,
+		isequencer.NullIVVMSeqStorageAdapter(),
 	)
-	if err != nil {
-		panic(err)
-	}
 	combinedCleanup := func() {
 		cancel()
 		cleanup()

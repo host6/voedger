@@ -207,7 +207,7 @@ func deployTestApp(t *testing.T) (appParts appparts.IAppPartitions, appStructs i
 	}, timeu.NewITime())
 
 	vvmCtx, cancel := context.WithCancel(context.Background())
-	appParts, appPartsCleanup, err := appparts.New2(vvmCtx, appStructsProvider,
+	appParts, appPartsCleanup := appparts.New2(vvmCtx, appStructsProvider,
 		actualizers.NewSyncActualizerFactoryFactory(actualizers.ProvideSyncActualizerFactory(), secretReader, n10nBroker, statelessResources),
 		appparts.NullActualizerRunner,
 		appparts.NullSchedulerRunner,
@@ -217,8 +217,6 @@ func deployTestApp(t *testing.T) (appParts appparts.IAppPartitions, appStructs i
 				StatelessResources: statelessResources,
 				WASMConfig:         iextengine.WASMFactoryConfig{},
 			}, "", imetrics.Provide()),
-		iratesce.TestBucketsFactory)
-	require.NoError(err)
 		iratesce.TestBucketsFactory, testingu.MockTime, nil)
 	appParts.DeployApp(test.appQName, nil, appDef, test.totalPartitions, test.appEngines, 1)
 	appParts.DeployAppPartitions(test.appQName, []istructs.PartitionID{test.partition})

@@ -3159,7 +3159,7 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
 	statelessResources := istructsmem.NewStatelessResources()
 	vvmCtx, cancel := context.WithCancel(context.Background())
-	appParts, cleanup, err := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
+	appParts, cleanup := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
 		engines.ProvideExtEngineFactories(
 			engines.ExtEngineFactoriesConfig{
 				AppConfigs:         cfgs,
@@ -3216,7 +3216,7 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
 	statelessResources := istructsmem.NewStatelessResources()
 	vvmCtx, cancel := context.WithCancel(context.Background())
-	appParts, cleanup, err := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
+	appParts, cleanup := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
 		engines.ProvideExtEngineFactories(
 			engines.ExtEngineFactoriesConfig{
 				AppConfigs:         cfgs,

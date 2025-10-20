@@ -72,7 +72,7 @@ func ExampleIAppPartition_IsLimitExceeded() {
 		provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0)
 
 	vvmCtx, cancel := context.WithCancel(context.Background())
-	appParts, cleanup, err := appparts.New2(
+	appParts, cleanup := appparts.New2(
 		vvmCtx,
 		appStructsProvider,
 		appparts.NullSyncActualizerFactory,

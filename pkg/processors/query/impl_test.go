@@ -343,7 +343,7 @@ func deployTestAppWithSecretToken(require *require.Assertions,
 	require.NoError(as.Events().PutWlog(pLogEvent))
 
 	vvmCtx, cancel := context.WithCancel(context.Background())
-	appParts, cleanup, err := appparts.New2(vvmCtx, asp,
+	appParts, cleanup := appparts.New2(vvmCtx, asp,
 		func(istructs.IAppStructs, istructs.PartitionID) pipeline.ISyncOperator { return &pipeline.NOOP{} }, // no projectors
 		appparts.NullActualizerRunner,
 		appparts.NullSchedulerRunner,

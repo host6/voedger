@@ -93,7 +93,7 @@ func newAppPartitions(
 			}
 		}
 		wg.Wait()
-	}, err
+	}
 }
 
 func (aps *apps) AppDef(name appdef.AppQName) (appdef.IAppDef, error) {
