@@ -1,3 +1,5 @@
 Resolves issue 'APIv2 BLOBs: handle 413, 415, 429 status codes'
 
 Resolves #3690 APIv2 BLOBs: handle 413, 415, 429 status codes
+
+{"version":"1.0","github_issue_url":"https://github.com/voedger/voedger/issues/3690","jira_ticket_url":"","branch_type":2}
