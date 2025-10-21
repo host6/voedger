@@ -1,0 +1,1 @@
+[AIR-1796] voedger: Extend httpu automatic retry handling for additional temporary upstream/network errors
