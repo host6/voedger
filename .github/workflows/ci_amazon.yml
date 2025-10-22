@@ -39,6 +39,15 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: 'stable'
+        cache: false
+
+    - name: Cache Go - Modules
+      uses: actions/cache@v4
+      with:
+        path: ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+        restore-keys: |
+          ${{ runner.os }}-go-
 
     - name: Run Amazon DynamoDB Implementation Tests
       working-directory: pkg/istorage/amazondb
