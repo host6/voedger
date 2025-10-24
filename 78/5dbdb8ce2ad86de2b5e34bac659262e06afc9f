@@ -1,3 +1,5 @@
 [AIR-1895] router: accept Blob-Name header on OPTIONS http method
 
 https://untill.atlassian.net/browse/AIR-1895
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1895","branch_type":2}
