@@ -1,1 +1,3 @@
 [AIR-1905] revert: use IFederationWithRetry on ws init
+
+https://untill.atlassian.net/browse/AIR-1905
