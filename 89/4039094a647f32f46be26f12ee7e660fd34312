@@ -1,3 +1,5 @@
 [AIR-1905] revert: use IFederationWithRetry on ws init
 
 https://untill.atlassian.net/browse/AIR-1905
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1905","branch_type":2}
