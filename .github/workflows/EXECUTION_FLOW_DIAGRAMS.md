@@ -157,41 +157,46 @@ sequenceDiagram
 
     GitHub->>WF: PR opened (pkg-cmd changes)
     activate WF
-    
-    WF->>CI: Call with parameters<br/>test_folder: pkg<br/>short_test: true
+
+    WF->>CI: Call ci_reuse_go_pr.yml<br/>test_folder: pkg<br/>short_test: true
     activate CI
-    
+
     CI->>Tests: Checkout code
     CI->>Tests: Set up Go 1.24
+    CI->>Tests: Install TinyGo
     CI->>Tests: Cache Go modules
     CI->>Tests: Run tests<br/>go test ./...
     activate Tests
     Tests-->>CI: ✓ Tests Pass
     deactivate Tests
-    
+
+    CI->>Tests: Check copyright
+    CI->>Tests: Run linters
+
     CI-->>WF: ✓ CI Success
     deactivate CI
-    
-    WF->>Merge: Call merge.yml<br/>needs: call-workflow-ci-pkg
+
+    WF->>Merge: Call merge.yml
     activate Merge
-    
-    Merge->>domerge: Run domergepr.sh<br/>PR number, branch name
+
+    Merge->>domerge: Run domergepr.sh
     activate domerge
-    
-    domerge->>domerge: Check author<br/>in developers team
+
+    domerge->>domerge: Verify PR author
+    domerge->>domerge: Check team membership<br/>devs/developers
     domerge->>domerge: Validate PR size<br/>< 200 lines
     domerge->>domerge: Process issue refs<br/>Resolves #
     domerge->>PR: Squash merge<br/>--delete-branch
-    
+
     PR-->>domerge: ✓ Merged
     deactivate domerge
-    
+
     Merge-->>WF: ✓ Merge Complete
     deactivate Merge
-    
+
     WF-->>GitHub: ✓ Workflow Success
     deactivate WF
-    
+
     GitHub-->>PR: PR Closed & Merged
 ```
 
@@ -213,7 +218,7 @@ sequenceDiagram
 
     GitHub->>WF: PR to pkg/istorage
     activate WF
-    
+
     WF->>Detect: Analyze changed files
     activate Detect
     Detect->>Detect: Check CAS files
@@ -222,7 +227,7 @@ sequenceDiagram
     Detect->>Detect: Check Elections files
     Detect-->>WF: Output: cas_changed,<br/>amazon_changed, etc.
     deactivate Detect
-    
+
     alt CAS or TTL/Elections changed
         WF->>CAS: Trigger Cassandra Tests
         activate CAS
@@ -232,7 +237,7 @@ sequenceDiagram
         CAS-->>WF: Test Results
         deactivate CAS
     end
-    
+
     alt Amazon or TTL/Elections changed
         WF->>Amazon: Trigger Amazon Tests
         activate Amazon
@@ -242,7 +247,7 @@ sequenceDiagram
         Amazon-->>WF: Test Results
         deactivate Amazon
     end
-    
+
     alt Both tests passed or skipped
         WF->>Merge: Call merge.yml
         activate Merge
@@ -252,7 +257,7 @@ sequenceDiagram
     else Tests failed
         WF->>WF: Create failure issue
     end
-    
+
     WF-->>GitHub: ✓ Workflow Complete
     deactivate WF
 ```
@@ -273,16 +278,18 @@ sequenceDiagram
     participant Issue as create_issue.yml
     participant Tests as Test Results
 
-    Schedule->>WF: Daily 5 AM UTC
+    Schedule->>WF: Daily 5 AM UTC or Manual
     activate WF
-    
-    WF->>CI: Call CI Reuse Go
+
+    WF->>CI: Call ci_reuse_go.yml<br/>go_race: true<br/>short_test: false
     activate CI
     CI->>Tests: Run full test suite<br/>go test ./...<br/>with coverage
     Tests-->>CI: ✓ Pass or ✗ Fail
+    CI->>Tests: Check copyright
+    CI->>Tests: Run linters
     CI-->>WF: Test Results
     deactivate CI
-    
+
     alt Tests Failed
         WF->>WF: Set failure_url output
         WF->>Issue: Create failure issue
@@ -292,18 +299,20 @@ sequenceDiagram
         Issue-->>WF: Issue Created
         deactivate Issue
     end
-    
+
     WF->>Vuln: Vulnerability Check
     activate Vuln
+    Vuln->>Vuln: Set up Go stable
+    Vuln->>Vuln: Checkout code
     Vuln->>Vuln: Install govulncheck
     Vuln->>Vuln: Run execgovuln.sh
     Vuln-->>WF: ✓ Vuln Check Complete
     deactivate Vuln
-    
+
     WF->>Docker: Build & Push Docker
     activate Docker
     Docker->>Docker: Checkout code
-    Docker->>Docker: Set up Go 1.24
+    Docker->>Docker: Set up Go stable
     Docker->>Docker: Configure git credentials
     Docker->>Docker: go build ./cmd/voedger
     Docker->>Docker: Login to Docker Hub
@@ -311,7 +320,7 @@ sequenceDiagram
     Docker->>Docker: Push as voedger:0.0.1-alpha
     Docker-->>WF: ✓ Docker Image Pushed
     deactivate Docker
-    
+
     WF-->>Schedule: ✓ Daily Suite Complete
     deactivate WF
 ```

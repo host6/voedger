@@ -5,9 +5,9 @@
 **Voedger Workflow:** [`ci-pkg-cmd.yml`](ci-pkg-cmd.yml#L3-L9)
 
 - Triggered on: `push` to `main` branch, paths-ignore: `pkg/istorage/**`
-- Condition: `github.repository == 'voedger/voedger'`
+- Condition: `github.repository == 'voedger/voedger'` (avoids run on commit to main of a fork)
 
-- [Step 1: Call CI Reuse Go Workflow](ci-pkg-cmd.yml#L11-L25): Calls `untillpro/ci-action/.github/workflows/ci_reuse_go.yml@main` with `test_folder: pkg`, `ignore_copyright`, `short_test: true`, `go_race: false`, `ignore_build: true`, `test_subfolders: true`
+- [Step 1: Call CI Reuse Go Workflow](ci-pkg-cmd.yml#L11-L25): Calls `untillpro/ci-action/.github/workflows/ci_reuse_go.yml@main` with `test_folder: pkg`, `ignore_copyright`, `short_test: true`, `go_race: false`, `ignore_build: true`, `test_subfolders: true` → See [ci_reuse_go.yml details](#ci_reuse_goyml-full-test-suite)
 
 - [Step 2: Set Ignore Build BP3](ci-pkg-cmd.yml#L26-L41): If `github.repository == 'voedger/voedger'`: `ignore_bp3=false`, else `ignore_bp3=true`
 
@@ -22,7 +22,7 @@
 - Triggered on: `pull_request_target`, paths-ignore: `pkg/istorage/**`
 - Condition: `github.repository == 'voedger/voedger'`
 
-- [Step 1: Call CI Reuse Go PR Workflow](ci-pkg-cmd_pr.yml#L9-L24): Calls `untillpro/ci-action/.github/workflows/ci_reuse_go_pr.yml@main` with `test_folder: pkg`, `ignore_copyright`, `short_test: true`, `go_race: false`, `ignore_build: true`, `test_subfolders: true`
+- [Step 1: Call CI Reuse Go PR Workflow](ci-pkg-cmd_pr.yml#L9-L24): Calls `untillpro/ci-action/.github/workflows/ci_reuse_go_pr.yml@main` with `test_folder: pkg`, `ignore_copyright`, `short_test: true`, `go_race: false`, `ignore_build: true`, `test_subfolders: true` → See [ci_reuse_go_pr.yml details](#ci_reuse_go_pryml-pr-test-suite)
 
 - [Step 2: Auto-merge PR](ci-pkg-cmd_pr.yml#L25-L29): Calls `./.github/workflows/merge.yml`
   - [Merge PR](merge.yml#L15-L22): Run [domergepr.sh](#domergeprsh---auto-merge-script) script from ci-action with PR number and branch name
@@ -47,7 +47,7 @@
 - Triggered on: `workflow_dispatch` or `schedule: cron "0 5 * * *"` (daily at 5 AM UTC)
 - Condition: `github.repository == 'voedger/voedger'`
 
-- [Step 1: Call CI Reuse Go Workflow](ci-full.yml#L9-L21): Calls `untillpro/ci-action/.github/workflows/ci_reuse_go.yml@main` with `ignore_copyright`, `go_race: true`, `short_test: false`, `ignore_build: true`, `test_subfolders: true`
+- [Step 1: Call CI Reuse Go Workflow](ci-full.yml#L9-L21): Calls `untillpro/ci-action/.github/workflows/ci_reuse_go.yml@main` with `ignore_copyright`, `go_race: true`, `short_test: false`, `ignore_build: true`, `test_subfolders: true` → See [ci_reuse_go.yml details](#ci_reuse_goyml-full-test-suite)
 
 - [Step 2: Notify Failure (if failed)](ci-full.yml#L23-L32): Condition `failure()` - Sets output `failure_url` with workflow run URL
 
@@ -81,7 +81,11 @@
 **CI-Action Workflow:** `untillpro/ci-action/.github/workflows/cp.yml@main`
 
 - [Checkout code](https://github.com/untillpro/ci-action/blob/main/.github/workflows/cp.yml#L36-L40): Checkout main branch with full history for cherry-picking
-- [Add comment to issue](https://github.com/untillpro/ci-action/blob/main/.github/workflows/cp.yml#L42-L50): Post workflow run link to issue via `add-issue-commit.sh`
+- [Add comment to issue](https://github.com/untillpro/ci-action/blob/main/.github/workflows/cp.yml#L42-L50): call [add-issue-commit.sh](https://github.com/untillpro/ci-action/blob/main/scripts/add-issue-commit.sh)
+  - Validate required environment variables: `repo`, `org`, `issue`, `body`
+  - Exit with error if any variable is missing
+  - Construct GitHub repository URL: `https://github.com/$org/$repo`
+  - Post comment to issue using `gh issue comment` with workflow run URL as body
 - [Check Issue](https://github.com/untillpro/ci-action/blob/main/.github/workflows/cp.yml#L52-L85): Verify user permissions
   - Check if user is member of organization `voedger`
   - Check if user is member of team `DevOps_cp`
@@ -100,10 +104,18 @@
   - Run `cp.sh` script to perform cherry-pick
 - [Close issue](https://github.com/untillpro/ci-action/blob/main/.github/workflows/cp.yml#L151-L168): Auto-close issue
   - Exception: Do NOT close if title is `cprelease` AND repo is `airs-bp3`
-  - Run `close-issue.sh` script
+  - call [close-issue.sh](https://github.com/untillpro/ci-action/blob/main/scripts/close-issue.sh)
+    - Validate required environment variables: `repo`, `org`, `issue`
+    - Exit with error if any variable is missing
+    - Construct GitHub repository URL: `https://github.com/$org/$repo`
+    - Close issue using `gh issue close` command
 
 **On Failure:**
-- [Add comment to issue](https://github.com/untillpro/ci-action/blob/main/.github/workflows/cp.yml#L175-L185): Post error notification to issue via `add-issue-commit.sh`
+- [Add comment to issue](https://github.com/untillpro/ci-action/blob/main/.github/workflows/cp.yml#L175-L185): call [add-issue-commit.sh](https://github.com/untillpro/ci-action/blob/main/scripts/add-issue-commit.sh)
+  - Validate required environment variables: `repo`, `org`, `issue`, `body`
+  - Exit with error if any variable is missing
+  - Construct GitHub repository URL: `https://github.com/$org/$repo`
+  - Post error comment to issue using `gh issue comment` with error message as body
 
 ---
 
@@ -137,7 +149,7 @@
 **Voedger Workflow:** [`ci_cas.yml`](ci_cas.yml#L1-L8)
 
 - Triggered by: `ci-pkg-storage.yml` when Cassandra/TTL Storage/Elections files change
-- Service: ScyllaDB (Cassandra-compatible) on port 9042
+- [Service: ScyllaDB (Cassandra-compatible) on port 9042](ci_cas.yml#L17-L21)
 
 - [Step 1: Checkout Repository](ci_cas.yml#L24-L25): Checkout code
 
@@ -200,9 +212,12 @@
 
 - Triggered on: `issues` type `closed`
 
-- [Step 1: Link issue to milestone](linkIssue.yml#L12-L17):
-  - Runs `linkmilestone.sh` script from ci-action
-  - Automatically links closed issue to appropriate milestone
+- [Step 1: Link issue to milestone](linkIssue.yml#L12-L17): call [linkmilestone.sh](https://github.com/untillpro/ci-action/blob/main/scripts/linkmilestone.sh)
+  - Fetch list of open milestones from repository using GitHub API
+  - Check milestone count
+  - If exactly 1 milestone exists: link issue to that milestone
+  - If 0 milestones: reopen issue and exit with error "No open milestones found"
+  - If more than 1 milestone: reopen issue and exit with error "More than one open milestone found"
 
 ---
 
@@ -212,9 +227,9 @@
 
 - Triggered on: `issues` type `reopened`
 
-- [Step 1: Unlink issue from milestone](unlinkIssue.yml#L12-L17):
-  - Runs `unlinkmilestone.sh` script from ci-action
-  - Automatically unlinks reopened issue from milestone
+- [Step 1: Unlink issue from milestone](unlinkIssue.yml#L12-L17): call [unlinkmilestone.sh](https://github.com/untillpro/ci-action/blob/main/scripts/unlinkmilestone.sh)
+  - Clear milestone from issue by setting it to empty string
+  - Remove any milestone association from the reopened issue
 
 ---
 
