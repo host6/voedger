@@ -1,1 +1,3 @@
 Resolves issue 'GlobalRoles: include in PrincipalPayload.Roles'
+
+Resolves #4231 GlobalRoles: include in PrincipalPayload.Roles
