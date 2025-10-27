@@ -1,0 +1,1 @@
+[AIR-1916] Do not return PrincipalPayload on IAuthenticator.Authenticate()
