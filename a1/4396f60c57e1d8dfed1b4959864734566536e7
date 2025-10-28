@@ -1,0 +1,1 @@
+[AIR-1927] move retry on `WSAECONNREFUSED` to VIT
