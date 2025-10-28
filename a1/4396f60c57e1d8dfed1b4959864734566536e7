@@ -1,1 +1,3 @@
 [AIR-1927] move retry on `WSAECONNREFUSED` to VIT
+
+https://untill.atlassian.net/browse/AIR-1927
