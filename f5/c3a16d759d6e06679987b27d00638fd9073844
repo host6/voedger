@@ -97,3 +97,5 @@ com.untill.driver.interfaces.hotel.GuestLookupByReservationId
 eu.mancloud.HotelRoomHandler
 
 GuestLookupByReservationId
+
+criteria
