@@ -89,3 +89,5 @@ Criteria
 =
 
 class
+
+com.untill.driver.interfaces.hotel.GuestLookupByReservationId
