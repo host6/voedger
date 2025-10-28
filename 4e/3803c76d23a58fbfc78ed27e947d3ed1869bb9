@@ -1,3 +1,5 @@
 [AIR-1926] make IFederationWithRetry use default policy (retry all retryables)
 
 https://untill.atlassian.net/browse/AIR-1926
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1926","branch_type":2}
