@@ -1,1 +1,3 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1941","branch_type":1}
+
+[AIR-1941] verbose log messages instead of trace on n10n
