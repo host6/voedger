@@ -1,3 +1,5 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1955","branch_type":1}
 
 [AIR-1955] implement testingu/mockedTime.String to protect internal fields from access via reflection
+
+https://untill.atlassian.net/browse/AIR-1955
