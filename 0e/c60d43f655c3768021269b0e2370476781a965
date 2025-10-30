@@ -1,1 +1,3 @@
 [AIR-1955] implement testingu/mockedTime.String to protect internal fields from access via reflection
+
+https://untill.atlassian.net/browse/AIR-1955
