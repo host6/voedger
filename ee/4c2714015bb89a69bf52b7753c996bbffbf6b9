@@ -1,3 +1,5 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1980","branch_type":1}
 
 [AIR-1980] voedger: projector exponential backoff: 100ms - 3mins
+
+https://untill.atlassian.net/browse/AIR-1980
