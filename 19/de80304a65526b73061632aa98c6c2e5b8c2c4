@@ -1,1 +1,3 @@
 [AIR-1990] n10n: implement protection against multiple calls of WatchChannel for the same channel
+
+https://untill.atlassian.net/browse/AIR-1990
