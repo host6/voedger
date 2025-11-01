@@ -18,6 +18,7 @@ import (
 )
 
 func NewN10nBroker(quotas in10n.Quotas, time timeu.ITime) (nb in10n.IN10nBroker, cleanup func()) {
+	brokerCtx, brokerCtxCancel := context.WithCancel(context.Background())
 	broker := N10nBroker{
 		projections:     make(map[in10n.ProjectionKey]*projection),
 		channels:        make(map[in10n.ChannelID]*channel),
@@ -25,12 +26,11 @@ func NewN10nBroker(quotas in10n.Quotas, time timeu.ITime) (nb in10n.IN10nBroker,
 		metricBySubject: make(map[istructs.SubjectLogin]*metricType),
 		quotas:          quotas,
 		time:            time,
-		events:          make(chan event, eventsChannelSize),
+		events:          AutoCloseWithContext[event](brokerCtx),
 	}
-	brokerCtx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 	cleanup = func() {
-		cancel()
+		brokerCtxCancel()
 		wg.Wait()
 		broker.channelsWG.Wait()
 	}

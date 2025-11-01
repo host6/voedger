@@ -27,7 +27,7 @@ type N10nBroker struct {
 	metricBySubject  map[istructs.SubjectLogin]*metricType
 	numSubscriptions int
 	time             timeu.ITime
-	events           chan event
+	events           *NotifyQueue[event]
 }
 
 type event struct {

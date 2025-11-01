@@ -135,7 +135,7 @@ func (nb *N10nBroker) Subscribe(channelID in10n.ChannelID, projectionKey in10n.P
 		prj.toSubscribe[channelID] = channel
 		prj.Unlock()
 		e := event{prj: prj}
-		nb.events <- e
+		nb.events.Push(e)
 	}
 
 	return err
@@ -183,7 +183,7 @@ func (nb *N10nBroker) Unsubscribe(channelID in10n.ChannelID, projectionKey in10n
 		prj.toSubscribe[channelID] = nil
 		prj.Unlock()
 		e := event{prj: prj}
-		nb.events <- e
+		nb.events.Push(e)
 	}
 
 	return err
@@ -294,7 +294,7 @@ func (nb *N10nBroker) cleanupChannel(channel *channel, channelID in10n.ChannelID
 	nb.channelsWG.Done()
 }
 
-func notifier(brokerCtx context.Context, wg *sync.WaitGroup, events chan event) {
+func notifier(brokerCtx context.Context, wg *sync.WaitGroup, events *NotifyQueue[event]) {
 	defer func() {
 		logger.Info("notifier goroutine stopped")
 		wg.Done()
@@ -303,11 +303,12 @@ func notifier(brokerCtx context.Context, wg *sync.WaitGroup, events chan event) 
 	logger.Info("notifier goroutine started")
 
 	for brokerCtx.Err() == nil {
-		select {
-		case <-brokerCtx.Done():
+		eventsBatch, ok := events.PopBatch()
+		if !ok {
 			return
-		case eve := <-events:
-			prj := eve.prj
+		}
+		for _, event := range eventsBatch {
+			prj := event.prj
 
 			// Actualize subscriptions
 			{
@@ -368,7 +369,7 @@ func (nb *N10nBroker) Update(projection in10n.ProjectionKey, offset istructs.Off
 	nb.Unlock()
 
 	e := event{prj: prj}
-	nb.events <- e
+	nb.events.Push(e)
 	if logger.IsTrace() {
 		logTrace("Update() completed", projection, offset)
 	}
