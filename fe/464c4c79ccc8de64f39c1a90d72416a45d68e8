@@ -1,1 +1,3 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1990","branch_type":1}
+
+[AIR-1990] n10n: implement protection against multiple calls of WatchChannel for the same channel
