@@ -26,7 +26,7 @@ func NewN10nBroker(quotas in10n.Quotas, time timeu.ITime) (nb in10n.IN10nBroker,
 		metricBySubject: make(map[istructs.SubjectLogin]*metricType),
 		quotas:          quotas,
 		time:            time,
-		events:          AutoCloseWithContext[event](brokerCtx),
+		events:          NewQueueWithContext[event](brokerCtx),
 	}
 	wg := sync.WaitGroup{}
 	cleanup = func() {

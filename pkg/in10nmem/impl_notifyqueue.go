@@ -17,7 +17,7 @@ type NotifyQueue[T any] struct {
 	closed bool
 }
 
-func AutoCloseWithContext[T any](ctx context.Context) (q *NotifyQueue[T]) {
+func NewQueueWithContext[T any](ctx context.Context) (q *NotifyQueue[T]) {
 	q = New[T]()
 	go func() {
 		<-ctx.Done()

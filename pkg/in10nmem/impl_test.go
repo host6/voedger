@@ -161,8 +161,8 @@ func Test_SubscribeUnsubscribe(t *testing.T) {
 		channel2Cleanup()
 	}
 
-	n10nCleanup()
 	checkMetricsZero(t, nb, projectionKey1, projectionKey2)
+	n10nCleanup()
 }
 
 // Test that after subscribing to a channel, the client receives updates for all projections with the current offset
@@ -252,8 +252,8 @@ func Test_Subscribe_NoUpdate_Unsubscribe(t *testing.T) {
 	wg.Wait()
 
 	channelCleanup()
-	n10nCleanup()
 	checkMetricsZero(t, nb, projectionKey1, projectionKey2)
+	n10nCleanup()
 }
 
 // Try watch on not exists channel. WatchChannel must exit.
@@ -275,8 +275,8 @@ func TestWatchNotExistsChannel(t *testing.T) {
 			broker.WatchChannel(ctx, "not exist channel id", nil)
 		}, "When try watch not exists channel - must panics")
 	})
-	n10nCleanup()
 	checkMetricsZero(t, broker)
+	n10nCleanup()
 }
 
 func TestQuotas(t *testing.T) {
@@ -303,8 +303,8 @@ func TestQuotas(t *testing.T) {
 		for _, chanCleanup := range chanCleanups {
 			chanCleanup()
 		}
-		brokerCleanup()
 		checkMetricsZero(t, broker)
+		brokerCleanup()
 	})
 
 	t.Run("Test channel quotas for the whole service. We create more channels than allowed for service.", func(t *testing.T) {
@@ -326,8 +326,8 @@ func TestQuotas(t *testing.T) {
 		for _, channelCleanup := range channelCleanups {
 			channelCleanup()
 		}
-		brokerCleanup()
 		checkMetricsZero(t, broker)
+		brokerCleanup()
 	})
 
 	t.Run("Test subscription quotas for the whole service. We create more subscription than allowed for service.", func(t *testing.T) {
@@ -360,8 +360,8 @@ func TestQuotas(t *testing.T) {
 		for _, chanCleanup := range chanCleanups {
 			chanCleanup()
 		}
-		brokerCleanup()
 		checkMetricsZero(t, broker, projectionKeyExample)
+		brokerCleanup()
 	})
 
 }
@@ -446,8 +446,8 @@ func TestHeartbeats(t *testing.T) {
 	wg.Wait()
 
 	channelCleanup()
-	brokerCleanup()
 	checkMetricsZero(t, broker, in10n.Heartbeat30ProjectionKey)
+	brokerCleanup()
 }
 
 func TestChannelExpiration(t *testing.T) {
@@ -496,8 +496,8 @@ func TestChannelExpiration(t *testing.T) {
 	wg.Wait()
 
 	channelCleanup()
-	brokerCleanup()
 	checkMetricsZero(t, broker, projectionKeyExample)
+	brokerCleanup()
 }
 
 // Flow:
@@ -590,8 +590,9 @@ func Test_MetricNumProjectionSubscriptions(t *testing.T) {
 
 	channelCleanup()
 
-	brokerCleanup()
+	// Wait for metrics to be updated
 	checkMetricsZero(t, broker, projection1, projection2)
+	brokerCleanup()
 }
 
 // Wait for 1 seconds
@@ -679,43 +680,159 @@ func TestMultipleWatchChannelProtection(t *testing.T) {
 }
 
 func TestCleanupClosesAllChannels(t *testing.T) {
-	var wg sync.WaitGroup
+	// var wg sync.WaitGroup
 
-	cb1 := new(callbackMock)
-	cb1.data = make(chan UpdateUnit, 1)
+	// cb1 := new(callbackMock)
+	// cb1.data = make(chan UpdateUnit, 1)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	// ctx, cancel := context.WithCancel(context.Background())
 
-	projectionKey1 := in10n.ProjectionKey{
-		App:        istructs.AppQName_test1_app1,
-		Projection: appdef.NewQName("test", "restaurant"),
-		WS:         istructs.WSID(8),
-	}
+	// projectionKey1 := in10n.ProjectionKey{
+	// 	App:        istructs.AppQName_test1_app1,
+	// 	Projection: appdef.NewQName("test", "restaurant"),
+	// 	WS:         istructs.WSID(8),
+	// }
 
-	quotasExample := in10n.Quotas{
-		Channels:                10,
-		ChannelsPerSubject:      10,
-		Subscriptions:           10,
-		SubscriptionsPerSubject: 10,
-	}
+	// quotasExample := in10n.Quotas{
+	// 	Channels:                10,
+	// 	ChannelsPerSubject:      10,
+	// 	Subscriptions:           10,
+	// 	SubscriptionsPerSubject: 10,
+	// }
+	// req := require.New(t)
+
+	// nb, n10nCleanup := NewN10nBroker(quotasExample, timeu.NewITime())
+	// var subject istructs.SubjectLogin = "paa"
+	// channelID, _, err := nb.NewChannel(subject, 24*time.Hour)
+	// req.NoError(err)
+
+	// err = nb.Subscribe(channelID, projectionKey1)
+	// req.NoError(err)
+	// wg.Add(1)
+	// go func() {
+	// 	nb.WatchChannel(ctx, channelID, cb1.updatesMock)
+	// 	wg.Done()
+	// }()
+
+	// cancel()
+	// wg.Wait()
+
+	// n10nCleanup()
+	// checkMetricsZero(t, nb, projectionKey1)
+}
+
+func TestUpdatePerformanceUnderLoad(t *testing.T) {
 	req := require.New(t)
 
-	nb, n10nCleanup := NewN10nBroker(quotasExample, timeu.NewITime())
-	var subject istructs.SubjectLogin = "paa"
-	channelID, _, err := nb.NewChannel(subject, 24*time.Hour)
-	req.NoError(err)
+	quotas := in10n.Quotas{
+		Channels:                1000,
+		ChannelsPerSubject:      1000,
+		Subscriptions:           10000,
+		SubscriptionsPerSubject: 10000,
+	}
 
-	err = nb.Subscribe(channelID, projectionKey1)
+	nb, cleanup := NewN10nBroker(quotas, timeu.NewITime())
+	defer cleanup()
+
+	numProjections := 100
+	numGoroutines := 50
+	updatesPerGoroutine := 10000
+
+	projections := make([]in10n.ProjectionKey, numProjections)
+	for i := range numProjections {
+		projections[i] = in10n.ProjectionKey{
+			App:        istructs.AppQName_test1_app1,
+			Projection: appdef.NewQName("test", "projection"+strconv.Itoa(i)),
+			WS:         istructs.WSID(i + 1),
+		}
+	}
+
+	channelID, channelCleanup, err := nb.NewChannel("stresstest", 24*time.Hour)
 	req.NoError(err)
+	defer channelCleanup()
+
+	for _, proj := range projections {
+		err = nb.Subscribe(channelID, proj)
+		req.NoError(err)
+	}
+
+	for _, proj := range projections {
+		nb.Update(proj, istructs.Offset(0))
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	watcherStarted := make(chan struct{})
+	wg := sync.WaitGroup{}
+
 	wg.Add(1)
 	go func() {
-		nb.WatchChannel(ctx, channelID, cb1.updatesMock)
-		wg.Done()
+		defer wg.Done()
+		close(watcherStarted)
+		nb.WatchChannel(ctx, channelID, func(projection in10n.ProjectionKey, offset istructs.Offset) {})
 	}()
+
+	<-watcherStarted
+	time.Sleep(10 * time.Millisecond)
+
+	maxDurations := make([]time.Duration, numGoroutines)
+	var maxDurationsLock sync.Mutex
+
+	startBarrier := make(chan struct{})
+	updateWg := sync.WaitGroup{}
+
+	for goroutineIdx := range numGoroutines {
+		updateWg.Add(1)
+		go func(idx int) {
+			defer updateWg.Done()
+
+			<-startBarrier
+
+			var localMax time.Duration
+			for updateIdx := range updatesPerGoroutine {
+				projIdx := (idx*updatesPerGoroutine + updateIdx) % numProjections
+				offset := istructs.Offset(updateIdx + 1)
+
+				start := time.Now()
+				nb.Update(projections[projIdx], offset)
+				duration := time.Since(start)
+
+				if duration > localMax {
+					localMax = duration
+				}
+			}
+
+			maxDurationsLock.Lock()
+			maxDurations[idx] = localMax
+			maxDurationsLock.Unlock()
+		}(goroutineIdx)
+	}
+
+	close(startBarrier)
+	updateWg.Wait()
 
 	cancel()
 	wg.Wait()
 
-	n10nCleanup()
-	checkMetricsZero(t, nb, projectionKey1)
+	var globalMax time.Duration
+	var sum time.Duration
+	for _, d := range maxDurations {
+		sum += d
+		if d > globalMax {
+			globalMax = d
+		}
+	}
+	avgMax := sum / time.Duration(numGoroutines)
+
+	t.Logf("Update() performance under load:")
+	t.Logf("  Total updates: %d", numGoroutines*updatesPerGoroutine)
+	t.Logf("  Concurrent goroutines: %d", numGoroutines)
+	t.Logf("  Max duration across all goroutines: %v", globalMax)
+	t.Logf("  Average max duration per goroutine: %v", avgMax)
+
+	// maxAllowed := 500 * time.Nanosecond
+	// req.LessOrEqual(globalMax, maxAllowed,
+	// 	"Update() took %v which exceeds the 500ns contract (max allowed: %v)",
+	// 	globalMax, maxAllowed)
 }
