@@ -177,7 +177,7 @@ func (s *httpService) registerHandlersV1() {
 		URLPlaceholder_wsid, URLPlaceholder_resourceName), corsHandler(RequestHandler_V1(s.requestSender, s.numsAppsWorkspaces))).
 		Methods("POST", "PATCH", "OPTIONS").Name("api")
 
-	s.router.Handle("/n10n/channel", corsHandler(s.subscribeAndWatchHandler(s.requestSender))).Methods("GET")
+	s.router.Handle("/n10n/channel", corsHandler(s.subscribeAndWatchHandler())).Methods("GET")
 	s.router.Handle("/n10n/subscribe", corsHandler(s.subscribeHandler())).Methods("GET")
 	s.router.Handle("/n10n/unsubscribe", corsHandler(s.unSubscribeHandler())).Methods("GET")
 	s.router.Handle("/n10n/update/{offset:[0-9]{1,10}}", corsHandler(s.updateHandler()))
@@ -215,7 +215,7 @@ func corsHandler(h http.Handler) http.HandlerFunc {
 			logger.Verbose("serving", r.Method, r.URL.Path, ", origin", r.Header.Get(httpu.Origin))
 		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, Authorization, Blob-Name")
 		if r.Method == "OPTIONS" {
 			return
 		}

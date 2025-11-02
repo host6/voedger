@@ -13,31 +13,37 @@ import (
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appdef/acl"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
+	"github.com/voedger/voedger/pkg/processors"
+	"github.com/voedger/voedger/pkg/sys/authnz"
 )
 
 func subscribeAndWatchPipeline(requestCtx context.Context, p *implIN10NProc) pipeline.ISyncPipeline {
 	return pipeline.NewSyncPipeline(requestCtx, "Subscribe and Watch Processor",
 		pipeline.WireFunc("validateToken", p.validateToken),
 		pipeline.WireFunc("getSubjectLogin", p.getSubjectLogin),
+		pipeline.WireFunc("getAppStructs", p.getAppStructs),
 		pipeline.WireFunc("parseSubscribeAndWatchArgs", parseSubscribeAndWatchArgs),
+		pipeline.WireFunc("authnzEntities", p.authnzEntities),
 		pipeline.WireFunc("newChannel", p.newChannel),
 		pipeline.WireFunc("subscribe", p.subscribe),
 		pipeline.WireFunc("initResponse", initResponse),
 		pipeline.WireFunc("sendChannelIDSSEEvent", sendChannelIDSSEEvent),
-		pipeline.WireSyncOperator("revertSubscribedOnErr", &revertSubscribedOnErr{n10nBroker: p.n10nBroker}),
+		pipeline.WireSyncOperator("channelCleanupOnErr", &channelCleanupOnErr{n10nBroker: p.n10nBroker}),
 		pipeline.WireFunc("go WatchChannel", p.watchChannel),
 	)
 }
 
 func (p *implIN10NProc) validateToken(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	appTokens := p.appTokensFactory.New(n10nWP.appQName)
-	_, err = appTokens.ValidateToken(n10nWP.token, &n10nWP.principalPayload)
+	n10nWP.appTokens = p.appTokensFactory.New(n10nWP.appQName)
+	_, err = n10nWP.appTokens.ValidateToken(n10nWP.token, &n10nWP.principalPayload)
 
 	// [~server.n10n/err.routerCreateChannelInvalidToken~impl]
 	// [~server.n10n/err.routerAddSubscriptionInvalidToken~impl]
@@ -86,9 +92,50 @@ func parseSubscribeAndWatchArgs(ctx context.Context, work pipeline.IWorkpiece) (
 	return nil
 }
 
+func (p *implIN10NProc) getAppStructs(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	n10nWP.appStructs, err = p.appStructsProvider.BuiltIn(n10nWP.appQName)
+	return err
+}
+
+func (p *implIN10NProc) authnzEntities(ctx context.Context, work pipeline.IWorkpiece) (err error) {
+	n10nWP := work.(*n10nWorkpiece)
+	for _, s := range n10nWP.subscriptions {
+		wsDesc, err := processors.GetWSDesc(s.wsid, n10nWP.appStructs)
+		if err != nil {
+			return fmt.Errorf("%d: %w", s.wsid, err)
+		}
+		iWorkspace := n10nWP.appStructs.AppDef().WorkspaceByDescriptor(wsDesc.AsQName(authnz.Field_WSKind))
+		authnzReq := iauthnz.AuthnRequest{
+			Host:        n10nWP.host,
+			RequestWSID: s.wsid,
+			Token:       n10nWP.token,
+		}
+		principals, _, err := p.authenticator.Authenticate(ctx, n10nWP.appStructs, n10nWP.appTokens, authnzReq)
+		if err != nil {
+			// [~server.n10n/err.routerCreateChannelInvalidToken~impl]
+			// [~server.n10n/err.routerAddSubscriptionInvalidToken~impl]
+			// [~server.n10n/err.routerUnsubscribeInvalidToken~impl]
+			// notest: token is validated already, error could happen on e.g. subjects read failure
+			return coreutils.NewHTTPError(http.StatusUnauthorized, err)
+		}
+		roles := processors.GetRoles(principals)
+		ok, err := acl.IsOperationAllowed(iWorkspace, appdef.OperationKind_Select, s.entity, nil, roles)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			// [~server.n10n/err.routerCreateChannelNoPermissions~impl]
+			// [~server.n10n/err.routerAddSubscriptionNoPermissions~impl]
+			return coreutils.NewHTTPErrorf(http.StatusForbidden)
+		}
+	}
+	return nil
+}
+
 func (p *implIN10NProc) newChannel(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 	n10nWP := work.(*n10nWorkpiece)
-	n10nWP.channelID, err = p.n10nBroker.NewChannel(n10nWP.subjectLogin, n10nWP.expiresIn)
+	n10nWP.channelID, n10nWP.channelCleanup, err = p.n10nBroker.NewChannel(n10nWP.subjectLogin, n10nWP.expiresIn)
 	return err
 }
 
@@ -136,17 +183,16 @@ func (p *implIN10NProc) watchChannel(ctx context.Context, work pipeline.IWorkpie
 				cancel()
 			}
 		})
+		n10nWP.channelCleanup()
 		n10nWP.responseWriter.Close(nil)
 	}()
 	return nil
 }
 
-func (u *revertSubscribedOnErr) OnErr(err error, work interface{}, _ pipeline.IWorkpieceContext) (newErr error) {
+func (u *channelCleanupOnErr) OnErr(err error, work interface{}, _ pipeline.IWorkpieceContext) (newErr error) {
 	n10nWP := work.(*n10nWorkpiece)
-	for _, subscribedKey := range n10nWP.subscribedProjectionKeys {
-		if err := u.n10nBroker.Unsubscribe(n10nWP.channelID, subscribedKey); err != nil {
-			logger.Error(fmt.Sprintf("failed to unsubscribe key %s: %s", subscribedKey.ToJSON(), err))
-		}
+	if n10nWP.channelCleanup != nil {
+		n10nWP.channelCleanup()
 	}
 	return err
 }

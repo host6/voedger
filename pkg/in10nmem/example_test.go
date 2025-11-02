@@ -44,7 +44,7 @@ func Example() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 
-	broker, cleanup := in10nmem.ProvideEx2(quotasExample, timeu.NewITime())
+	broker, cleanup := in10nmem.NewN10nBroker(quotasExample, timeu.NewITime())
 	defer cleanup()
 
 	numChannels := broker.MetricNumChannels()
@@ -54,7 +54,7 @@ func Example() {
 
 	// Create new channel
 
-	channel, err := broker.NewChannel(subject, 24*time.Hour)
+	channel, channelCleanup, err := broker.NewChannel(subject, 24*time.Hour)
 	checkTrue(err == nil, err)
 	numChannels = broker.MetricNumChannels()
 	fmt.Println("After NewChannel(), numChannels:", numChannels)
@@ -98,6 +98,9 @@ func Example() {
 
 	// Wait until the watcher will be finished
 	wg.Wait()
+
+	// finalize the channel
+	channelCleanup()
 
 	// Check subscriptions, numSubscriptions must be equal 0
 	fmt.Println("Canceled, numSubscriptions: ", broker.MetricNumSubcriptions())

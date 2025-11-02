@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"github.com/gorilla/mux"
-	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/strconvu"
 
@@ -26,13 +25,14 @@ import (
 /*
 curl -G --data-urlencode "payload={\"SubjectLogin\": \"paa\", \"ProjectionKey\":[{\"App\":\"Application\",\"Projection\":\"paa.price\",\"WS\":1}, {\"App\":\"Application\",\"Projection\":\"paa.wine_price\",\"WS\":1}]}" https://alpha2.dev.untill.ru/n10n/channel -H "Content-Type: application/json"
 */
-func (s *httpService) subscribeAndWatchHandler(reqSender bus.IRequestSender) http.HandlerFunc {
+func (s *httpService) subscribeAndWatchHandler() http.HandlerFunc {
 	return func(rw http.ResponseWriter, req *http.Request) {
 		var (
-			urlParams in10nmem.CreateChannelParamsType
-			channel   in10n.ChannelID
-			flusher   http.Flusher
-			err       error
+			urlParams      in10nmem.CreateChannelParamsType
+			channel        in10n.ChannelID
+			channelCleanup func()
+			flusher        http.Flusher
+			err            error
 		)
 		rw.Header().Set("Content-Type", "text/event-stream")
 		rw.Header().Set("Cache-Control", "no-cache")
@@ -57,12 +57,13 @@ func (s *httpService) subscribeAndWatchHandler(reqSender bus.IRequestSender) htt
 			WriteTextResponse(rw, "streaming unsupported!", http.StatusInternalServerError)
 			return
 		}
-		channel, err = s.n10n.NewChannel(urlParams.SubjectLogin, hours24)
+		channel, channelCleanup, err = s.n10n.NewChannel(urlParams.SubjectLogin, hours24)
 		if err != nil {
 			logger.Error(err)
 			WriteTextResponse(rw, "create new channel failed: "+err.Error(), n10nErrorToStatusCode(err))
 			return
 		}
+		defer channelCleanup()
 		if _, err = fmt.Fprintf(rw, "event: channelId\ndata: %s\n\n", channel); err != nil {
 			logger.Error("failed to write created channel id to client:", err)
 			return

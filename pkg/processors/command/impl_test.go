@@ -104,8 +104,9 @@ func TestBasicUsage(t *testing.T) {
 	app := setUp(t, prepareWS)
 	defer tearDown(app)
 
-	channelID, err := app.n10nBroker.NewChannel("test", 24*time.Hour)
+	channelID, channelCleanup, err := app.n10nBroker.NewChannel("test", 24*time.Hour)
 	require.NoError(err)
+	defer channelCleanup()
 	projectionKey := in10n.ProjectionKey{
 		App:        istructs.AppQName_untill_airs_bp,
 		Projection: actualizers.PLogUpdatesQName,
@@ -746,7 +747,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), appStorageProvider, isequencer.SequencesTrustLevel_0)
 
 	secretReader := isecretsimpl.ProvideSecretReader()
-	n10nBroker, n10nBrokerCleanup := in10nmem.ProvideEx2(in10n.Quotas{
+	n10nBroker, n10nBrokerCleanup := in10nmem.NewN10nBroker(in10n.Quotas{
 		Channels:                1000,
 		ChannelsPerSubject:      10,
 		Subscriptions:           1000,
