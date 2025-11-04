@@ -1,3 +1,5 @@
 [AIR-2034] n10n: fix metrics accounting on double Subscribe() and Unsubscribe()
 
 https://untill.atlassian.net/browse/AIR-2034
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2034","branch_type":2}
