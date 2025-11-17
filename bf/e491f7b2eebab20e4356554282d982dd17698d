@@ -1,3 +1,5 @@
 [AIR-2138] voedger: try to use ci-action/go-setup action in ci_amazon.yml
 
 https://untill.atlassian.net/browse/AIR-2138
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2138","branch_type":2}
