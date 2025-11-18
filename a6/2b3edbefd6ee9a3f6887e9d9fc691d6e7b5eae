@@ -1,1 +1,3 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2153","branch_type":1}
+
+[AIR-2153] voedger: use golang 1.25, update deps
