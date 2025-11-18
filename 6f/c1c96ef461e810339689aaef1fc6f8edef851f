@@ -1,3 +1,5 @@
 [AIR-2140] use ci-action/Checkout and Setup Go action
 
 https://untill.atlassian.net/browse/AIR-2140
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2140","branch_type":2}
