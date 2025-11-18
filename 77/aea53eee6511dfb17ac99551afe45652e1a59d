@@ -1,3 +1,5 @@
 [AIR-2154] voedger: golang 1.25 in subfolders + update deps + use the last voedger
 
 https://untill.atlassian.net/browse/AIR-2154
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2154","branch_type":2}
