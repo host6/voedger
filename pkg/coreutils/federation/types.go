@@ -19,6 +19,7 @@ type implIFederation struct {
 	adminPortGetter    func() int
 	defaultReqOptFuncs []httpu.ReqOptFunc
 	vvmCtx             context.Context
+	policyForWithRetry PolicyForWithRetry
 }
 
 type OffsetsChan chan istructs.Offset
@@ -54,3 +55,5 @@ type FuncResponse struct {
 	QueryResponse
 	SysError error
 }
+
+type PolicyForWithRetry []httpu.RetryPolicyOpt
