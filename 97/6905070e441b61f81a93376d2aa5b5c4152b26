@@ -1,0 +1,1 @@
+[AIR-2312] voedger: use new ci.yml, ci_pr.yml instead of ci_reuse_go.yml and _ci_reuse_go_pr.yml
