@@ -1,3 +1,5 @@
 [AIR-2390] vmp: return the actual error on schemas compile failure
 
 https://untill.atlassian.net/browse/AIR-2390
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2390","branch_type":2}
