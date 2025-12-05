@@ -1,0 +1,1 @@
+[AIR-2211] stress tests are failed on Windows due of WSAECONNREFUSED
