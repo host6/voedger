@@ -1,3 +1,5 @@
 [AIR-2449] voedger: do not provide personal_token to ci-action/ci.yml
 
 https://untill.atlassian.net/browse/AIR-2449
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2449","branch_type":2}
