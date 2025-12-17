@@ -1,3 +1,5 @@
 [AIR-2529] voedger: get rid of unused personal_token arg for ci_pr.yml
 
 https://untill.atlassian.net/browse/AIR-2529
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2529","branch_type":2}
