@@ -1,3 +1,5 @@
 [AIR-2534] voedger: update github workflow readme.md: consider that personal_token is eliminated on ci_pr.yml call
 
 https://untill.atlassian.net/browse/AIR-2534
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2534","branch_type":2}
