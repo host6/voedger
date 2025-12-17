@@ -1,0 +1,1 @@
+[AIR-2529] voedger: get rid of unused personal_token arg for ci_pr.yml
