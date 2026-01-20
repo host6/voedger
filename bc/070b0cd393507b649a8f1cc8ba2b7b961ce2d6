@@ -1,3 +1,5 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2720","branch_type":1}
 
 [AIR-2720] Fix DurationType: make it amount of days, not sqrt(days)
+
+https://untill.atlassian.net/browse/AIR-2720
