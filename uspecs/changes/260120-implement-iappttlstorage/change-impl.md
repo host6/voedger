@@ -2,7 +2,7 @@
 
 ## Technical design
 
-- [ ] create: [storage/appttl--arch.md](../../specs/prod/storage/appttl--arch.md)
+- [x] create: [storage/appttl--arch.md](../../specs/prod/storage/appttl--arch.md)
   - Document Application TTL Storage subsystem architecture
   - Define IAppTTLStorage interface placement and relationship with ISysVvmStorage
   - Describe component hierarchy and data flow
