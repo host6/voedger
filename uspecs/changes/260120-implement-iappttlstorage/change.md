@@ -30,13 +30,13 @@ Implement the `IAppTTLStorage` interface in the voedger project to provide a wor
 ```go
 type IAppTTLStorage interface {
     // Get retrieves value by partition key and clustering column
-    Get(pk, cc string) (value string, exists bool)
+    Get(pk, cc string) (value string, exists bool, err errpr)
     // InsertIfNotExists inserts only if key doesn't exist
-    InsertIfNotExists(pk, cc, value string, ttlSeconds int) bool
+    InsertIfNotExists(pk, cc, value string, ttlSeconds int) (bool, error)
     // CompareAndSwap performs atomic update with TTL reset
-    CompareAndSwap(pk, cc, expectedValue, newValue string, ttlSeconds int) bool
+    CompareAndSwap(pk, cc, expectedValue, newValue string, ttlSeconds int) (bool, error)
     // CompareAndDelete performs atomic deletion with value verification
-    CompareAndDelete(pk, cc, expectedValue string) bool
+    CompareAndDelete(pk, cc, expectedValue string) (bool, error)
 }
 ```
 
@@ -56,5 +56,7 @@ Key features:
 
 - SysVvmStorage subsystem implements IAppTTLStorage as NewAppTTLStorage()
 - StructuredStorage subsystem returns IAppTTLStorage through IAppStructs.AppTTLStorage()
-  - implementation uses implementation from SysVvmStorage and preprends app-specific prefix to pk
+  - implementation uses implementation from SysVvmStorage and preprends app-specific prefix to pk:
+    - value of pKeyPrefix type dedicated to AppTTLStorage
+    - ClusterAppID of the provided application
 - New subsystem Application TTL storage should be architected

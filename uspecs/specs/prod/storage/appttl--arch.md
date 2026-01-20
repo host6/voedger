@@ -46,13 +46,13 @@ IAppTTLStorage (pkg/istructs):
 ```go
 type IAppTTLStorage interface {
     // Get retrieves value by partition key and clustering column
-    Get(pk, cc string) (value string, exists bool)
+    Get(pk, cc string) (value string, exists bool, err error)
     // InsertIfNotExists inserts only if key doesn't exist
-    InsertIfNotExists(pk, cc, value string, ttlSeconds int) bool
+    InsertIfNotExists(pk, cc, value string, ttlSeconds int) (bool, error)
     // CompareAndSwap performs atomic update with TTL reset
-    CompareAndSwap(pk, cc, expectedValue, newValue string, ttlSeconds int) bool
+    CompareAndSwap(pk, cc, expectedValue, newValue string, ttlSeconds int) (bool, error)
     // CompareAndDelete performs atomic deletion with value verification
-    CompareAndDelete(pk, cc, expectedValue string) bool
+    CompareAndDelete(pk, cc, expectedValue string) (bool, error)
 }
 ```
 
@@ -73,19 +73,13 @@ type ISysVvmStorage interface {
 Application isolation:
 
 - Each application gets isolated storage via app-specific prefix in partition key
-- Prefix format: `[pKeyPrefix_AppTTL][AppQName]` prepended to user-provided pk
+- Prefix format: `[pKeyPrefix_AppTTL][ClusterAppID]` prepended to user-provided pk
 - Prevents cross-application data access
 
 String-based interface:
 
 - IAppTTLStorage uses string keys/values for simplicity at application level
 - Implementation converts to bytes for ISysVvmStorage
-
-No error returns:
-
-- IAppTTLStorage methods return bool only (no error)
-- Errors are logged internally, failures return false
-- Simplifies application-level code
 
 ### Data flow
 
@@ -96,7 +90,7 @@ Write operation (InsertIfNotExists):
 2. AppTTLStorage prepends app prefix to pk
 3. Converts strings to bytes
 4. Calls ISysVvmStorage.InsertIfNotExists(prefixedPK, cc, value, ttl)
-5. Returns bool result
+5. Returns bool result and error (if happened)
 ```
 
 Read operation (Get):
@@ -106,7 +100,7 @@ Read operation (Get):
 2. AppTTLStorage prepends app prefix to pk
 3. Converts strings to bytes
 4. Calls ISysVvmStorage.Get(prefixedPK, cc, &data)
-5. Returns (string(data), exists)
+5. Returns (string(data), exists, error)
 ```
 
 ### Partition key prefix
@@ -114,15 +108,15 @@ Read operation (Get):
 New prefix constant in pkg/vvm/storage/consts.go:
 
 ```go
-const pKeyPrefix_AppTTL uint32 = 3 // After pKeyPrefix_VVMLeader(1) and pKeyPrefix_Sequencer(2)
+const pKeyPrefix_AppTTL pKeyPrefix = 4 // After pKeyPrefix_SeqStorage_WS(3)
 ```
 
 Full partition key structure:
 
 ```text
-[0-3]    uint32   pKeyPrefix_AppTTL (constant = 3)
-[4-...]  string   AppQName (e.g., "air")
-[...]    string   User-provided pk
+[0-3]    uint32   pKeyPrefix_AppTTL (constant = 4)
+[4-7]    uint32   ClusterAppID
+[8-...]  string   User-provided pk
 ```
 
 ### Integration points
