@@ -23,7 +23,7 @@ const (
 	workspaceQueryDelay                        = 30 * time.Millisecond
 	allowedGoroutinesNumDiff                   = 200
 	field_Input                                = "Input"
-	testEmailsAwaitingTimeout                  = 5 * time.Second
+	testEmailsAwaitingTimeout                  = 500 * time.Second
 	testTimeMillis                             = 1649667286774
 	testRegistryPartsNum                       = 2
 	testAppPartsNum                            = 5

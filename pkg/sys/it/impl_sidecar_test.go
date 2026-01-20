@@ -9,15 +9,18 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	it "github.com/voedger/voedger/pkg/vit"
 	"github.com/voedger/voedger/pkg/vvm"
 )
 
 func TestSidecarApps_BasicUsage(t *testing.T) {
+	logger.SetLogLevel(logger.LogLevelVerbose)
 	wd, err := os.Getwd()
 	require.NoError(t, err)
 	cfg := it.NewOwnVITConfig(
@@ -25,7 +28,6 @@ func TestSidecarApps_BasicUsage(t *testing.T) {
 			// configure VVM to read sidecar apps from /testdata
 			cfg.DataPath = filepath.Join(wd, "testdata")
 		}),
-
 	)
 
 	vit := it.NewVIT(t, &cfg)
@@ -58,5 +60,7 @@ func TestSidecarApps_BasicUsage(t *testing.T) {
 		resp := vit.PostWS(ws, "c.sidecartestapp.TestCmdEcho", body)
 		require.Equal(t, "hello, world", resp.CmdResult["Res"].(string))
 	})
+
+	time.Sleep(time.Hour)
 
 }

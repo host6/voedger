@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"strings"
 	"sync/atomic"
@@ -171,6 +172,8 @@ func (s *httpStorage) Read(key istructs.IStateKeyBuilder, callback istructs.Valu
 			statusCode: resStatus,
 		})
 	}
+
+	log.Println("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!s")
 
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()

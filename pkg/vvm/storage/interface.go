@@ -15,3 +15,5 @@ type ISysVvmStorage interface {
 	Put(pKey []byte, cCols []byte, value []byte) (err error)
 	PutBatch(batch []istorage.BatchItem) error
 }
+
+

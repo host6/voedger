@@ -16,6 +16,7 @@ WORKSPACE test2app1WS (
 	EXTENSION ENGINE WASM (
 		QUERY TestEcho(TestEchoRequest) RETURNS TestEchoResult;
 		COMMAND TestCmdEcho(TestEchoRequest) RETURNS TestEchoResult;
+		PROJECTOR ProjectorOnEcho AFTER EXECUTE ON (TestCmdEcho);
 	);
 
 	GRANT EXECUTE ON QUERY TestEcho TO sys.WorkspaceOwner;
