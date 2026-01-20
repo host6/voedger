@@ -13,6 +13,37 @@
   - Document SysView_TTL PK/CC layout: PK=[uint16:24][string:Bucket], CC=[string:Key], Value=[bytes:Value][int64:ExpireAt]
   - Add IAppTTLStorage to component hierarchy diagram
 
+## Instantiation flow
+
+```text
+VVM Startup
+    |
+    v
+IAppStorageProvider (Cassandra/BoltDB/mem)
+    |
+    v
+IAppStorageProvider.AppStorage(appQName)
+    |
+    v
+IAppStorage (per-app storage)
+    |
+    +---> ttl.New(IAppStorage, ITime)
+    |         |
+    |         v
+    |     IAppTTLStorage
+    |         |
+    v         v
+newAppStructs(appCfg, buckets, appTokens, appTTLStorage, ...)
+    |
+    v
+appStructsType
+    |
+    +---> AppTTLStorage() IAppTTLStorage
+    |
+    v
+Application code (device authorization endpoints)
+```
+
 ## Construction
 
 - [ ] update: [pkg/istructsmem/internal/consts/qnames.go](../../../pkg/istructsmem/internal/consts/qnames.go)
