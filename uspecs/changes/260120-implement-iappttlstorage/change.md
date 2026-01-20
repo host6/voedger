@@ -21,7 +21,7 @@ Without this interface implementation, the device linking feature cannot functio
 
 ## Background
 
-- [Link Device by Alpha Code](https://github.com/untillpro/airs-design/blob/main/uspecs/specs/prod/devices/link-device-acode--td.md#)
+- [Link Device by Alpha Code](https://github.com/untillpro/airs-design/blob/main/uspecs/specs/prod/devices/link-device-acode--td.md)
 
 ## Solution overview
 
