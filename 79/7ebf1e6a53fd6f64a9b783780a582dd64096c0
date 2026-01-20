@@ -1,1 +1,3 @@
 [AIR-2720] Fix DurationType: make it amount of days, not sqrt(days)
+
+https://untill.atlassian.net/browse/AIR-2720
