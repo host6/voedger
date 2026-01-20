@@ -27,17 +27,26 @@ Without this interface implementation, the device linking feature cannot functio
 
 Implement the `IAppTTLStorage` interface in the voedger project to provide a workspace-agnostic, in-memory TTL storage mechanism:
 
-- Core interface methods:
-  - Get(pk, cc string) (value string, exists bool) - Retrieve value by pk and key
-  - InsertIfNotExists(pk, cc, value string, ttlSeconds int) bool - Insert only if key doesn't exist
-  - CompareAndSwap(pk, cc, expectedValue, newValue string, ttlSeconds int) bool - Atomic update with TTL reset
-  - CompareAndDelete(pk, cc, expectedValue string) bool - Atomic deletion with value verification
-- Key features:
-  - Workspace-agnostic storage (global storage across all workspaces, isolation enforced at application level)
-  - Automatic expiration with background cleanup of expired entries
-  - Thread-safe operations with proper synchronization for concurrent access
-  - Memory-based non-persistent implementation for performance
-  - Atomic operations using compare-and-swap semantics
+```go
+type IAppTTLStorage interface {
+    // Get retrieves value by partition key and clustering column
+    Get(pk, cc string) (value string, exists bool)
+    // InsertIfNotExists inserts only if key doesn't exist
+    InsertIfNotExists(pk, cc, value string, ttlSeconds int) bool
+    // CompareAndSwap performs atomic update with TTL reset
+    CompareAndSwap(pk, cc, expectedValue, newValue string, ttlSeconds int) bool
+    // CompareAndDelete performs atomic deletion with value verification
+    CompareAndDelete(pk, cc, expectedValue string) bool
+}
+```
+
+Key features:
+
+- Workspace-agnostic storage (global storage across all workspaces, isolation enforced at application level)
+- Automatic expiration with background cleanup of expired entries
+- Thread-safe operations with proper synchronization for concurrent access
+- Memory-based non-persistent implementation for performance
+- Atomic operations using compare-and-swap semantics
 - Integration points:
   - Accessible via IAppStructs.AppTTLStorage() method
   - Used by device authorization endpoints (c.air.ACDeviceAuthorizationRequest, q.air.ACPollToken, c.air.ACApproveDevice)
@@ -45,7 +54,7 @@ Implement the `IAppTTLStorage` interface in the voedger project to provide a wor
 
 ## Approach
 
-- SysVvmStorage subsystem implements IAppTTLStorage over IAppStorage
-- IStructs.AppTTLStorage implement AppTTLStorage() so that it returns IAppTTLStorage
-  - Thi simplementations uses
-- Interface is implemented over ISysVvmStorage, similar to NewElectionsTTLStorage
+- SysVvmStorage subsystem implements IAppTTLStorage as NewAppTTLStorage()
+- StructuredStorage subsystem returns IAppTTLStorage through IAppStructs.AppTTLStorage()
+  - implementation uses implementation from SysVvmStorage and preprends app-specific prefix to pk
+- New subsystem Application TTL storage should be architected
