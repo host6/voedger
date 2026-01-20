@@ -6,27 +6,37 @@
   - Document Application TTL Storage subsystem architecture
   - Define IAppTTLStorage interface placement and relationship with ISysVvmStorage
   - Describe component hierarchy and data flow
-- [ ] review
+
+## Unclear
+
+- // TODO integration tests
 
 ## Construction
 
 - [ ] update: [pkg/istructs/interface.go](../../../pkg/istructs/interface.go)
-  - Add AppTTLStorage() method to IAppStructs interface returning IAppTTLStorage
-- [ ] create: [pkg/istructs/ttlstorage.go](../../../pkg/istructs/ttlstorage.go)
-  - Define IAppTTLStorage interface with Get, InsertIfNotExists, CompareAndSwap, CompareAndDelete methods
-- [ ] update: [pkg/vvm/storage/interface.go](../../../pkg/vvm/storage/interface.go)
-  - Add NewAppTTLStorage function signature or extend ISysVvmStorage if needed
+  - Add IAppTTLStorage interface definition with Get, InsertIfNotExists, CompareAndSwap, CompareAndDelete methods
+  - Add AppTTLStorage() method to IAppStructs interface
+- [ ] update: [pkg/vvm/storage/consts.go](../../../pkg/vvm/storage/consts.go)
+  - Add pKeyPrefix_AppTTL constant
 - [ ] create: [pkg/vvm/storage/impl_appttl.go](../../../pkg/vvm/storage/impl_appttl.go)
-  - Implement NewAppTTLStorage() that wraps ISysVvmStorage
-  - Prepend app-specific prefix to partition key
+  - Implement implAppTTLStorage struct wrapping ISysVvmStorage
+  - Add NewAppTTLStorage() constructor accepting ISysVvmStorage and appdef.AppQName
+  - Implement Get, InsertIfNotExists, CompareAndSwap, CompareAndDelete methods
+  - Build partition key with pKeyPrefix_AppTTL + AppQName + user pk
 - [ ] create: [pkg/vvm/storage/impl_appttl_test.go](../../../pkg/vvm/storage/impl_appttl_test.go)
-  - Unit tests for AppTTLStorage implementation
+  - Add unit tests for implAppTTLStorage
+- [ ] update: [pkg/vvm/storage/provide.go](../../../pkg/vvm/storage/provide.go)
+  - Add NewAppTTLStorage provider function
+- [ ] update: [pkg/istructsmem/provide.go](../../../pkg/istructsmem/provide.go)
+  - Add ISysVvmStorage parameter to Provide function
+  - Store sysVvmStorage in appStructsProviderType
 - [ ] update: [pkg/istructsmem/impl.go](../../../pkg/istructsmem/impl.go)
+  - Add sysVvmStorage field to appStructsProviderType
   - Add appTTLStorage field to appStructsType
-  - Implement AppTTLStorage() method
-- [ ] update: [pkg/istructsmem/appstruct-types.go](../../../pkg/istructsmem/appstruct-types.go)
-  - Add ttlStorage field to AppConfigType if needed for configuration
+  - Implement AppTTLStorage() method on appStructsType
+  - Create AppTTLStorage instance in newAppStructs using sysVvmStorage
 - [ ] update: [pkg/vvm/provide.go](../../../pkg/vvm/provide.go)
-  - Wire AppTTLStorage into VVM initialization
-  - Ensure IAppStructsProvider receives AppTTLStorage dependency
-- [ ] Review
+  - Update provideIAppStructsProvider to pass ISysVvmStorage to istructsmem.Provide
+- [ ] update: [pkg/vvm/wire_gen.go](../../../pkg/vvm/wire_gen.go)
+  - Regenerate wire bindings with updated provider signature
+- [ ] review
