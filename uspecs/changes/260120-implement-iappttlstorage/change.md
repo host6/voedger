@@ -19,6 +19,10 @@ The Air system requires a TTL (Time-To-Live) storage mechanism for temporary dat
 
 Without this interface implementation, the device linking feature cannot function properly.
 
+## Background
+
+- [Link Device by Alpha Code](https://github.com/untillpro/airs-design/blob/main/uspecs/specs/prod/devices/link-device-acode--td.md#)
+
 ## Solution overview
 
 Implement the IAppTTLStorage interface in the voedger project to provide a workspace-agnostic, in-memory TTL storage mechanism:

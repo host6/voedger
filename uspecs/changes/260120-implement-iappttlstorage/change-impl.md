@@ -1,5 +1,12 @@
 # Implementation: Implement IAppTTLStorage interface
 
+## Analysis
+
+- Two possible options
+  - Over ISysVvmStorage
+    - pros: separate controlled implementation
+  - Over IAppStorage
+
 ## Principles
 
 - Use SysView_TTL (24) as low-level system view backed by IAppStorage
