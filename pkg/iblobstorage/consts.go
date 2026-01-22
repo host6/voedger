@@ -7,6 +7,7 @@ package iblobstorage
 
 const (
 	DurationType_1Day  = DurationType(1)
+	DurationType_1Year = DurationType(365)
 	SUUIDRandomPartLen = 16
 	secondsInDay       = 86400
 )

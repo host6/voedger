@@ -28,8 +28,14 @@ func TestNewSUUID(t *testing.T) {
 }
 
 func TestDurationSeconds(t *testing.T) {
-	dt := DurationType(1)
-	require.Equal(t, 86400, dt.Seconds())
-	dt = DurationType(2)
-	require.Equal(t, 86400*2, dt.Seconds())
+	require := require.New(t)
+	t.Run("1 day", func(t *testing.T) {
+		require.Equal(86400, DurationType_1Day.Seconds())
+	})
+	t.Run("1 year", func(t *testing.T) {
+		require.Equal(86400*365, DurationType_1Year.Seconds())
+	})
+	t.Run("2 days", func(t *testing.T) {
+		require.Equal(86400*2, DurationType(2).Seconds())
+	})
 }

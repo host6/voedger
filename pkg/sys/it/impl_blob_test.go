@@ -280,48 +280,58 @@ func TestBasicUsage_Temporary(t *testing.T) {
 	vit := it.NewVIT(t, &it.SharedConfig_App1)
 	defer vit.TearDown()
 
+	cases := []struct {
+		name     string
+		duration iblobstorage.DurationType
+	}{
+		{"1d", iblobstorage.DurationType_1Day},
+		{"1y", iblobstorage.DurationType_1Year},
+	}
 	expBLOB := []byte{1, 2, 3, 4, 5}
-
 	ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
 
-	// write
-	// [~server.apiv2.tblobs/it.TestTBlobsCreate~impl]
-	blobSUUID := vit.UploadTempBLOB(istructs.AppQName_test1_app1, ws.WSID, "test", httpu.ContentType_ApplicationXBinary, expBLOB, iblobstorage.DurationType_1Day,
-		httpu.WithAuthorizeBy(ws.Owner.Token))
-	log.Println(blobSUUID)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
 
-	// read
-	// [~server.apiv2.blobs/it.TestTBlobsRead~impl]
-	blobReader := vit.ReadTempBLOB(istructs.AppQName_test1_app1, ws.WSID, blobSUUID, httpu.WithAuthorizeBy(ws.Owner.Token))
-	actualBLOBContent, err := io.ReadAll(blobReader)
-	require.NoError(err)
-	require.Equal(httpu.ContentType_ApplicationXBinary, blobReader.ContentType)
-	require.Equal("test", blobReader.Name)
-	require.Equal(expBLOB, actualBLOBContent)
+			// write
+			// [~server.apiv2.tblobs/it.TestTBlobsCreate~impl]
+			blobSUUID := vit.UploadTempBLOB(istructs.AppQName_test1_app1, ws.WSID, "test", httpu.ContentType_ApplicationXBinary, expBLOB, tc.duration,
+				httpu.WithAuthorizeBy(ws.Owner.Token))
+			log.Println(blobSUUID)
 
-	t.Run("expiration", func(t *testing.T) {
+			// read
+			// [~server.apiv2.blobs/it.TestTBlobsRead~impl]
+			blobReader := vit.ReadTempBLOB(istructs.AppQName_test1_app1, ws.WSID, blobSUUID, httpu.WithAuthorizeBy(ws.Owner.Token))
+			actualBLOBContent, err := io.ReadAll(blobReader)
+			require.NoError(err)
+			require.Equal(httpu.ContentType_ApplicationXBinary, blobReader.ContentType)
+			require.Equal("test", blobReader.Name)
+			require.Equal(expBLOB, actualBLOBContent)
 
-		// make the temp blob almost expired
-		vit.TimeAdd(time.Duration(iblobstorage.DurationType_1Day.Seconds()-1) * time.Second)
+			t.Run("expiration", func(t *testing.T) {
+				// make the temp blob almost expired
+				vit.TimeAdd(time.Duration(tc.duration.Seconds()-1) * time.Second)
 
-		// re-take the token because it is expired
-		ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+				// re-take the token because it is expired
+				ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
 
-		// check the temp blob still exists
-		blobReader := vit.ReadTempBLOB(istructs.AppQName_test1_app1, ws.WSID, blobSUUID, httpu.WithAuthorizeBy(ws.Owner.Token))
-		actualBLOBContent, err := io.ReadAll(blobReader)
-		require.NoError(err)
-		require.Equal(expBLOB, actualBLOBContent)
+				// check the temp blob still exists
+				blobReader := vit.ReadTempBLOB(istructs.AppQName_test1_app1, ws.WSID, blobSUUID, httpu.WithAuthorizeBy(ws.Owner.Token))
+				actualBLOBContent, err := io.ReadAll(blobReader)
+				require.NoError(err)
+				require.Equal(expBLOB, actualBLOBContent)
 
-		// cross the temp blob expiration instant
-		testingu.MockTime.Add(time.Second)
+				// cross the temp blob expiration instant
+				testingu.MockTime.Add(time.Second)
 
-		// check the temp blob is disappeared
-		vit.ReadTempBLOB(istructs.AppQName_test1_app1, ws.WSID, blobSUUID,
-			httpu.WithAuthorizeBy(ws.Owner.Token),
-			httpu.Expect404(),
-		)
-	})
+				// check the temp blob is disappeared
+				vit.ReadTempBLOB(istructs.AppQName_test1_app1, ws.WSID, blobSUUID,
+					httpu.WithAuthorizeBy(ws.Owner.Token),
+					httpu.Expect404(),
+				)
+			})
+		})
+	}
 }
 
 func TestTemporaryBLOBErrors(t *testing.T) {

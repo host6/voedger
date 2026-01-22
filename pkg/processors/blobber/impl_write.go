@@ -168,7 +168,7 @@ func validateQueryParams(_ context.Context, bw *blobWorkpiece) error {
 	if len(bw.ttl) > 0 {
 		duration, ttlSupported := federation.TemporaryBLOB_URLTTLToDurationLs[bw.ttl]
 		if !ttlSupported {
-			return errors.New(`"1d" is only supported for now for temporary blob ttl`)
+			return errors.New(`"1d", "1y" are only supported for now for temporary blob ttl`)
 		}
 		bw.duration = duration
 	}
