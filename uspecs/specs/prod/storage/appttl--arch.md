@@ -81,18 +81,22 @@ External components:
 type IAppTTLStorage interface {
     // Get retrieves value by key
     // Returns: value, exists, error
+    // Errors: ErrKeyEmpty, ErrKeyTooLong
     Get(key string) (value string, ok bool, err error)
 
     // InsertIfNotExists inserts only if key doesn't exist
     // Returns: true if inserted, false if key already exists
+    // Errors: ErrKeyEmpty, ErrKeyTooLong, ErrValueTooLong, ErrInvalidTTL
     InsertIfNotExists(key, value string, ttlSeconds int) (ok bool, err error)
 
     // CompareAndSwap performs atomic update with TTL reset
     // Returns: true if swapped, false if current value != expectedValue
+    // Errors: ErrKeyEmpty, ErrKeyTooLong, ErrValueTooLong, ErrInvalidTTL
     CompareAndSwap(key, expectedValue, newValue string, ttlSeconds int) (ok bool, err error)
 
     // CompareAndDelete performs atomic deletion with value verification
     // Returns: true if deleted, false if current value != expectedValue
+    // Errors: ErrKeyEmpty, ErrKeyTooLong, ErrValueTooLong
     CompareAndDelete(key, expectedValue string) (ok bool, err error)
 }
 ```
@@ -262,6 +266,32 @@ ok, err = ttlStorage.CompareAndSwap("alpha:ABC123", "device:XYZ789", "device:NEW
 // Atomic delete
 ok, err = ttlStorage.CompareAndDelete("alpha:ABC123", "device:NEW123")
 ```
+
+## Validation rules
+
+### Key validation
+
+- Key must not be empty
+- Key maximum length: 1024 bytes (UTF-8 encoded)
+- Key must contain only valid UTF-8 characters
+
+### Value validation
+
+- Value maximum length: 65536 bytes (64 KB, UTF-8 encoded)
+
+### TTL validation
+
+- TTL must be greater than 0 seconds
+- TTL maximum: 31536000 seconds (365 days)
+
+### Error handling
+
+Validation errors are returned immediately without accessing storage. The following errors can be returned:
+
+- `ErrKeyEmpty` - key is empty string
+- `ErrKeyTooLong` - key exceeds 1024 bytes
+- `ErrValueTooLong` - value exceeds 65536 bytes
+- `ErrInvalidTTL` - ttlSeconds <= 0 or > 31536000
 
 ## Limitations
 
