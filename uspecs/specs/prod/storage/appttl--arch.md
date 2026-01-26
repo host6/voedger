@@ -2,7 +2,7 @@
 
 ## Overview
 
-Application TTL Storage provides a key-value storage mechanism with automatic expiration (TTL - Time-To-Live) capabilities. It is designed for storing temporary data that should automatically expire after a specified duration, such as device authorization codes, temporary tokens, and other transient application state.
+Application TTL Storage provides a per-application key-value storage mechanism with automatic expiration (TTL - Time-To-Live) capabilities. It is designed for storing temporary data that should automatically expire after a specified duration, such as device authorization codes, temporary tokens, and other transient application state.
 
 Key characteristics:
 
@@ -50,7 +50,7 @@ Note: ISysVvmStorage is obtained from `iAppStorageProvider.AppStorage(istructs.A
 Feature components:
 
 - [IAppTTLStorage: interface](../../../../pkg/istructs/interface.go)
-  - Application-level TTL storage interface with Get, InsertIfNotExists, CompareAndSwap, CompareAndDelete methods
+  - Application-level TTL storage interface with TTLGet, InsertIfNotExists, CompareAndSwap, CompareAndDelete methods
   - Method on IAppStructs: `AppTTLStorage() IAppTTLStorage`
 
 - [implAppTTLStorage: struct](../../../../pkg/vvm/storage/impl_appttl.go)
@@ -66,7 +66,7 @@ External components:
 
 - [cachedAppStorage: struct](../../../../pkg/istoragecache/impl.go)
   - LRU cache layer wrapping IAppStorage
-  - Caches Get results, invalidates on Put/CompareAndSwap
+  - Caches TTLGet results, invalidates on Put/CompareAndSwap
   - Used by: ISysVvmStorage (as IAppStorage for sys/vvm)
 
 - [IAppStorage: interface](../../../../pkg/istorage/interface.go)
@@ -79,10 +79,10 @@ External components:
 
 ```go
 type IAppTTLStorage interface {
-    // Get retrieves value by key
+    // TTLGet retrieves value by key considering its TTL
     // Returns: value, exists, error
     // Errors: ErrKeyEmpty, ErrKeyTooLong
-    Get(key string) (value string, ok bool, err error)
+    TTLGet(key string) (value string, ok bool, err error)
 
     // InsertIfNotExists inserts only if key doesn't exist
     // Returns: true if inserted, false if key already exists
@@ -159,7 +159,7 @@ sequenceDiagram
     🎯TTL-->>App: ok, err
 ```
 
-### Get flow
+### TTLGet flow
 
 ```mermaid
 sequenceDiagram
@@ -169,10 +169,10 @@ sequenceDiagram
     participant 📦Sys as ISysVvmStorage
     participant ⚙️Store as IAppStorage
 
-    App->>🎯TTL: Get(key)
-    🎯TTL->>📦Impl: Get(key)
+    App->>🎯TTL: TTLGet(key)
+    🎯TTL->>📦Impl: TTLGet(key)
     📦Impl->>📦Impl: buildKeys(key)
-    📦Impl->>📦Sys: Get(pKey, cCols, &data)
+    📦Impl->>📦Sys: TTLGet(pKey, cCols, &data)
     📦Sys->>⚙️Store: TTLGet(pKey, cCols, &data)
     Note over ⚙️Store: Checks TTL expiration
     ⚙️Store-->>📦Sys: ok, err
@@ -185,11 +185,11 @@ sequenceDiagram
 
 ### Atomicity guarantees
 
-| Operation         | Scylla/Cassandra | BBolt       | In-Memory      |
-| ----------------- | ---------------- | ----------- | -------------- |
-| InsertIfNotExists | Atomic (LWT)     | Race window | Atomic (mutex) |
-| CompareAndSwap    | Atomic (LWT)     | Race window | Atomic (mutex) |
-| CompareAndDelete  | Atomic (LWT)     | Race window | Atomic (mutex) |
+| Operation         | Scylla/Cassandra | BBolt       | In-Memory      | DynamoDB    |
+| ----------------- | ---------------- | ----------- | -------------- | ----------- |
+| InsertIfNotExists | Atomic (LWT)     | Race window | Atomic (mutex) | Race window |
+| CompareAndSwap    | Atomic (LWT)     | Race window | Atomic (mutex) | Race window |
+| CompareAndDelete  | Atomic (LWT)     | Race window | Atomic (mutex) | Race window |
 
 **Scylla/Cassandra**: Uses Lightweight Transactions (LWT) with `IF NOT EXISTS` and `IF value = ?` clauses.
 
@@ -197,15 +197,16 @@ sequenceDiagram
 
 **In-Memory**: Uses mutex for thread-safety. Full atomicity guaranteed.
 
+**DynamoDB**: Uses read-then-write pattern without conditional expressions. Has race window between GetItem and PutItem/DeleteItem. Not recommended for production with high concurrency.
+
 ### TTL handling
 
-| Backend          | TTL Mechanism                      | Cleanup                   |
-| ---------------- | ---------------------------------- | ------------------------- |
-| Scylla/Cassandra | Server-side TTL                    | Automatic compaction      |
-| BBolt            | Stored with value, checked on read | Manual (not implemented)  |
-| In-Memory        | Stored with value, checked on read | Not cleaned (memory leak) |
-
-**Important**: `ISysVvmStorage.Get()` must call `IAppStorage.TTLGet()` (not `Get()`) to properly filter expired records in BBolt and In-Memory backends.
+| Backend          | TTL Mechanism                     | Cleanup                            |
+| ---------------- | --------------------------------- | ---------------------------------- |
+| Scylla/Cassandra | Server-side TTL                   | Automatic compaction               |
+| BBolt            | Checked on read                   | Background goroutine cleanup       |
+| In-Memory        | Checked on read                   | Not cleaned (memory leak in tests) |
+| DynamoDB         | Server-side TTL + checked on read | Automatic (up to 48h delay)        |
 
 ## Wiring and integration
 
@@ -218,6 +219,11 @@ provideIVVMAppTTLStorage (pkg/vvm/provide.go)
     |
     v
 ISysVvmStorage (from sys/vvm IAppStorage)
+    |
+    +-- cachedAppStorage (pkg/istoragecache) - LRU cache layer
+    |       |
+    |       v
+    |   IAppStorage (storage backend)
     |
     v
 provideIAppStructsProvider (pkg/vvm/provide.go)
@@ -252,7 +258,7 @@ if !ok {
 }
 
 // Retrieve mapping
-value, exists, err := ttlStorage.Get("alpha:ABC123")
+value, exists, err := ttlStorage.TTLGet("alpha:ABC123")
 if err != nil {
     return err
 }
@@ -293,12 +299,26 @@ Validation errors are returned immediately without accessing storage. The follow
 - `ErrValueTooLong` - value exceeds 65536 bytes
 - `ErrInvalidTTL` - ttlSeconds <= 0 or > 31536000
 
+### Why explicit validation is necessary
+
+The normal `IAppStorage` interface has no explicit validation for key/value sizes. Storage backends enforce their own limits at write time:
+
+- Cassandra/Scylla enforces 65535 bytes (64 KB) limit for keys due to 2-byte length field in serialization format
+- BBolt and In-Memory backends have no inherent size limits
+
+`IAppTTLStorage` uses explicit validation for several reasons:
+
+1. **Early error detection** - fail fast before network round-trip to storage
+2. **Consistent behavior** - same limits across all backends regardless of their inherent capabilities
+3. **Clear error messages** - application-level errors (`ErrKeyTooLong`) vs cryptic storage errors
+4. **Conservative limits** - 1024 bytes for keys is practical for typical use cases (device codes, tokens) while staying well under Cassandra's 64 KB limit
+
 ## Limitations
 
 1. **Partition overflow risk**: Each `[pKeyPrefix_AppTTL][ClusterAppID]` combination is a single partition. If too many keys are stored (>100K), consider bucket spreading.
 
-2. **Memory leak in test backends**: In-memory and BBolt backends do not clean up expired records. Acceptable for tests, not for long-running processes.
+2. **Memory leak in in-memory backend**: In-memory backend does not clean up expired records. Acceptable for tests, not for long-running processes.
 
-3. **BBolt atomicity**: BBolt has race conditions in atomic operations. Use Scylla/Cassandra for production.
+3. **BBolt and DynamoDB atomicity**: BBolt and DynamoDB have race conditions in atomic operations. Use Scylla/Cassandra for production.
 
 4. **No range queries**: The interface only supports point lookups by exact key. No prefix scans or range queries.

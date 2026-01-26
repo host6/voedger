@@ -29,8 +29,8 @@ Implement the `IAppTTLStorage` interface in the voedger project to provide a wor
 
 ```go
 type IAppTTLStorage interface {
-    // Get retrieves value by partition key and clustering column
-    Get(key string) (value string, exists bool, err errpr)
+    // TTLGet retrieves value by partition key and clustering column considering its TTL
+    TTLGet(key string) (value string, exists bool, err errpr)
     // InsertIfNotExists inserts only if key doesn't exist
     InsertIfNotExists(key, value string, ttlSeconds int) (bool, error)
     // CompareAndSwap performs atomic update with TTL reset
