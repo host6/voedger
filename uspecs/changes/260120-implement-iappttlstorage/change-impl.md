@@ -1,4 +1,4 @@
-# Implementation: Implement IAppTTLStorage interface
+# Implementation plan: Implement IAppTTLStorage interface
 
 ## Technical design
 
@@ -7,52 +7,37 @@
   - Define IAppTTLStorage interface placement and relationship with ISysVvmStorage
   - Describe component hierarchy and data flow
   - Define validation rules for key, value, and TTL parameters
-- [ ] review
 
 ## Construction
 
-- [ ] update: [pkg/istructs/interface.go](../../../pkg/istructs/interface.go)
-  - Add `IAppTTLStorage` interface definition with Get, InsertIfNotExists, CompareAndSwap, CompareAndDelete methods
+- [x] update: [pkg/istructs/interface.go](../../../pkg/istructs/interface.go)
+  - Add `IAppTTLStorage` interface with TTLGet, InsertIfNotExists, CompareAndSwap, CompareAndDelete methods
   - Add `AppTTLStorage() IAppTTLStorage` method to `IAppStructs` interface
-- [ ] update: [pkg/vvm/storage/consts.go](../../../pkg/vvm/storage/consts.go)
+  - Add `AppTTLStorageFactory` function type
+- [x] fix: [pkg/istructs/interface.go](../../../pkg/istructs/interface.go)
+  - Remove `ISysVvmStorage` interface (belongs to `pkg/vvm/storage` only)
+- [x] update: [pkg/vvm/storage/consts.go](../../../pkg/vvm/storage/consts.go)
   - Add `pKeyPrefix_AppTTL` constant (value 4)
-  - Add validation constants:
-    - `MaxKeyLength = 1024` (bytes)
-    - `MaxValueLength = 65536` (bytes, 64 KB)
-    - `MaxTTLSeconds = 31536000` (365 days)
-- [ ] create: [pkg/vvm/storage/errors.go](../../../pkg/vvm/storage/errors.go)
-  - Define validation errors:
-    - `ErrKeyEmpty` - key is empty string
-    - `ErrKeyTooLong` - key exceeds MaxKeyLength bytes
-    - `ErrValueTooLong` - value exceeds MaxValueLength bytes
-    - `ErrInvalidTTL` - ttlSeconds <= 0 or > MaxTTLSeconds
-- [ ] create: [pkg/vvm/storage/impl_appttl.go](../../../pkg/vvm/storage/impl_appttl.go)
-  - Implement `implAppTTLStorage` struct wrapping `ISysVvmStorage`
-  - Implement `buildKeys()` to construct partition key with `[pKeyPrefix_AppTTL][ClusterAppID]` and clustering columns from user key
-  - Implement `validateKey(key string) error` - validates key is non-empty, within length limit, valid UTF-8
-  - Implement `validateValue(value string) error` - validates value is within length limit
-  - Implement `validateTTL(ttlSeconds int) error` - validates ttlSeconds > 0 and <= MaxTTLSeconds
-  - Implement all `IAppTTLStorage` methods with validation before delegating to `ISysVvmStorage`
-- [ ] update: [pkg/vvm/storage/provide.go](../../../pkg/vvm/storage/provide.go)
-  - Add `NewAppTTLStorage(sysVVMStorage ISysVvmStorage, clusterAppID istructs.ClusterAppID) istructs.IAppTTLStorage` function
-- [ ] update: [pkg/istructsmem/provide.go](../../../pkg/istructsmem/provide.go)
-  - Add `sysVvmStorage storage.ISysVvmStorage` parameter to `Provide` function
-  - Pass `sysVvmStorage` to `appStructsProviderType`
-- [ ] update: [pkg/istructsmem/impl.go](../../../pkg/istructsmem/impl.go)
-  - Add `sysVvmStorage` field to `appStructsProviderType` struct
-  - Add `appTTLStorage` field to `appStructsType` struct
-  - Create `IAppTTLStorage` instance in `newAppStructs` using app's ClusterAppID
-  - Implement `AppTTLStorage()` method on `appStructsType`
-- [ ] update: [pkg/vvm/provide.go](../../../pkg/vvm/provide.go)
-  - Update `provideIAppStructsProvider` to accept and pass `ISysVvmStorage` parameter
-- [ ] create: [pkg/vvm/storage/impl_appttl_test.go](../../../pkg/vvm/storage/impl_appttl_test.go)
-  - Unit tests for `implAppTTLStorage` key building and method delegation
-  - Unit tests for validation:
-    - Test empty key returns `ErrKeyEmpty`
-    - Test key exceeding 1024 bytes returns `ErrKeyTooLong`
-    - Test value exceeding 65536 bytes returns `ErrValueTooLong`
-    - Test ttlSeconds = 0 returns `ErrInvalidTTL`
-    - Test ttlSeconds < 0 returns `ErrInvalidTTL`
-    - Test ttlSeconds > 31536000 returns `ErrInvalidTTL`
-    - Test valid inputs pass validation and delegate to storage
-- [ ] Review
+  - Add validation constants: `MaxKeyLength`, `MaxValueLength`, `MaxTTLSeconds`
+- [x] create: [pkg/vvm/storage/errors.go](../../../pkg/vvm/storage/errors.go)
+  - Define validation errors: `ErrKeyEmpty`, `ErrKeyTooLong`, `ErrValueTooLong`, `ErrInvalidTTL`
+- [x] create: [pkg/vvm/storage/impl_appttl.go](../../../pkg/vvm/storage/impl_appttl.go)
+  - Implement `implAppTTLStorage` struct wrapping `ISysVvmStorage` from local package
+  - Implement buildKeys, validation methods, and all IAppTTLStorage methods
+- [x] update: [pkg/vvm/storage/provide.go](../../../pkg/vvm/storage/provide.go)
+  - Add `NewAppTTLStorage` factory function
+- [x] update: [pkg/istructsmem/provide.go](../../../pkg/istructsmem/provide.go)
+  - Add `appTTLStorageFactory` parameter to `Provide` function
+- [x] update: [pkg/istructsmem/impl.go](../../../pkg/istructsmem/impl.go)
+  - Add `appTTLStorageFactory` field to `appStructsProviderType`
+  - Add `appTTLStorage` field to `appStructsType`
+  - Implement `AppTTLStorage()` method
+- [x] update: [pkg/vvm/provide.go](../../../pkg/vvm/provide.go)
+  - Update `provideIAppStructsProvider` to create factory capturing `sysVvmStorage`
+- [x] regenerate: [pkg/vvm/wire_gen.go](../../../pkg/vvm/wire_gen.go)
+  - Run Wire to regenerate dependency injection
+- [x] create: [pkg/vvm/storage/impl_appttl_test.go](../../../pkg/vvm/storage/impl_appttl_test.go)
+  - Test validation errors and operations with expiration using `testingu.MockTime.Add()`
+- [x] update: test files calling `istructsmem.Provide()`
+  - Add `nil` parameter for `appTTLStorageFactory`
+- [x] review
