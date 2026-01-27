@@ -6,6 +6,7 @@ package storage
 
 import (
 	"encoding/binary"
+	"fmt"
 	"unicode/utf8"
 
 	"github.com/voedger/voedger/pkg/istructs"
@@ -75,27 +76,27 @@ func (s *implAppTTLStorage) buildKeys(key string) (pKey, cCols []byte) {
 
 func (s *implAppTTLStorage) validateKey(key string) error {
 	if key == "" {
-		return ErrKeyEmpty
+		return fmt.Errorf("%w: %w", ErrAppTTLValidation, ErrKeyEmpty)
 	}
 	if len(key) > MaxKeyLength {
-		return ErrKeyTooLong
+		return fmt.Errorf("%w: %w", ErrAppTTLValidation, ErrKeyTooLong)
 	}
 	if !utf8.ValidString(key) {
-		return ErrKeyTooLong
+		return fmt.Errorf("%w: %w", ErrAppTTLValidation, ErrKeyTooLong)
 	}
 	return nil
 }
 
 func (s *implAppTTLStorage) validateValue(value string) error {
 	if len(value) > MaxValueLength {
-		return ErrValueTooLong
+		return fmt.Errorf("%w: %w", ErrAppTTLValidation, ErrValueTooLong)
 	}
 	return nil
 }
 
 func (s *implAppTTLStorage) validateTTL(ttlSeconds int) error {
 	if ttlSeconds <= 0 || ttlSeconds > MaxTTLSeconds {
-		return ErrInvalidTTL
+		return fmt.Errorf("%w: %w", ErrAppTTLValidation, ErrInvalidTTL)
 	}
 	return nil
 }

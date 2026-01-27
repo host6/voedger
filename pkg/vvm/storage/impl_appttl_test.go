@@ -139,38 +139,47 @@ func TestAppTTLStorage_Validation(t *testing.T) {
 
 	t.Run("empty key", func(t *testing.T) {
 		_, err := ttlStorage.InsertIfNotExists("", "value", testTTLSeconds)
+		require.ErrorIs(err, ErrAppTTLValidation)
 		require.ErrorIs(err, ErrKeyEmpty)
 
 		_, _, err = ttlStorage.TTLGet("")
+		require.ErrorIs(err, ErrAppTTLValidation)
 		require.ErrorIs(err, ErrKeyEmpty)
 
 		_, err = ttlStorage.CompareAndSwap("", "old", "new", testTTLSeconds)
+		require.ErrorIs(err, ErrAppTTLValidation)
 		require.ErrorIs(err, ErrKeyEmpty)
 
 		_, err = ttlStorage.CompareAndDelete("", "value")
+		require.ErrorIs(err, ErrAppTTLValidation)
 		require.ErrorIs(err, ErrKeyEmpty)
 	})
 
 	t.Run("key too long", func(t *testing.T) {
 		longKey := string(make([]byte, MaxKeyLength+1))
 		_, err := ttlStorage.InsertIfNotExists(longKey, "value", testTTLSeconds)
+		require.ErrorIs(err, ErrAppTTLValidation)
 		require.ErrorIs(err, ErrKeyTooLong)
 	})
 
 	t.Run("value too long", func(t *testing.T) {
 		longValue := string(make([]byte, MaxValueLength+1))
 		_, err := ttlStorage.InsertIfNotExists("key", longValue, testTTLSeconds)
+		require.ErrorIs(err, ErrAppTTLValidation)
 		require.ErrorIs(err, ErrValueTooLong)
 	})
 
 	t.Run("invalid TTL", func(t *testing.T) {
 		_, err := ttlStorage.InsertIfNotExists("key", "value", 0)
+		require.ErrorIs(err, ErrAppTTLValidation)
 		require.ErrorIs(err, ErrInvalidTTL)
 
 		_, err = ttlStorage.InsertIfNotExists("key", "value", -1)
+		require.ErrorIs(err, ErrAppTTLValidation)
 		require.ErrorIs(err, ErrInvalidTTL)
 
 		_, err = ttlStorage.InsertIfNotExists("key", "value", MaxTTLSeconds+1)
+		require.ErrorIs(err, ErrAppTTLValidation)
 		require.ErrorIs(err, ErrInvalidTTL)
 	})
 }
