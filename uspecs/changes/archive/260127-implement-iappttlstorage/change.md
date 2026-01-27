@@ -2,6 +2,7 @@
 uspecs.registered_at: 2026-01-20T00:35:10Z
 uspecs.change_id: 260120-implement-iappttlstorage
 uspecs.baseline: c7f58fd212601dc8106dd7fa68a7f22e31d87017
+archived_at: 2026-01-27T14:51:17Z
 ---
 
 # Change request: Implement IAppTTLStorage interface
