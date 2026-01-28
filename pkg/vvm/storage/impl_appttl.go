@@ -23,7 +23,7 @@ func (s *implAppTTLStorage) TTLGet(key string) (value string, ok bool, err error
 	}
 	pKey, cCols := s.buildKeys(key)
 	var data []byte
-	ok, err = s.sysVVMStorage.Get(pKey, cCols, &data)
+	ok, err = s.sysVVMStorage.TTLGet(pKey, cCols, &data)
 	if err != nil || !ok {
 		return "", ok, err
 	}
@@ -68,8 +68,8 @@ func (s *implAppTTLStorage) CompareAndDelete(key, expectedValue string) (ok bool
 
 func (s *implAppTTLStorage) buildKeys(key string) (pKey, cCols []byte) {
 	pKey = make([]byte, 8)
-	binary.BigEndian.PutUint32(pKey[0:4], uint32(pKeyPrefix_AppTTL))
-	binary.BigEndian.PutUint32(pKey[4:8], uint32(s.clusterAppID))
+	binary.BigEndian.PutUint32(pKey[0:4], pKeyPrefix_AppTTL)
+	binary.BigEndian.PutUint32(pKey[4:8], s.clusterAppID)
 	cCols = []byte(key)
 	return pKey, cCols
 }
