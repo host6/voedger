@@ -2,6 +2,7 @@
 registered_at: 2026-01-28T07:40:47Z
 change_id: 260128-add-ttlget-to-isysvvmstorage
 baseline: 131ee4b938a06cad88c47c9b9bec590457bb17cf
+archived_at: 2026-01-28T07:51:42Z
 ---
 
 # Add TTLGet to ISysVvmStorage
