@@ -1,3 +1,5 @@
 [AIR-2902] sys.vsql: fix BLOBUploader grant
 
 https://untill.atlassian.net/browse/AIR-2902
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2902","branch_type":2,"description":"sys.vsql: fix BLOBUploader grant"}
