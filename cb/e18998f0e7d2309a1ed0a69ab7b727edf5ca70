@@ -1,0 +1,1 @@
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-2956","branch_type":1,"description":"magic-menu-duplicates: voedger: Replace 10-second bus timeout error with monitoring (1 min warning, 2 min critical)"}
