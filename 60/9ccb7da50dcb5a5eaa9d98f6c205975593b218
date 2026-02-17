@@ -1,0 +1,1 @@
+[AIR-2956] magic-menu-duplicates: voedger: Replace 10-second bus timeout error with monitoring (1 min warning, 2 min critical)
