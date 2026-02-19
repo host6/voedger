@@ -1,3 +1,5 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-1629","branch_type":1,"description":"Voedger/parser: inappropriate error on missing clustering key columns in view"}
 
 [AIR-1629] Voedger/parser: inappropriate error on missing clustering key columns in view
+
+https://untill.atlassian.net/browse/AIR-1629
