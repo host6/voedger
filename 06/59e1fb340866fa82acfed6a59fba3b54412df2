@@ -1,1 +1,3 @@
 {"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-3004","branch_type":1,"description":"link-alpha-code: add WSID and ClusterURL fields to LinkDeviceToken"}
+
+[AIR-3004] link-alpha-code: add WSID and ClusterURL fields to LinkDeviceToken
