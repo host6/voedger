@@ -5,3 +5,5 @@ pull,
 "origin",
 
 mainBranch,
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"","branch_type":1,"description":"pull, \"--rebase\", \"origin\", mainBranch,"}
