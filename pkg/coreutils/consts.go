@@ -11,6 +11,7 @@ import (
 
 const (
 	BlobName                      = "Blob-Name"
+	BlobSize                      = "X-BLOB-Size"
 	CRC16Mask                     = uint32(math.MaxUint32 >> 16)
 	EmailTemplatePrefix_Text      = "text:"
 	emailTemplatePrefix_Resource  = "resource:"

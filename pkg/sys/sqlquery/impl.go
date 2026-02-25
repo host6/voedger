@@ -15,20 +15,23 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
+	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/dml"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/strconvu"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
+	blobprocessor "github.com/voedger/voedger/pkg/processors/blobber"
 	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/authnz"
 )
 
-func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.ITokens) func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
+func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.ITokens, blobHandler *blobprocessor.IRequestHandler, requestHandler *bus.RequestHandler, tm timeu.ITime) func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 	return func(ctx context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 
 		query := args.ArgumentObject.AsString(field_Query)
@@ -107,25 +110,45 @@ func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.I
 		s := stmt.(*sqlparser.Select)
 
 		f := &filter{fields: make(map[string]bool)}
+		var blobFuncs []blobFuncDesc
 		for _, intf := range s.SelectExprs {
 			switch expr := intf.(type) {
 			case *sqlparser.StarExpr:
 				f.acceptAll = true
 			case *sqlparser.AliasedExpr:
-				column := expr.Expr.(*sqlparser.ColName)
-				if !column.Qualifier.Name.IsEmpty() {
-					f.fields[fmt.Sprintf("%s.%s", column.Qualifier.Name, column.Name)] = true
-				} else {
-					f.fields[column.Name.String()] = true
+				switch colExpr := expr.Expr.(type) {
+				case *sqlparser.ColName:
+					if !colExpr.Qualifier.Name.IsEmpty() {
+						f.fields[fmt.Sprintf("%s.%s", colExpr.Qualifier.Name, colExpr.Name)] = true
+					} else {
+						f.fields[colExpr.Name.String()] = true
+					}
+				case *sqlparser.FuncExpr:
+					bf, err := parseBlobFuncExpr(colExpr)
+					if err != nil {
+						return coreutils.NewHTTPError(http.StatusBadRequest, err)
+					}
+					blobFuncs = append(blobFuncs, bf)
+				default:
+					return coreutils.NewHTTPErrorf(http.StatusBadRequest, "unsupported select expression: %T", colExpr)
 				}
 			}
 		}
+
+		hasBlobFuncs := len(blobFuncs) > 0
 
 		var whereExpr sqlparser.Expr
 		if s.Where == nil {
 			whereExpr = nil
 		} else {
 			whereExpr = s.Where.Expr
+		}
+
+		// Validate blob function constraints
+		if hasBlobFuncs {
+			if whereExpr != nil {
+				return coreutils.NewHTTPErrorf(http.StatusBadRequest, "WHERE clause is not allowed with blobinfo/blobtext functions")
+			}
 		}
 
 		table := s.From[0].(*sqlparser.AliasedTableExpr).Expr.(sqlparser.TableName)
@@ -166,8 +189,74 @@ func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.I
 			if op.EntityID > 0 {
 				return errors.New("ID must not be specified on select from view")
 			}
+			if hasBlobFuncs {
+				return coreutils.NewHTTPErrorf(http.StatusBadRequest, "blob functions are not supported on views")
+			}
 			return readViewRecords(ctx, wsID, appdef.NewQName(table.Qualifier.String(), table.Name.String()), whereExpr, appStructs, f, callback)
 		case appdef.TypeKind_CDoc, appdef.TypeKind_CRecord, appdef.TypeKind_WDoc, appdef.TypeKind_ODoc, appdef.TypeKind_ORecord:
+			if hasBlobFuncs {
+				isSingleton := false
+				if iSingleton, ok := appStructs.AppDef().Type(source).(appdef.ISingleton); ok {
+					isSingleton = iSingleton.Singleton()
+				}
+				if !isSingleton && op.EntityID == 0 {
+					return coreutils.NewHTTPErrorf(http.StatusBadRequest, "blob functions require a document ID or a singleton")
+				}
+
+				// Get the auth token for blob reads
+				subjKB, err := args.State.KeyBuilder(sys.Storage_RequestSubject, appdef.NullQName)
+				if err != nil {
+					// notest
+					return err
+				}
+				subj, err := args.State.MustExist(subjKB)
+				if err != nil {
+					// notest
+					return err
+				}
+				token := subj.AsString(sys.Storage_RequestSubject_Field_Token)
+
+				// Determine the record ID for blob functions
+				recordID := istructs.RecordID(op.EntityID)
+				if isSingleton && recordID == 0 {
+					// For singletons, get the record to find its ID
+					singletonRec, err := appStructs.Records().GetSingleton(wsID, source)
+					if err != nil {
+						// notest
+						return err
+					}
+					recordID = singletonRec.ID()
+				}
+
+				// Execute blob functions
+				blobResults, err := executeBlobFunctions(ctx, blobFuncs, blobHandler, requestHandler,
+					args.State.App(), wsID, source, recordID, token, tm)
+				if err != nil {
+					return coreutils.WrapSysError(err, http.StatusInternalServerError)
+				}
+
+				// If there are regular fields or acceptAll, also read the record
+				if len(f.fields) > 0 || f.acceptAll {
+					// Use a wrapping callback that merges blob results into the record data
+					wrappedCallback := func(obj istructs.IObject) error {
+						recJSON := obj.AsString("")
+						merged, err := mergeJSONWithBlobResults(recJSON, blobResults)
+						if err != nil {
+							return err
+						}
+						return callback(&result{value: merged})
+					}
+					return coreutils.WrapSysError(readRecords(wsID, source, whereExpr, appStructs, f, wrappedCallback, istructs.RecordID(op.EntityID)),
+						http.StatusBadRequest)
+				}
+
+				// Only blob functions, no regular fields — return blob results only
+				resultJSON, err := blobFuncResultToJSON(blobResults)
+				if err != nil {
+					return err
+				}
+				return callback(&result{value: resultJSON})
+			}
 			return coreutils.WrapSysError(readRecords(wsID, source, whereExpr, appStructs, f, callback, istructs.RecordID(op.EntityID)),
 				http.StatusBadRequest)
 		default:

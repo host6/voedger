@@ -372,10 +372,11 @@ func provideAppsExtensionPoints(vvmConfig *VVMConfig) map[appdef.AppQName]extens
 
 func provideStatelessResources(cfgs AppConfigsTypeEmpty, vvmCfg *VVMConfig, appEPs map[appdef.AppQName]extensionpoints.IExtensionPoint,
 	buildInfo *debug.BuildInfo, sp istorage.IAppStorageProvider, itokens itokens.ITokens, federation federation.IFederation,
-	asp istructs.IAppStructsProvider, atf payloads.IAppTokensFactory) istructsmem.IStatelessResources {
+	asp istructs.IAppStructsProvider, atf payloads.IAppTokensFactory,
+	blobHandlerPtr *blobprocessor.IRequestHandler, requestHandlerPtr *bus.RequestHandler) istructsmem.IStatelessResources {
 	ssr := istructsmem.NewStatelessResources()
 	sysprovide.ProvideStateless(ssr, vvmCfg.SMTPConfig, appEPs, buildInfo, sp, vvmCfg.WSPostInitFunc, vvmCfg.Time, itokens, federation,
-		asp, atf)
+		asp, atf, blobHandlerPtr, requestHandlerPtr)
 	return ssr
 }
 
