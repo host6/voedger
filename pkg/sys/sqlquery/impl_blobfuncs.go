@@ -135,16 +135,8 @@ func executeBlobRead(
 		return contentWriter
 	}
 
-	errorResponder := func(statusCode int, args ...interface{}) {
-		if len(args) > 0 {
-			if errVal, ok := args[0].(error); ok {
-				blobErr = errVal
-			} else {
-				blobErr = fmt.Errorf("blob read error: status %d: %v", statusCode, args[0])
-			}
-		} else {
-			blobErr = fmt.Errorf("blob read error: status %d", statusCode)
-		}
+	errorResponder := func(sysErr coreutils.SysError) {
+		blobErr = fmt.Errorf("blob read error: %w", sysErr)
 	}
 
 	ok := blobHandler.HandleRead_V2(appQName, wsid, header, ctx,
@@ -162,7 +154,6 @@ func executeBlobRead(
 	infoMap := map[string]interface{}{
 		"name":     capturedHeaders[coreutils.BlobName],
 		"mimetype": capturedHeaders[httpu.ContentType],
-		"status":   "completed",
 	}
 	if sizeStr, ok := capturedHeaders[coreutils.BlobSize]; ok {
 		if size, parseErr := strconvu.ParseUint64(sizeStr); parseErr == nil {
