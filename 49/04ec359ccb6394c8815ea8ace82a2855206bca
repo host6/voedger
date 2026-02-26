@@ -1,0 +1,5 @@
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-3092","branch_type":1,"description":"blob processor: emit Content-Length header on blob read"}
+
+[AIR-3092] blob processor: emit Content-Length header on blob read
+
+https://untill.atlassian.net/browse/AIR-3092
