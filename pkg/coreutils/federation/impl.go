@@ -19,6 +19,7 @@ import (
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/iblobstorage"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -137,10 +138,16 @@ func (f *implIFederation) ReadBLOB(appQName appdef.AppQName, wsid istructs.WSID,
 	if resp.HTTPResp.StatusCode != http.StatusOK {
 		return iblobstorage.BLOBReader{}, nil
 	}
+	contentLength, err := strconvu.ParseUint64(resp.HTTPResp.Header.Get(httpu.ContentLength))
+	if err != nil {
+		// notest
+		return res, err
+	}
 	res = iblobstorage.BLOBReader{
 		DescrType: iblobstorage.DescrType{
-			Name:        resp.HTTPResp.Header.Get(coreutils.BlobName),
-			ContentType: resp.HTTPResp.Header.Get(httpu.ContentType),
+			Name:          resp.HTTPResp.Header.Get(coreutils.BlobName),
+			ContentType:   resp.HTTPResp.Header.Get(httpu.ContentType),
+			ContentLength: contentLength,
 		},
 		ReadCloser: resp.HTTPResp.Body,
 	}
@@ -157,10 +164,16 @@ func (f *implIFederation) ReadTempBLOB(appQName appdef.AppQName, wsid istructs.W
 	if resp.HTTPResp.StatusCode != http.StatusOK {
 		return iblobstorage.BLOBReader{}, nil
 	}
+	contentLength, err := strconvu.ParseUint64(resp.HTTPResp.Header.Get(httpu.ContentLength))
+	if err != nil {
+		// notest
+		return res, err
+	}
 	res = iblobstorage.BLOBReader{
 		DescrType: iblobstorage.DescrType{
-			Name:        resp.HTTPResp.Header.Get(coreutils.BlobName),
-			ContentType: resp.HTTPResp.Header.Get(httpu.ContentType),
+			Name:          resp.HTTPResp.Header.Get(coreutils.BlobName),
+			ContentType:   resp.HTTPResp.Header.Get(httpu.ContentType),
+			ContentLength: contentLength,
 		},
 		ReadCloser: resp.HTTPResp.Body,
 	}

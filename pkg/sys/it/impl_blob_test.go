@@ -68,6 +68,7 @@ func TestBasicUsage_Persistent(t *testing.T) {
 	actualBLOBContent, err := io.ReadAll(blobReader)
 	require.NoError(err)
 	require.Equal(httpu.ContentType_ApplicationXBinary, blobReader.ContentType)
+	require.Equal(5, blobReader.ContentType)
 	require.Equal("test", blobReader.Name)
 	require.Equal(expBLOB, actualBLOBContent)
 
