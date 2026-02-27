@@ -447,12 +447,19 @@ func requestHandlerV2_table(reqSender bus.IRequestSender, apiPath processors.API
 }
 
 func sendRequestAndReadResponse(req *http.Request, busRequest bus.Request, reqSender bus.IRequestSender, rw http.ResponseWriter) {
+	reqCtxWithExtensionAttrib := logger.WithContextAttrs(req.Context(), logger.LogAttr_Extension, busRequest.Resource)
+
 	// req's BaseContext is router service's context. See service.Start()
 	// router app closing or client disconnected -> req.Context() is done
 	// will create new cancellable context and cancel it if http section send is failed.
 	// requestCtx.Done() -> SendRequest implementation will notify the handler that the consumer has left us
-	requestCtx, cancel := context.WithCancel(req.Context())
+	requestCtx, cancel := context.WithCancel(reqCtxWithExtensionAttrib)
 	defer cancel() // to avoid context leak
+
+	if logger.IsVerbose() {
+		logger.VerboseCtx(requestCtx, req.URL)
+	}
+
 	respCh, respMeta, respErr, err := reqSender.SendRequest(requestCtx, busRequest)
 	if err != nil {
 		logger.Error("sending request to VVM on", busRequest.QName, "is failed:", err, ". Body:\n", string(busRequest.Body))

@@ -36,7 +36,12 @@ func withValidate(numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspac
 		if !ok {
 			return
 		}
-		handler(req, rw, data)
+		newReqID := reqID.Add(1)
+		logCtx := logger.WithContextAttrs(req.Context(), logger.LogAttr_ReqID, newReqID)
+		logCtx = logger.WithContextAttrs(logCtx, logger.LogAttr_WSID, data.wsid)
+		logCtx = logger.WithContextAttrs(logCtx, logger.LogAttr_VApp, data.appQName)
+		reqWithSLogAttribs := req.WithContext(logCtx)
+		handler(reqWithSLogAttribs, rw, data)
 	}
 }
 

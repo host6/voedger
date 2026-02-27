@@ -6,6 +6,7 @@
 package router
 
 import (
+	"sync/atomic"
 	"time"
 )
 
@@ -51,6 +52,7 @@ const (
 
 var (
 	onRequestCtxClosed func() = nil // used in tests
+	reqID                     = atomic.Uint64{}
 )
 
 const (
