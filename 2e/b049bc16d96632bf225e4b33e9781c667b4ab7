@@ -1,0 +1,5 @@
+[AIR-3091] fix bbolt TTL handling
+
+https://untill.atlassian.net/browse/AIR-3091
+
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-3091","branch_type":2,"description":"fix bbolt TTL handling"}
