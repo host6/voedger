@@ -559,7 +559,7 @@ func (vit *VIT) satisfySysErrorExpectations(funcResp *federation.FuncResponse, o
 	index := 0
 	for _, expectedMes := range vitOpts.expectedMessages {
 		require.Containsf(vit.T, sysError.Message[index:], expectedMes, `actual message "%s", ordered expected %#v`, sysError.Message, vitOpts.expectedMessages)
-		index = strings.Index(sysError.Message[indqs uex:], expectedMes) + len(expectedMes)
+		index = strings.Index(sysError.Message[index:], expectedMes) + len(expectedMes)
 	}
 }
 

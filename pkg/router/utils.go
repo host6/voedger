@@ -6,6 +6,7 @@
 package router
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -19,6 +20,7 @@ import (
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/istructs"
 )
@@ -134,4 +136,18 @@ func createBusRequest(data validatedData, req *http.Request) bus.Request {
 		res.Query[k] = v[0]
 	}
 	return res
+}
+
+func withLogAttribs(ctx context.Context, data validatedData, resource string) context.Context {
+	newReqID := reqID.Add(1)
+	logCtx := logger.WithContextAttrs(ctx, logger.LogAttr_ReqID, newReqID)
+	logCtx = logger.WithContextAttrs(logCtx, logger.LogAttr_WSID, data.wsid)
+	logCtx = logger.WithContextAttrs(logCtx, logger.LogAttr_VApp, data.appQName)
+	return logger.WithContextAttrs(logCtx, logger.LogAttr_Extension, resource)
+}
+
+func logServeRequest(ctx context.Context, req *http.Request) {
+	if logger.IsVerbose() {
+		logger.VerboseCtx(ctx, req.URL, ", origin ", req.Header.Get(httpu.Origin))
+	}
 }
