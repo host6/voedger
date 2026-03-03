@@ -1,0 +1,5 @@
+{"version":"1.0","github_issue_url":"","jira_ticket_url":"https://untill.atlassian.net/browse/AIR-3129","branch_type":1,"description":"sqlquery: recover correct case in parsed field names"}
+
+[AIR-3129] sqlquery: recover correct case in parsed field names
+
+https://untill.atlassian.net/browse/AIR-3129
