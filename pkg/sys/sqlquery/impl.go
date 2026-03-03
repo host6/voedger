@@ -109,7 +109,7 @@ func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.I
 
 		table := s.From[0].(*sqlparser.AliasedTableExpr).Expr.(sqlparser.TableName)
 		sourceTableName := recoverTableName(appStructs.AppDef(), appdef.NewQName(table.Qualifier.String(), table.Name.String()))
-		sourceTableQName, _ := appStructs.AppDef().Type(sourceTableName).(appdef.IWithFields)
+		sourceTableType := appStructs.AppDef().Type(sourceTableName)
 
 		f := &filter{fields: make(map[string]bool)}
 		for _, intf := range s.SelectExprs {
@@ -124,7 +124,10 @@ func provideExecQrySQLQuery(federation federation.IFederation, itokens itokens.I
 				} else {
 					fieldName = column.Name.String()
 				}
-				fieldName = recoverFieldName(sourceTableQName, fieldName)
+				if sourceTableType.QName() != appdef.NullQName { // null if e.g. sys.plog, sys.wlog
+					fieldName = recoverFieldName(sourceTableType.(appdef.IWithFields), fieldName)
+				}
+
 				f.fields[fieldName] = true
 			}
 		}
