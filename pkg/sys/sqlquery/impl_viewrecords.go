@@ -20,8 +20,17 @@ func readViewRecords(ctx context.Context, wsid istructs.WSID, viewRecordQName ap
 	view := appdef.View(appStructs.AppDef().Type, viewRecordQName)
 
 	if !f.acceptAll {
+		allowedFields := make(map[string]bool, view.Key().FieldCount()+view.Value().FieldCount())
+		for _, f := range view.Key().Fields() {
+			allowedFields[recoverFieldName(view, f.Name())] = true
+		}
+		for _, f := range view.Value().Fields() {
+			allowedFields[recoverFieldName(view, f.Name())] = true
+		}
 		for field := range f.fields {
-			f.fields[recoverFieldName(view, field)] = true
+			if !allowedFields[field] {
+				return fmt.Errorf("field '%s' does not exist in '%s' value def", field, viewRecordQName)
+			}
 		}
 	}
 
@@ -44,7 +53,7 @@ func readViewRecords(ctx context.Context, wsid istructs.WSID, viewRecordQName ap
 			}
 
 			kk = append(kk, keyPart{
-				name:  name,
+				name:  recoverFieldName(view, name),
 				value: r.Right.(*sqlparser.SQLVal).Val,
 			})
 		case *sqlparser.AndExpr:
@@ -70,12 +79,10 @@ func readViewRecords(ctx context.Context, wsid istructs.WSID, viewRecordQName ap
 	kb := appStructs.ViewRecords().KeyBuilder(viewRecordQName)
 
 	for _, k := range kk {
-		correctedName := recoverFieldName(view.Key(), k.name)
-		f := view.Key().Field(correctedName)
+		f := view.Key().Field(k.name)
 		if f == nil {
-			return fmt.Errorf("field '%s' does not exist in '%s' key def", correctedName, viewRecordQName)
+			return fmt.Errorf("field '%s' does not exist in '%s' key def", k.name, viewRecordQName)
 		}
-
 		switch f.DataKind() {
 		case appdef.DataKind_int32:
 			fallthrough
@@ -87,11 +94,11 @@ func readViewRecords(ctx context.Context, wsid istructs.WSID, viewRecordQName ap
 			fallthrough
 		case appdef.DataKind_RecordID:
 			n := json.Number(string(k.value))
-			kb.PutNumber(correctedName, n)
+			kb.PutNumber(k.name, n)
 		case appdef.DataKind_bytes, appdef.DataKind_string:
 			fallthrough
 		case appdef.DataKind_QName:
-			kb.PutChars(correctedName, string(k.value))
+			kb.PutChars(k.name, string(k.value))
 		default:
 			return errUnsupportedDataKind
 		}
