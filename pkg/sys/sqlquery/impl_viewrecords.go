@@ -69,12 +69,11 @@ func readViewRecords(ctx context.Context, wsid istructs.WSID, viewRecordQName ap
 
 	kb := appStructs.ViewRecords().KeyBuilder(viewRecordQName)
 
-	for i, k := range kk {
+	for _, k := range kk {
 		correctedName := recoverFieldName(view.Key(), k.name)
-		kk[i].name = correctedName
 		f := view.Key().Field(correctedName)
 		if f == nil {
-			return fmt.Errorf("field '%s' does not exist in '%s' key def", k.name, viewRecordQName)
+			return fmt.Errorf("field '%s' does not exist in '%s' key def", correctedName, viewRecordQName)
 		}
 
 		switch f.DataKind() {
@@ -88,11 +87,11 @@ func readViewRecords(ctx context.Context, wsid istructs.WSID, viewRecordQName ap
 			fallthrough
 		case appdef.DataKind_RecordID:
 			n := json.Number(string(k.value))
-			kb.PutNumber(k.name, n)
+			kb.PutNumber(correctedName, n)
 		case appdef.DataKind_bytes, appdef.DataKind_string:
 			fallthrough
 		case appdef.DataKind_QName:
-			kb.PutChars(k.name, string(k.value))
+			kb.PutChars(correctedName, string(k.value))
 		default:
 			return errUnsupportedDataKind
 		}
