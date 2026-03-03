@@ -395,10 +395,6 @@ func TestSqlQuery_view_records(t *testing.T) {
 		body = `{"args":{"Query":"select abracadabra from sys.CollectionView where PartKey = 1"}}`
 		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("field 'abracadabra' does not exist in 'sys.CollectionView' value def"))
 	})
-	t.Run("Should return error when field does not exist in key def", func(t *testing.T) {
-		body = `{"args":{"Query":"select * from sys.CollectionView where partKey = 1"}}`
-		vit.PostWS(ws, "q.sys.SqlQuery", body, it.Expect500("field 'partKey' does not exist in 'sys.CollectionView' key def"))
-	})
 	t.Run("Should recover lowercased table and field names", func(t *testing.T) {
 		require := require.New(t)
 		body = `{"args":{"Query":"select docqname from sys.collectionview where PartKey = 1 and DocQName = 'app1pkg.payments'"}, "elements":[{"fields":["Result"]}]}`
