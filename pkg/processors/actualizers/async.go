@@ -436,10 +436,6 @@ func (p *asyncProjector) DoAsync(ctx context.Context, work pipeline.IWorkpiece) 
 		return nil, nil
 	}
 
-	if logger.IsVerbose() {
-		logger.VerboseCtx(logCtx, sds)
-	}
-
 	if err := p.borrowedPartition.Invoke(logCtx, p.name, p.state, p.state); err != nil {
 		return nil, wrapErr(err)
 	}
