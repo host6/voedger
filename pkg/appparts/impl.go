@@ -201,7 +201,7 @@ func (aps *apps) DeployAppPartitions(name appdef.AppQName, partitionIDs []istruc
 
 		wg.Add(1)
 		go func(p *appPartitionRT) {
-			logCtx := logger.WithContextAttrs(aps.vvmCtx, map[string]any{"partid": partitionID})
+			logCtx := logger.WithContextAttrs(aps.vvmCtx, map[string]any{logger.LogAttr_App: name})
 			p.actualizers.Deploy(
 				logCtx,
 				a.lastestVersion.appDef(),
