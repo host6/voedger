@@ -24,7 +24,7 @@ import (
 
 type TimeAfterFunc func(d time.Duration) <-chan time.Time
 
-type LogErrorFunc func(args ...interface{})
+type LogErrorFunc func(ctx context.Context, args ...interface{})
 
 type BasicAsyncActualizerConfig struct {
 	VvmName string
@@ -38,7 +38,7 @@ type BasicAsyncActualizerConfig struct {
 	StateOpts  state.StateOpts
 	HTTPClient httpu.IHTTPClient
 
-	// Optional. Default value: `core-logger.Error`
+	// Optional. Default value: `logger.ErrorCtx`
 	LogError LogErrorFunc
 	// Optional.
 	AAMetrics AsyncActualizerMetrics

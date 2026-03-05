@@ -67,7 +67,8 @@ type asyncActualizer struct {
 	channelCleanup func()
 }
 
-func (a *asyncActualizer) Prepare() {
+// TODO: ctx - vvmCtx?
+func (a *asyncActualizer) Prepare(vvmCtx context.Context) {
 	if a.conf.IntentsLimit == 0 {
 		a.conf.IntentsLimit = defaultIntentsLimit
 	}
@@ -83,24 +84,24 @@ func (a *asyncActualizer) Prepare() {
 		a.conf.FlushPositionInterval = defaultFlushPositionInterval
 	}
 	if a.conf.LogError == nil {
-		a.conf.LogError = logger.Error
+		a.conf.LogError = logger.ErrorCtx
 	}
 
 	a.retrierCfg.OnError = func(_ int, _ time.Duration, opErr error) (retry bool, err error) {
-		a.conf.LogError(a.name, opErr)
+		a.conf.LogError(vvmCtx, a.name, opErr)
 		return true, nil
 	}
 }
 
-func (a *asyncActualizer) Run(ctx context.Context) {
-	for ctx.Err() == nil {
-		_ = retrier.RetryNoResult(ctx, a.retrierCfg, func() error {
-			err := a.init(ctx)
+func (a *asyncActualizer) Run(vvmCtx context.Context) {
+	for vvmCtx.Err() == nil {
+		_ = retrier.RetryNoResult(vvmCtx, a.retrierCfg, func() error {
+			err := a.init(vvmCtx)
 			if err == nil {
-				logger.Trace(a.name, "started")
+				logger.TraceCtx(vvmCtx, "started")
 				err = a.keepReading()
 			}
-			a.finit() // execute even if a.init() has failed
+			a.finit(vvmCtx) // execute even if a.init() has failed
 
 			// avoiding panic on close the closed pipeline. Case:
 			// init, error, finit, init again but error before pipeline creation, then 2nd finit -> panic on closing the closed channel within the pipeline
@@ -117,6 +118,7 @@ func (a *asyncActualizer) cancelChannel(e error) {
 	a.conf.Broker.WatchChannel(a.readCtx.ctx, a.conf.channel, func(projection in10n.ProjectionKey, offset istructs.Offset) {})
 }
 
+// TODO: vvmCtx?
 func (a *asyncActualizer) init(ctx context.Context) (err error) {
 	a.plogBatch = make(plogBatch, 0, plogReadBatchSize)
 
@@ -171,7 +173,7 @@ func (a *asyncActualizer) init(ctx context.Context) (err error) {
 
 	err = a.readOffset(p.name)
 	if err != nil {
-		a.conf.LogError(a.name, err)
+		a.conf.LogError(ctx, a.name, err)
 		return err
 	}
 
@@ -223,7 +225,7 @@ func (a *asyncActualizer) init(ctx context.Context) (err error) {
 	})
 }
 
-func (a *asyncActualizer) finit() {
+func (a *asyncActualizer) finit(ctx context.Context) {
 	if a.pipeline != nil {
 		a.pipeline.Close()
 	}
@@ -231,7 +233,7 @@ func (a *asyncActualizer) finit() {
 		a.channelCleanup()
 	}
 	if logger.IsTrace() {
-		logger.Trace(a.name + "s finalized")
+		logger.TraceCtx(ctx, "finalized")
 	}
 }
 
@@ -243,12 +245,12 @@ func (a *asyncActualizer) keepReading() (err error) {
 	}
 	a.conf.Broker.WatchChannel(a.readCtx.ctx, a.conf.channel, func(projection in10n.ProjectionKey, offset istructs.Offset) {
 		if logger.IsTrace() {
-			logger.Trace(fmt.Sprintf("%s received n10n: offset %d, last handled: %d", a.name, offset, a.offset))
+			logger.TraceCtx(a.readCtx.ctx, fmt.Sprintf("received n10n: offset %d, last handled: %d", offset, a.offset))
 		}
 		if a.offset < offset {
 			err = a.readPlogToOffset(a.readCtx.ctx, offset)
 			if err != nil {
-				a.conf.LogError(a.name, err)
+				a.conf.LogError(a.readCtx.ctx, a.name, err)
 				a.readCtx.cancelWithError(err)
 			}
 		}
@@ -264,14 +266,14 @@ func (a *asyncActualizer) handleEvent(pLogOffset istructs.Offset, event istructs
 
 	err = a.pipeline.SendAsync(work)
 	if err != nil {
-		a.conf.LogError(a.name, err)
+		a.conf.LogError(a.readCtx.ctx, a.name, err)
 		return
 	}
 
 	a.offset = pLogOffset
 
 	if logger.IsTrace() {
-		logger.Trace(fmt.Sprintf("offset %d for %s", a.offset, a.name))
+		logger.TraceCtx(a.readCtx.ctx, fmt.Sprintf("offset %d", a.offset))
 	}
 
 	return
@@ -431,7 +433,8 @@ func (p *asyncProjector) DoAsync(ctx context.Context, work pipeline.IWorkpiece) 
 		return nil, wrapErr(err)
 	}
 	if logger.IsVerbose() {
-		logger.Verbose(fmt.Sprintf("%s: handled %d", p.name, p.pLogOffset))
+		// TODO: context correct?
+		logger.VerboseCtx(ctx, fmt.Sprintf("handled %d", p.pLogOffset))
 	}
 
 	p.acceptedSinceSave = true

@@ -7,6 +7,7 @@
 package actualizers
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"testing"
@@ -313,7 +314,7 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	actConf := &BasicAsyncActualizerConfig{
 		Broker: broker,
 
-		LogError: func(args ...interface{}) {
+		LogError: func(_ context.Context, args ...interface{}) {
 			errorsCh <- fmt.Sprint("error: ", args)
 		},
 
@@ -763,7 +764,7 @@ func Test_AsynchronousActualizer_Stress_NonBuffered(t *testing.T) {
 		FlushInterval: 2 * time.Second,
 		Broker:        broker,
 		AAMetrics:     actMetrics,
-		LogError: func(args ...interface{}) {
+		LogError: func(_ context.Context, args ...interface{}) {
 			require.Fail("actualizer error", args...)
 		},
 	}
@@ -895,7 +896,7 @@ func Test_AsynchronousActualizer_Stress_Buffered(t *testing.T) {
 		FlushInterval:         1000 * time.Millisecond,
 		Broker:                broker,
 		AAMetrics:             actMetrics,
-		LogError:              func(args ...interface{}) {},
+		LogError:              func(context.Context, ...interface{}) {},
 		FlushPositionInterval: 10 * time.Second,
 	}
 
