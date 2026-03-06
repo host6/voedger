@@ -88,12 +88,12 @@ func (a *asyncActualizer) Prepare(vvmCtx context.Context) {
 	}
 
 	a.retrierCfg.OnError = func(_ int, _ time.Duration, opErr error) (retry bool, err error) {
-		a.logFailure(opErr)
+		a.logError(opErr)
 		return true, nil
 	}
 }
 
-func (a *asyncActualizer) logFailure(err error) {
+func (a *asyncActualizer) logError(err error) {
 	var errCtx errWithCtx
 	if errors.As(err, &errCtx) {
 		a.conf.LogError(errCtx.ctx, errCtx.error)
@@ -270,7 +270,7 @@ func (a *asyncActualizer) handleEvent(pLogOffset istructs.Offset, event istructs
 
 	err = a.pipeline.SendAsync(work)
 	if err != nil {
-		a.logFailure(err)
+		a.logError(err)
 		return err
 	}
 

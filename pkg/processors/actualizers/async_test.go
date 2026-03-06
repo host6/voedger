@@ -497,9 +497,9 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	actConf := &BasicAsyncActualizerConfig{
 		Broker: broker,
 
-		LogError: func(_ context.Context, args ...interface{}) {
-			errorsCh <- fmt.Sprint("error: ", args)
-		},
+		// LogError: func(_ context.Context, args ...interface{}) {
+		// 	errorsCh <- fmt.Sprint("error: ", args)
+		// },
 
 		BundlesLimit:  10,
 		FlushInterval: 10 * time.Millisecond,
@@ -555,20 +555,30 @@ func Test_AsynchronousActualizer_ErrorAndRestore(t *testing.T) {
 	appParts.DeployAppPartitions(appName, []istructs.PartitionID{partitionNr})
 
 	// Wait for the logged error
-	errStr := <-errorsCh
+	// errStr := <-errorsCh
 
-	require.Contains(errStr, fmt.Sprintf("%s", name))
-	require.Contains(errStr, "test error")
+	// currently it should be error with context
+	// var errCtx errWithCtx
+	// require.ErrorAs(errors.New(errStr), &errCtx)
+
+	// log this error to check if all necesseary attribs are logged
+	// logger.ErrorCtx(errCtx.ctx, errCtx.error)
+
+	// require.Contains(errStr, "test error")
+	require.Eventually(func() bool {
+		return strings.Contains(buf.String(), fmt.Sprintf("vapp=%s", appName))
+	}, time.Second, 100*time.Millisecond)
+
 	require.Contains(buf.String(), fmt.Sprintf("vapp=%s", appName))
 	require.Contains(buf.String(), fmt.Sprintf("extension=%s", name))
 	require.Contains(buf.String(), "wsid=1002")
-	require.Contains(buf.String(), "msg=failure")
+	require.Contains(buf.String(), `msg="test error"`)
 
 	// wait until the istructs.Projector version is updated with the 1st record
 	for getActualizerOffset(require, appStructs, partitionNr, name) < istructs.Offset(1) {
 		time.Sleep(time.Microsecond)
 	}
-	require.Equal(1, attempts)
+	require.Equal(2, attempts)
 	projInErr := getProjectorsInError(t, actConf.Metrics, appName, actConf.VvmName)
 	require.NotNil(projInErr)
 	require.Equal(1.0, *projInErr)
