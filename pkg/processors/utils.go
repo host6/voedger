@@ -97,7 +97,7 @@ func SetPrincipalsForAnonymousOnlyFunc(appDef appdef.IAppDef, funcQName appdef.Q
 }
 
 func LogEventAndCUDs(logCtx context.Context, event istructs.IPLogEvent, pLogOffset istructs.Offset, appDef appdef.IAppDef,
-	perCUDLogCallback func(istructs.ICUDRow) (bool, string, error)) (err error) {
+	skipStackFrames int, perCUDLogCallback func(istructs.ICUDRow) (bool, string, error)) (err error) {
 	if !logger.IsVerbose() {
 		return nil
 	}
@@ -114,7 +114,7 @@ func LogEventAndCUDs(logCtx context.Context, event istructs.IPLogEvent, pLogOffs
 			return err
 		}
 	}
-	logger.VerboseCtx(ctx, fmt.Sprintf("args=%s", argsJSON))
+	logger.LogCtx(ctx, skipStackFrames, logger.LogLevelVerbose, fmt.Sprintf("args=%s", argsJSON))
 	for cud := range event.CUDs {
 		shouldLog, extraMsg := true, ""
 		if perCUDLogCallback != nil {
@@ -140,7 +140,7 @@ func LogEventAndCUDs(logCtx context.Context, event istructs.IPLogEvent, pLogOffs
 		if len(extraMsg) > 0 {
 			msg += ", " + extraMsg
 		}
-		logger.VerboseCtx(cudCtx, msg)
+		logger.LogCtx(cudCtx, skipStackFrames+1, logger.LogLevelVerbose, msg)
 	}
 	return nil
 }

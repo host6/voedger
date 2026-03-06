@@ -423,8 +423,6 @@ func (p *asyncProjector) DoAsync(ctx context.Context, work pipeline.IWorkpiece) 
 		return errWithCtx{err, logCtx}
 	}
 
-	return nil, wrapErr(errors.New("test error"))
-
 	if err := p.borrowAppPart(ctx); err != nil {
 		return nil, wrapErr(err)
 	}
@@ -460,13 +458,14 @@ func (p *asyncProjector) DoAsync(ctx context.Context, work pipeline.IWorkpiece) 
 		}
 	}
 	if logger.IsVerbose() {
-		logger.VerboseCtx(logCtx, "msg=success")
+		logger.VerboseCtx(logCtx, "success")
 	}
 
 	return nil, nil
 }
 
-func logEventAndCUDs(logCtx context.Context, event istructs.IPLogEvent, pLogOffset istructs.Offset, prj appdef.IProjector, appDef appdef.IAppDef) error {
+func logEventAndCUDs(logCtx context.Context, event istructs.IPLogEvent, pLogOffset istructs.Offset, prj appdef.IProjector,
+	appDef appdef.IAppDef) error {
 	if !logger.IsVerbose() {
 		return nil
 	}
@@ -476,7 +475,7 @@ func logEventAndCUDs(logCtx context.Context, event istructs.IPLogEvent, pLogOffs
 		panic("impossible")
 	}
 	logAllCUDs := appdef.TypeKind_Functions.Contains(appDef.Type(triggeredByQName).Kind())
-	return processors.LogEventAndCUDs(logCtx, event, pLogOffset, appDef,
+	return processors.LogEventAndCUDs(logCtx, event, pLogOffset, appDef, 2,
 		func(cud istructs.ICUDRow) (bool, string, error) {
 			return logAllCUDs || cud.QName() == triggeredByQName, "", nil
 		},

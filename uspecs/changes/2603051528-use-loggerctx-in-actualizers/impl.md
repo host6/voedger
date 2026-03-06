@@ -2,20 +2,37 @@
 
 ## Construction
 
-- [x] update: [pkg/processors/utils.go](../../../pkg/processors/utils.go)
-  - add: `CudOp(cud istructs.ICUDRow) string` — shared helper mapping `IsNew/IsActivated/IsDeactivated` to `"create"/"activate"/"deactivate"/"update"`
+- [x] update: [pkg/appparts/impl.go](../../../pkg/appparts/impl.go)
+  - update: pass the base `vvmCtx` into actualizer deployment and let actualizer startup attach actualizer-specific log attrs
 
-- [x] create: [pkg/processors/logging.go](../../../pkg/processors/logging.go)
-  - add: `processors.LogEventAndCUDs(...)` — shared event/CUD logging skeleton with args JSON logging, event attrs, per-CUD attrs, shared `newfields=%s` logging, and one callback that decides whether to log a CUD and what extra message to append
+- [x] update: [pkg/appparts/internal/actualizers/actualizers.go](../../../pkg/appparts/internal/actualizers/actualizers.go)
+  - update: build the async actualizer base `logCtx` with `vapp` and `extension` when starting projector runtimes
+
+- [x] update: [pkg/processors/utils.go](../../../pkg/processors/utils.go)
+  - add: `CudOpToStringForLog(cud istructs.ICUDRow) string` — shared helper mapping `IsNew/IsActivated/IsDeactivated` to `"create"/"activate"/"deactivate"/"update"`
+  - add: `processors.LogEventAndCUDs(...)` — shared event/CUD logging skeleton with args JSON logging, event attrs, per-CUD attrs, shared `newfields=%s` logging, `skipStackFrames`, and one callback that decides whether to log a CUD and what extra message to append
 
 - [x] update: [pkg/processors/command/impl.go](../../../pkg/processors/command/impl.go)
   - update: delegate common event/CUD logging to `processors.LogEventAndCUDs(...)` and keep command-specific `oldfields=%s` formatting local
+  - update: expose `Context()` and `PLogOffset()` on `cmdWorkpiece` and keep `appPartition` available during recovery so sync actualizers can use the same logging flow
+
+- [x] update: [pkg/processors/command/impl_test.go](../../../pkg/processors/command/impl_test.go)
+  - update: assert shared per-CUD logging includes both `newfields=` and command-specific `oldfields=`
+
+- [x] update: [pkg/processors/actualizers/types.go](../../../pkg/processors/actualizers/types.go)
+  - update: make `ProjectorEvent(...)` return the triggering `QName` instead of `bool` so actualizer logging can distinguish function-triggered events from CUD-triggered events
+  - add: `errWithCtx` for propagating failure logs with the enriched log context
 
 - [x] update: [pkg/processors/actualizers/async.go](../../../pkg/processors/actualizers/async.go)
-  - update: `asyncActualizer` — store base `logCtx` (vapp + extension) built in `init()`; pass it through `workpiece` so `keepReading` n10n trace uses it
-  - update: `keepReading` — replace `logger.Trace`/`logger.TraceCtx` calls with `logger.IsVerbose`/`logger.VerboseCtx` using the base logCtx
-  - update: `asyncProjector.DoAsync` — enrich base logCtx with `wsid` per-event; add `logEventAndCUDs` call before `Invoke`; log `msg=success` on success and `msg=failure` before returning error
-  - update: `logEventAndCUDs(logCtx, event, pLogOffset, prj, appDef)` — delegate common event/CUD logging to `processors.LogEventAndCUDs(...)` and keep projector-specific CUD filtering local via the per-CUD callback
+  - update: route failures through context-aware error logging and replace n10n trace logging with verbose loggerctx logging
+  - update: `asyncProjector.DoAsync` — enrich the base log context with `wsid`, log the triggering projector, log event/CUDs before `Invoke`, and log `success` on success
+  - update: `logEventAndCUDs(logCtx, event, pLogOffset, prj, appDef)` — call `ProjectorEvent(...)`, log all CUDs for function-triggered events, and otherwise log only CUDs whose `QName` matches the triggering `QName`
+
+- [x] update: [pkg/processors/actualizers/impl.go](../../../pkg/processors/actualizers/impl.go)
+  - update: make sync actualizers use the same shared event/CUD logging flow before projector invocation
 
 - [x] update: [pkg/processors/actualizers/async_test.go](../../../pkg/processors/actualizers/async_test.go)
-  - update: existing tests that assert on log output or projector trigger behavior to match new log structure
+  - update: cover execute-projector logging, record-projector filtering, and context-aware failure logging
+
+- [x] update: [pkg/processors/actualizers/types_test.go](../../../pkg/processors/actualizers/types_test.go)
+  - update: assert `ProjectorEvent(...)` against triggering `QName` results instead of boolean trigger flags

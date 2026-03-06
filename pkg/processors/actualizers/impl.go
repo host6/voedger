@@ -12,7 +12,6 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
-	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/state"
@@ -23,6 +22,8 @@ type syncActualizerWorkpiece interface {
 	pipeline.IWorkpiece
 	Event() istructs.IPLogEvent
 	AppPartition() appparts.IAppPartition
+	Context() context.Context    // is cmd.cmdMes.RequestCtx() from command processor
+	PLogOffset() istructs.Offset // is c.appPartition.nextPLogOffset from command processor
 }
 
 func syncActualizerFactory(conf SyncActualizerConf, projectors istructs.Projectors) pipeline.ISyncOperator {
@@ -84,9 +85,8 @@ func newSyncBranch(conf SyncActualizerConf, projector istructs.Projector, servic
 				if triggeredByQName == appdef.NullQName {
 					return nil
 				}
-				if logger.IsVerbose() {
-					// TODO: add ctx here
-					// logger.VerboseCtx( fmt.Sprintf("%v is triggered by %v", prj, event))
+				if err := logEventAndCUDs(work.Context(), event, work.PLogOffset(), prj, appDef); err != nil {
+					return err
 				}
 				return appPart.Invoke(ctx, projector.Name, s, s)
 			}),

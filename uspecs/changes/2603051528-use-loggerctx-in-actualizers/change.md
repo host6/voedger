@@ -24,4 +24,4 @@ Replace plain logger calls with context-aware variants in the actualizers packag
     - log only these CUDs that triggered this projector. Use the approach as done in command processor: per each CUD log `rectype`, `recid`, `op` etc
   - if the projector is after execute:
     - log all event's CUDs
-- on success/failure log `msg=success`/`msg=failure`
+

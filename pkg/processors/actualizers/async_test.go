@@ -385,7 +385,7 @@ func Test_AsynchronousActualizer_Logs(t *testing.T) {
 		require.Equal(2, strings.Count(out, "op=create"))
 		require.Equal(2, strings.Count(out, "newfields="))
 		require.NotContains(out, "oldfields=")
-		require.Contains(out, "msg=success")
+		require.Contains(out, "success")
 	})
 
 	t.Run("record projector logs only triggering cuds", func(t *testing.T) {
@@ -466,7 +466,7 @@ func Test_AsynchronousActualizer_Logs(t *testing.T) {
 		require.Equal(1, strings.Count(out, "newfields="))
 		require.NotContains(out, "oldfields=")
 		require.Contains(out, "args={}")
-		require.Contains(out, "msg=success")
+		require.Contains(out, "success")
 	})
 }
 
