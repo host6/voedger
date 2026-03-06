@@ -12,6 +12,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/state"
@@ -79,8 +80,13 @@ func newSyncBranch(conf SyncActualizerConf, projector istructs.Projector, servic
 				appDef := appPart.AppStructs().AppDef()
 				prj := appdef.Projector(appDef.Type, projector.Name)
 				event := s.PLogEvent()
-				if !ProjectorEvent(prj, event) {
+				triggeredByQName := ProjectorEvent(prj, event)
+				if triggeredByQName == appdef.NullQName {
 					return nil
+				}
+				if logger.IsVerbose() {
+					// TODO: add ctx here
+					// logger.VerboseCtx( fmt.Sprintf("%v is triggered by %v", prj, event))
 				}
 				return appPart.Invoke(ctx, projector.Name, s, s)
 			}),

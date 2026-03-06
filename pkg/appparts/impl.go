@@ -16,7 +16,6 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
-	"github.com/voedger/voedger/pkg/goutils/logger"
 	retrier "github.com/voedger/voedger/pkg/goutils/retry"
 	"github.com/voedger/voedger/pkg/iextengine"
 	"github.com/voedger/voedger/pkg/irates"
@@ -201,9 +200,8 @@ func (aps *apps) DeployAppPartitions(name appdef.AppQName, partitionIDs []istruc
 
 		wg.Add(1)
 		go func(p *appPartitionRT) {
-			logCtx := logger.WithContextAttrs(aps.vvmCtx, map[string]any{logger.LogAttr_App: name})
 			p.actualizers.Deploy(
-				logCtx,
+				aps.vvmCtx,
 				a.lastestVersion.appDef(),
 				aps.asyncActualizersRunner.NewAndRun,
 			)

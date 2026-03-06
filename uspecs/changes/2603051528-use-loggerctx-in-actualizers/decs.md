@@ -52,19 +52,27 @@ Alternatives:
 
 ## 6. Extract event logging to `pkg/processors` vs keep separate implementations
 
-Extract only `CudOp(cud istructs.ICUDRow) string` to `pkg/processors`; keep the full `logEventAndCUDs`-style function in each processor package (confidence: high).
+Extract the shared event/CUD logging skeleton into `pkg/processors.LogEventAndCUDs(...)` and keep the caller-specific behavior in one small per-CUD callback in command processor and actualizers (confidence: high).
 
-Rationale: The two callers diverge in three key ways that prevent clean full extraction:
+Rationale: The two callers share most of the workflow:
 
-- **Old records**: command processor holds `parsedCUDs[i].existingRecord` in memory (fetched before execution); the async actualizer has no equivalent — old record state is not stored in the PLog event and would require extra storage reads
-- **CUD selection**: command processor logs all CUDs; the actualizer logs only CUDs that triggered the projector (for insert/update projectors)
-- **Args source**: command processor uses `cmd.argsObject` (pre-built from request); the actualizer uses `event.ArgumentObject()` directly
+- verbose guard
+- event context attrs `woffset`, `poffset`, `evqname`
+- args JSON logging
+- CUD iteration
+- per-CUD context attrs `rectype`, `recid`, `op`
+- per-CUD `newfields=%s` logging
 
-Sharing only `CudOp` eliminates the only purely duplicated pure logic. The remaining CUD iteration loop body delegates to already-shared helpers (`coreutils.FieldsToMap`, `json.Marshal`, `logger.WithContextAttrs`) — there is no significant logic left to extract without introducing a complex, parameter-heavy shared function.
+The remaining differences fit cleanly into one local callback that returns whether the CUD should be logged and which extra message part should be appended:
+
+- command processor logs all CUDs and appends `oldfields=%s`
+- actualizer decides whether a CUD triggered the projector and appends nothing
+
+This removes meaningful duplication while keeping the shared API small and preserving the local ownership of projector-specific and old-record-specific behavior.
 
 Alternatives:
 
-- Extract a full `LogEventAndCUDs(ctx, event, pLogOffset, argObj, appDef, oldRecs, cudFilter)` to `pkg/processors` (confidence: low)
-  - Covers both callers but requires a complex signature with optional/callback parameters; the `cudFilter` and `oldRecs` arguments would be nil/no-op for one caller — violates KISS
-- Keep two fully independent implementations, share nothing (confidence: medium)
-  - Simpler; avoids any coupling between packages; acceptable given the minimal duplication
+- Extract the whole workflow plus old-record handling and projector decision logic into one parameter-heavy helper (confidence: medium)
+  - Shares more code but forces unrelated caller details into one API and weakens readability
+- Keep only `CudOpToStringForLog` shared (confidence: low)
+  - Simpler but leaves most of the duplicated logging workflow in place
