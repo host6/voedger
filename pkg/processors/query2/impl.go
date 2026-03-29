@@ -262,22 +262,10 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 		operator("create state", func(ctx context.Context, qw *queryWork) (err error) {
 			qw.state = stateprovide.ProvideQueryProcessorStateFactory()(
 				qw.msg.RequestCtx(),
-				func() istructs.IAppStructs { return qw.appStructs },
-				state.SimplePartitionIDFunc(qw.msg.PartitionID()),
-				state.SimpleWSIDFunc(qw.msg.WSID()),
+				qw,
 				qw.secretReader,
-				func() []iauthnz.Principal { return qw.principals },
-				func() string { return qw.msg.Token() },
 				itokens,
-				func() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs },
-				func() istructs.IObject { return qw.execQueryArgs.ArgumentObject },
-				func() istructs.IObjectBuilder {
-					return qw.appStructs.ObjectBuilder(qw.resultType.QName())
-				},
 				federation,
-				func() istructs.ExecQueryCallback {
-					return qw.callbackFunc
-				},
 				stateOpts,
 				httpClient,
 			)

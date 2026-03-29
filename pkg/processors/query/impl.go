@@ -320,22 +320,10 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 		operator("create state", func(ctx context.Context, qw *queryWork) (err error) {
 			qw.state = stateprovide.ProvideQueryProcessorStateFactory()(
 				qw.msg.RequestCtx(),
-				func() istructs.IAppStructs { return qw.appStructs },
-				state.SimplePartitionIDFunc(qw.msg.Partition()),
-				state.SimpleWSIDFunc(qw.msg.WSID()),
+				qw,
 				qw.secretReader,
-				func() []iauthnz.Principal { return qw.principals },
-				func() string { return qw.msg.Token() },
 				itokens,
-				func() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs },
-				func() istructs.IObject { return qw.execQueryArgs.ArgumentObject },
-				func() istructs.IObjectBuilder {
-					return qw.appStructs.ObjectBuilder(qw.resultType.QName())
-				},
 				federation,
-				func() istructs.ExecQueryCallback {
-					return qw.callbackFunc
-				},
 				stateOpts,
 				httpClient,
 			)
@@ -519,6 +507,17 @@ func (qw *queryWork) Roles() []appdef.QName {
 func (qw *queryWork) SetPrincipals(prns []iauthnz.Principal) {
 	qw.principals = prns
 }
+
+func (qw *queryWork) AppStructs() istructs.IAppStructs  { return qw.appStructs }
+func (qw *queryWork) WSID() istructs.WSID               { return qw.msg.WSID() }
+func (qw *queryWork) Principals() []iauthnz.Principal   { return qw.principals }
+func (qw *queryWork) Token() string                     { return qw.msg.Token() }
+func (qw *queryWork) PrepareArgs() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs }
+func (qw *queryWork) Arg() istructs.IObject             { return qw.execQueryArgs.ArgumentObject }
+func (qw *queryWork) ResultBuilder() istructs.IObjectBuilder {
+	return qw.appStructs.ObjectBuilder(qw.resultType.QName())
+}
+func (qw *queryWork) QueryCallback() istructs.ExecQueryCallback { return qw.callbackFunc }
 
 func borrowAppPart(_ context.Context, qw *queryWork) error {
 	switch err := qw.borrow(); {

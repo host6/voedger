@@ -270,69 +270,70 @@ func (ts *testState) emulateFederationBlob(owner, appname string, wsid istructs.
 	return ts.federationBlobHandler(owner, appname, wsid, ownerRecord, ownerRecordField, ownerID)
 }
 
+type testCmdParams struct {
+	ts *testState
+}
+
+func (p *testCmdParams) AppStructs() istructs.IAppStructs          { return p.ts.appStructs }
+func (p *testCmdParams) WSID() istructs.WSID                       { return p.ts.WSID() }
+func (p *testCmdParams) CUD() istructs.ICUD                        { return p.ts.cud }
+func (p *testCmdParams) Principals() []iauthnz.Principal           { return p.ts.principals }
+func (p *testCmdParams) Token() string                             { return p.ts.token }
+func (p *testCmdParams) CmdResultBuilder() istructs.IObjectBuilder { return p.ts.ResultBuilder() }
+func (p *testCmdParams) CommandPrepareArgs() istructs.CommandPrepareArgs {
+	return istructs.CommandPrepareArgs{
+		PrepareArgs: istructs.PrepareArgs{
+			ArgumentObject: p.ts.Arg(),
+			WSID:           p.ts.WSID(),
+		},
+	}
+}
+func (p *testCmdParams) Arg() istructs.IObject         { return p.ts.Arg() }
+func (p *testCmdParams) UnloggedArg() istructs.IObject { return nil }
+func (p *testCmdParams) WLogOffset() istructs.Offset {
+	if p.ts.ipLogEvent != nil {
+		return p.ts.ipLogEvent.WLogOffset()
+	}
+	return istructs.Offset(0)
+}
+func (p *testCmdParams) Origin() string { return p.ts.origin }
+
+type testQueryParams struct {
+	ts *testState
+}
+
+func (p *testQueryParams) AppStructs() istructs.IAppStructs { return p.ts.appStructs }
+func (p *testQueryParams) WSID() istructs.WSID              { return p.ts.WSID() }
+func (p *testQueryParams) Principals() []iauthnz.Principal  { return p.ts.principals }
+func (p *testQueryParams) Token() string                    { return p.ts.token }
+func (p *testQueryParams) PrepareArgs() istructs.PrepareArgs {
+	return istructs.PrepareArgs{
+		ArgumentObject: p.ts.Arg(),
+		WSID:           p.ts.WSID(),
+	}
+}
+func (p *testQueryParams) Arg() istructs.IObject { return p.ts.Arg() }
+func (p *testQueryParams) ResultBuilder() istructs.IObjectBuilder {
+	localPkgName := p.ts.appDef.PackageLocalName(p.ts.queryName.PkgPath())
+	query := appdef.Query(p.ts.appDef.Type, appdef.NewQName(localPkgName, p.ts.queryName.Entity()))
+	if query == nil {
+		panic(fmt.Sprintf("query not found: %v", p.ts.queryName))
+	}
+	return p.ts.appStructs.ObjectBuilder(query.Result().QName())
+}
+func (p *testQueryParams) QueryCallback() istructs.ExecQueryCallback {
+	return func(o istructs.IObject) error {
+		p.ts.readObjects = append(p.ts.readObjects, o)
+		return nil
+	}
+}
+
 func (ts *testState) buildState(processorKind int) {
 
 	appFunc := func() istructs.IAppStructs { return ts.appStructs }
 	eventFunc := func() istructs.IPLogEvent { return ts.ipLogEvent }
 	partitionIDFunc := func() istructs.PartitionID { return TestPartition }
-	cudFunc := func() istructs.ICUD { return ts.cud }
-	commandPrepareArgs := func() istructs.CommandPrepareArgs {
-		return istructs.CommandPrepareArgs{
-			PrepareArgs: istructs.PrepareArgs{
-				Workpiece:      nil,
-				ArgumentObject: ts.Arg(),
-				WSID:           ts.WSID(),
-				Workspace:      nil,
-			},
-			ArgumentUnloggedObject: nil,
-		}
-	}
-	argFunc := func() istructs.IObject { return ts.Arg() }
-	unloggedArgFunc := func() istructs.IObject { return nil }
-	wlogOffsetFunc := func() istructs.Offset {
-		if ts.ipLogEvent != nil {
-			return ts.ipLogEvent.WLogOffset()
-		}
-
-		return istructs.Offset(0)
-	}
-	originFunc := func() string {
-		return ts.origin
-	}
-	wsidFunc := func() istructs.WSID {
-		return ts.WSID()
-	}
-	resultBuilderFunc := func() istructs.IObjectBuilder {
-		return ts.ResultBuilder()
-	}
-	principalsFunc := func() []iauthnz.Principal {
-		return ts.principals
-	}
-	tokenFunc := func() string {
-		return ts.token
-	}
-	execQueryArgsFunc := func() istructs.PrepareArgs {
-		return istructs.PrepareArgs{
-			Workpiece:      nil,
-			ArgumentObject: ts.Arg(),
-			WSID:           ts.WSID(),
-			Workspace:      nil,
-		}
-	}
-	qryResultBuilderFunc := func() istructs.IObjectBuilder {
-		localPkgName := ts.appDef.PackageLocalName(ts.queryName.PkgPath())
-		query := appdef.Query(ts.appDef.Type, appdef.NewQName(localPkgName, ts.queryName.Entity()))
-		if query == nil {
-			panic(fmt.Sprintf("query not found: %v", ts.queryName))
-		}
-		return ts.appStructs.ObjectBuilder(query.Result().QName())
-	}
-	execQueryCallback := func() istructs.ExecQueryCallback {
-		return func(o istructs.IObject) error {
-			ts.readObjects = append(ts.readObjects, o)
-			return nil
-		}
-	}
+	wsidFunc := func() istructs.WSID { return ts.WSID() }
 
 	switch processorKind {
 	case ProcKind_Actualizer:
@@ -347,16 +348,14 @@ func (ts *testState) buildState(processorKind int) {
 		stateOpts := state.StateOpts{
 			UniquesHandler: ts.emulateUniquesHandler,
 		}
-		ts.IState = stateprovide.ProvideCommandProcessorStateFactory()(ts.ctx, appFunc, partitionIDFunc, wsidFunc, ts.secretReader, cudFunc, principalsFunc, tokenFunc,
-			IntentsLimit, resultBuilderFunc, commandPrepareArgs, argFunc, unloggedArgFunc, wlogOffsetFunc, stateOpts, originFunc)
+		ts.IState = stateprovide.ProvideCommandProcessorStateFactory()(ts.ctx, &testCmdParams{ts: ts}, ts.secretReader, IntentsLimit, stateOpts)
 	case ProcKind_QueryProcessor:
 		stateOpts := state.StateOpts{
 			FederationCommandHandler: ts.emulateFederationCmd,
 			UniquesHandler:           ts.emulateUniquesHandler,
 			FederationBlobHandler:    ts.emulateFederationBlob,
 		}
-		ts.IState = stateprovide.ProvideQueryProcessorStateFactory()(ts.ctx, appFunc, partitionIDFunc, wsidFunc, ts.secretReader, principalsFunc, tokenFunc, nil,
-			execQueryArgsFunc, argFunc, qryResultBuilderFunc, nil, execQueryCallback, stateOpts, ts.httpClient)
+		ts.IState = stateprovide.ProvideQueryProcessorStateFactory()(ts.ctx, &testQueryParams{ts: ts}, ts.secretReader, nil, nil, stateOpts, ts.httpClient)
 	}
 }
 

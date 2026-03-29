@@ -202,3 +202,14 @@ func (qw *queryWork) getObjectSender() pipeline.IAsyncOperator {
 func (qw *queryWork) SetPrincipals(prns []iauthnz.Principal) {
 	qw.principals = prns
 }
+
+func (qw *queryWork) AppStructs() istructs.IAppStructs  { return qw.appStructs }
+func (qw *queryWork) WSID() istructs.WSID               { return qw.msg.WSID() }
+func (qw *queryWork) Principals() []iauthnz.Principal   { return qw.principals }
+func (qw *queryWork) Token() string                     { return qw.msg.Token() }
+func (qw *queryWork) PrepareArgs() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs }
+func (qw *queryWork) Arg() istructs.IObject             { return qw.execQueryArgs.ArgumentObject }
+func (qw *queryWork) ResultBuilder() istructs.IObjectBuilder {
+	return qw.appStructs.ObjectBuilder(qw.resultType.QName())
+}
+func (qw *queryWork) QueryCallback() istructs.ExecQueryCallback { return qw.callbackFunc }

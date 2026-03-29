@@ -130,58 +130,48 @@ type wrongArgsCatcher struct {
 	pipeline.NOOP
 }
 
+func (cmd *cmdWorkpiece) AppStructs() istructs.IAppStructs          { return cmd.appStructs }
+func (cmd *cmdWorkpiece) WSID() istructs.WSID                       { return cmd.cmdMes.WSID() }
+func (cmd *cmdWorkpiece) CUD() istructs.ICUD                        { return cmd.reb.CUDBuilder() }
+func (cmd *cmdWorkpiece) Principals() []iauthnz.Principal           { return cmd.principals }
+func (cmd *cmdWorkpiece) Token() string                             { return cmd.cmdMes.Token() }
+func (cmd *cmdWorkpiece) CmdResultBuilder() istructs.IObjectBuilder { return cmd.cmdResultBuilder }
+func (cmd *cmdWorkpiece) CommandPrepareArgs() istructs.CommandPrepareArgs {
+	return cmd.eca.CommandPrepareArgs
+}
+func (cmd *cmdWorkpiece) Arg() istructs.IObject         { return cmd.argsObject }
+func (cmd *cmdWorkpiece) UnloggedArg() istructs.IObject { return cmd.unloggedArgsObject }
+func (cmd *cmdWorkpiece) WLogOffset() istructs.Offset   { return cmd.workspace.NextWLogOffset }
+func (cmd *cmdWorkpiece) Origin() string                { return cmd.cmdMes.Origin() }
+
 type hostStateProvider struct {
-	as               istructs.IAppStructs
-	cud              istructs.ICUD
-	wsid             istructs.WSID
-	principals       []iauthnz.Principal
-	state            state.IHostState
-	token            string
-	cmdResultBuilder istructs.IObjectBuilder
-	cmdPrepareArgs   istructs.CommandPrepareArgs
-	wlogOffset       istructs.Offset
-	origin           string
-	args             istructs.IObject
-	unloggedArgs     istructs.IObject
-	partitionID      istructs.PartitionID
+	state state.IHostState
+	cmd   *cmdWorkpiece
 }
 
 func newHostStateProvider(ctx context.Context, secretReader isecrets.ISecretReader) *hostStateProvider {
 	p := &hostStateProvider{}
-	p.state = stateprovide.ProvideCommandProcessorStateFactory()(ctx, p.getAppStructs, p.getPartititonID,
-		p.getWSID, secretReader, p.getCUD, p.getPrincipals, p.getToken, actualizers.DefaultIntentsLimit,
-		p.getCmdResultBuilder, p.getCmdPrepareArgs, p.getArgs, p.getUnloggedArgs, p.getWLogOffset, state.NullOpts, p.getOrigin)
+	p.state = stateprovide.ProvideCommandProcessorStateFactory()(ctx, p, secretReader, actualizers.DefaultIntentsLimit, state.NullOpts)
 	return p
 }
 
-func (p *hostStateProvider) getAppStructs() istructs.IAppStructs { return p.as }
-func (p *hostStateProvider) getWSID() istructs.WSID              { return p.wsid }
-func (p *hostStateProvider) getCUD() istructs.ICUD               { return p.cud }
-func (p *hostStateProvider) getPrincipals() []iauthnz.Principal {
-	return p.principals
+func (p *hostStateProvider) AppStructs() istructs.IAppStructs { return p.cmd.AppStructs() }
+func (p *hostStateProvider) WSID() istructs.WSID              { return p.cmd.WSID() }
+func (p *hostStateProvider) CUD() istructs.ICUD               { return p.cmd.CUD() }
+func (p *hostStateProvider) Principals() []iauthnz.Principal  { return p.cmd.Principals() }
+func (p *hostStateProvider) Token() string                    { return p.cmd.Token() }
+func (p *hostStateProvider) CmdResultBuilder() istructs.IObjectBuilder {
+	return p.cmd.CmdResultBuilder()
 }
-func (p *hostStateProvider) getToken() string                               { return p.token }
-func (p *hostStateProvider) getCmdResultBuilder() istructs.IObjectBuilder   { return p.cmdResultBuilder }
-func (p *hostStateProvider) getCmdPrepareArgs() istructs.CommandPrepareArgs { return p.cmdPrepareArgs }
-func (p *hostStateProvider) getWLogOffset() istructs.Offset                 { return p.wlogOffset }
-func (p *hostStateProvider) getOrigin() string                              { return p.origin }
-func (p *hostStateProvider) getArgs() istructs.IObject                      { return p.args }
-func (p *hostStateProvider) getUnloggedArgs() istructs.IObject              { return p.unloggedArgs }
-func (p *hostStateProvider) getPartititonID() istructs.PartitionID          { return p.partitionID }
-func (p *hostStateProvider) get(appStructs istructs.IAppStructs, wsid istructs.WSID, cud istructs.ICUD, principals []iauthnz.Principal, token string,
-	cmdResultBuilder istructs.IObjectBuilder, cmdPrepareArgs istructs.CommandPrepareArgs, wlogOffset istructs.Offset, args istructs.IObject,
-	unloggedArgs istructs.IObject, partitionID istructs.PartitionID, origin string) state.IHostState {
-	p.as = appStructs
-	p.wsid = wsid
-	p.cud = cud
-	p.principals = principals
-	p.token = token
-	p.cmdResultBuilder = cmdResultBuilder
-	p.cmdPrepareArgs = cmdPrepareArgs
-	p.wlogOffset = wlogOffset
-	p.args = args
-	p.unloggedArgs = unloggedArgs
-	p.partitionID = partitionID
-	p.origin = origin
+func (p *hostStateProvider) CommandPrepareArgs() istructs.CommandPrepareArgs {
+	return p.cmd.CommandPrepareArgs()
+}
+func (p *hostStateProvider) WLogOffset() istructs.Offset   { return p.cmd.WLogOffset() }
+func (p *hostStateProvider) Origin() string                { return p.cmd.Origin() }
+func (p *hostStateProvider) Arg() istructs.IObject         { return p.cmd.Arg() }
+func (p *hostStateProvider) UnloggedArg() istructs.IObject { return p.cmd.UnloggedArg() }
+
+func (p *hostStateProvider) bind(cmd *cmdWorkpiece) state.IHostState {
+	p.cmd = cmd
 	return p.state
 }

@@ -244,9 +244,7 @@ func (cmdProc *cmdProc) buildCommandArgs(_ context.Context, cmd *cmdWorkpiece) (
 }
 
 func (cmdProc *cmdProc) getHostState(_ context.Context, cmd *cmdWorkpiece) (err error) {
-	hs := cmd.hostStateProvider.get(cmd.appStructs, cmd.cmdMes.WSID(), cmd.reb.CUDBuilder(),
-		cmd.principals, cmd.cmdMes.Token(), cmd.cmdResultBuilder, cmd.eca.CommandPrepareArgs, cmd.workspace.NextWLogOffset,
-		cmd.argsObject, cmd.unloggedArgsObject, cmd.cmdMes.PartitionID(), cmd.cmdMes.Origin())
+	hs := cmd.hostStateProvider.bind(cmd)
 	hs.ClearIntents()
 	cmd.eca.State = hs
 	cmd.eca.Intents = hs

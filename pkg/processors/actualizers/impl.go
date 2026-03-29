@@ -67,12 +67,9 @@ func newSyncBranch(conf SyncActualizerConf, projector istructs.Projector, servic
 	pipelineName := fmt.Sprintf("[%d] %s", conf.Partition, projector.Name)
 	s = stateprovide.ProvideSyncActualizerStateFactory()(
 		conf.Ctx,
-		service.getIAppStructs,
-		state.SimplePartitionIDFunc(conf.Partition),
-		service.getWSID,
+		service,
 		conf.N10nFunc,
 		conf.SecretReader,
-		service.getEvent,
 		conf.IntentsLimit,
 		state.NullOpts,
 	)
@@ -130,11 +127,9 @@ type eventService struct {
 	appStructs istructs.IAppStructs
 }
 
-func (s *eventService) getWSID() istructs.WSID { return s.event.Workspace() }
-
-func (s *eventService) getEvent() istructs.IPLogEvent { return s.event }
-
-func (s *eventService) getIAppStructs() istructs.IAppStructs { return s.appStructs }
+func (s *eventService) WSID() istructs.WSID              { return s.event.Workspace() }
+func (s *eventService) PLogEvent() istructs.IPLogEvent   { return s.event }
+func (s *eventService) AppStructs() istructs.IAppStructs { return s.appStructs }
 
 func provideViewDefImpl(wsb appdef.IWorkspaceBuilder, qname appdef.QName, buildFunc ViewTypeBuilder) {
 	builder := wsb.AddView(qname)

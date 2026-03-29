@@ -74,43 +74,34 @@ func (s *queryProcessorState) ApplyIntents() (err error) {
 
 func implProvideQueryProcessorState(
 	ctx context.Context,
-	appStructsFunc state.AppStructsFunc,
-	partitionIDFunc state.PartitionIDFunc,
-	wsidFunc state.WSIDFunc,
+	params state.IQueryProcessorStateParams,
 	secretReader isecrets.ISecretReader,
-	principalsFunc state.PrincipalsFunc,
-	tokenFunc state.TokenFunc,
 	itokens itokens.ITokens,
-	execQueryArgsFunc state.PrepareArgsFunc,
-	argFunc state.ArgFunc,
-	resultBuilderFunc state.ObjectBuilderFunc,
 	federation federation.IFederation,
-	queryCallbackFunc state.ExecQueryCallbackFunc,
-	stateOpts state.StateOpts, httpClient httpu.IHTTPClient) state.IHostState {
+	stateOpts state.StateOpts,
+	httpClient httpu.IHTTPClient) state.IHostState {
 
-	state := &queryProcessorState{
-		hostState:     newHostState(ctx, "QueryProcessor", queryProcessorStateMaxIntents, appStructsFunc),
-		queryArgs:     execQueryArgsFunc,
-		queryCallback: queryCallbackFunc,
+	s := &queryProcessorState{
+		hostState:     newHostState(ctx, "QueryProcessor", queryProcessorStateMaxIntents, params.AppStructs),
+		queryArgs:     params.PrepareArgs,
+		queryCallback: params.QueryCallback,
 	}
 
-	ieventsFunc := func() istructs.IEvents {
-		return appStructsFunc().Events()
-	}
+	ieventsFunc := func() istructs.IEvents { return params.AppStructs().Events() }
 
-	state.addStorage(sys.Storage_View, storages.NewViewRecordsStorage(ctx, appStructsFunc, wsidFunc, nil), S_GET|S_GET_BATCH|S_READ)
-	state.addStorage(sys.Storage_Record, storages.NewRecordsStorage(appStructsFunc, wsidFunc, nil), S_GET|S_GET_BATCH)
-	state.addStorage(sys.Storage_WLog, storages.NewWLogStorage(ctx, ieventsFunc, wsidFunc), S_GET|S_READ)
-	state.addStorage(sys.Storage_HTTP, storages.NewHTTPStorage(httpClient), S_READ)
-	state.addStorage(sys.Storage_FederationCommand, storages.NewFederationCommandStorage(appStructsFunc, wsidFunc, federation, itokens, stateOpts.FederationCommandHandler), S_GET)
-	state.addStorage(sys.Storage_FederationBlob, storages.NewFederationBlobStorage(appStructsFunc, wsidFunc, federation, itokens, stateOpts.FederationBlobHandler), S_READ)
-	state.addStorage(sys.Storage_AppSecret, storages.NewAppSecretsStorage(secretReader), S_GET)
-	state.addStorage(sys.Storage_RequestSubject, storages.NewSubjectStorage(principalsFunc, tokenFunc), S_GET)
-	state.addStorage(sys.Storage_QueryContext, storages.NewQueryContextStorage(argFunc, wsidFunc), S_GET)
-	state.addStorage(sys.Storage_Response, storages.NewResponseStorage(), S_INSERT)
-	state.addStorage(sys.Storage_Result, storages.NewResultStorage(resultBuilderFunc), S_INSERT)
-	state.addStorage(sys.Storage_Uniq, storages.NewUniquesStorage(appStructsFunc, wsidFunc, stateOpts.UniquesHandler), S_GET)
-	state.addStorage(sys.Storage_Logger, storages.NewLoggerStorage(), S_INSERT)
+	s.addStorage(sys.Storage_View, storages.NewViewRecordsStorage(ctx, params.AppStructs, params.WSID, nil), S_GET|S_GET_BATCH|S_READ)
+	s.addStorage(sys.Storage_Record, storages.NewRecordsStorage(params.AppStructs, params.WSID, nil), S_GET|S_GET_BATCH)
+	s.addStorage(sys.Storage_WLog, storages.NewWLogStorage(ctx, ieventsFunc, params.WSID), S_GET|S_READ)
+	s.addStorage(sys.Storage_HTTP, storages.NewHTTPStorage(httpClient), S_READ)
+	s.addStorage(sys.Storage_FederationCommand, storages.NewFederationCommandStorage(params.AppStructs, params.WSID, federation, itokens, stateOpts.FederationCommandHandler), S_GET)
+	s.addStorage(sys.Storage_FederationBlob, storages.NewFederationBlobStorage(params.AppStructs, params.WSID, federation, itokens, stateOpts.FederationBlobHandler), S_READ)
+	s.addStorage(sys.Storage_AppSecret, storages.NewAppSecretsStorage(secretReader), S_GET)
+	s.addStorage(sys.Storage_RequestSubject, storages.NewSubjectStorage(params.Principals, params.Token), S_GET)
+	s.addStorage(sys.Storage_QueryContext, storages.NewQueryContextStorage(params.Arg, params.WSID), S_GET)
+	s.addStorage(sys.Storage_Response, storages.NewResponseStorage(), S_INSERT)
+	s.addStorage(sys.Storage_Result, storages.NewResultStorage(params.ResultBuilder), S_INSERT)
+	s.addStorage(sys.Storage_Uniq, storages.NewUniquesStorage(params.AppStructs, params.WSID, stateOpts.UniquesHandler), S_GET)
+	s.addStorage(sys.Storage_Logger, storages.NewLoggerStorage(), S_INSERT)
 
-	return state
+	return s
 }

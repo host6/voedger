@@ -13,17 +13,35 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appdef/builder"
+	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/authnz"
 )
 
+type hostStateTestQueryParams struct {
+	appStructs istructs.IAppStructs
+	wsid       istructs.WSID
+}
+
+func (p *hostStateTestQueryParams) AppStructs() istructs.IAppStructs  { return p.appStructs }
+func (p *hostStateTestQueryParams) WSID() istructs.WSID               { return p.wsid }
+func (p *hostStateTestQueryParams) Principals() []iauthnz.Principal   { return nil }
+func (p *hostStateTestQueryParams) Token() string                     { return "" }
+func (p *hostStateTestQueryParams) PrepareArgs() istructs.PrepareArgs { return istructs.PrepareArgs{} }
+func (p *hostStateTestQueryParams) Arg() istructs.IObject             { return nil }
+func (p *hostStateTestQueryParams) ResultBuilder() istructs.IObjectBuilder {
+	return istructs.NewNullObjectBuilder()
+}
+func (p *hostStateTestQueryParams) QueryCallback() istructs.ExecQueryCallback { return nil }
+
 func TestHostState_BasicUsage(t *testing.T) {
 	require := require.New(t)
 
 	factory := ProvideQueryProcessorStateFactory()
-	hostState := factory(context.Background(), mockedHostStateStructs, nil, state.SimpleWSIDFunc(istructs.WSID(1)), nil, nil, nil, nil, nil, nil, nil, nil, nil, state.NullOpts, nil)
+	params := &hostStateTestQueryParams{appStructs: mockedHostStateStructs(), wsid: istructs.WSID(1)}
+	hostState := factory(context.Background(), params, nil, nil, nil, state.NullOpts, nil)
 
 	// Declare simple extension
 	extension := func(state istructs.IState) {
@@ -629,7 +647,7 @@ func hostStateForTest(s state.IStateStorage) state.IHostState {
 	return hs
 }
 func emptyHostStateForTest(s state.IStateStorage) (istructs.IState, istructs.IIntents) {
-	bs := ProvideQueryProcessorStateFactory()(context.Background(), nilAppStructsFunc, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, state.NullOpts, nil).(*queryProcessorState)
+	bs := ProvideQueryProcessorStateFactory()(context.Background(), &hostStateTestQueryParams{appStructs: nilAppStructsFunc()}, nil, nil, nil, state.NullOpts, nil).(*queryProcessorState)
 	bs.addStorage(testStorage, s, math.MinInt)
 	return bs, bs
 }

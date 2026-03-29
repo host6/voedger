@@ -25,41 +25,28 @@ func (s commandProcessorState) CommandPrepareArgs() istructs.CommandPrepareArgs 
 
 func implProvideCommandProcessorState(
 	ctx context.Context,
-	appStructsFunc state.AppStructsFunc,
-	partitionIDFunc state.PartitionIDFunc,
-	wsidFunc state.WSIDFunc,
+	params state.ICommandProcessorStateParams,
 	secretReader isecrets.ISecretReader,
-	cudFunc state.CUDFunc,
-	principalsFunc state.PrincipalsFunc,
-	tokenFunc state.TokenFunc,
 	intentsLimit int,
-	cmdResultBuilderFunc state.ObjectBuilderFunc,
-	execCmdArgsFunc state.CommandPrepareArgsFunc,
-	argFunc state.ArgFunc,
-	unloggedArgFunc state.UnloggedArgFunc,
-	wlogOffsetFunc state.WLogOffsetFunc,
-	stateOpts state.StateOpts,
-	originFunc state.OriginFunc) state.IHostState {
+	stateOpts state.StateOpts) state.IHostState {
 
-	state := &commandProcessorState{
-		hostState:          newHostState(ctx, "CommandProcessor", intentsLimit, appStructsFunc),
-		commandPrepareArgs: execCmdArgsFunc,
+	s := &commandProcessorState{
+		hostState:          newHostState(ctx, "CommandProcessor", intentsLimit, params.AppStructs),
+		commandPrepareArgs: params.CommandPrepareArgs,
 	}
 
-	ieventsFunc := func() istructs.IEvents {
-		return appStructsFunc().Events()
-	}
+	ieventsFunc := func() istructs.IEvents { return params.AppStructs().Events() }
 
-	state.addStorage(sys.Storage_View, storages.NewViewRecordsStorage(ctx, appStructsFunc, wsidFunc, nil), S_GET|S_GET_BATCH)
-	state.addStorage(sys.Storage_Record, storages.NewRecordsStorage(appStructsFunc, wsidFunc, cudFunc), S_GET|S_GET_BATCH|S_INSERT|S_UPDATE)
-	state.addStorage(sys.Storage_WLog, storages.NewWLogStorage(ctx, ieventsFunc, wsidFunc), S_GET)
-	state.addStorage(sys.Storage_AppSecret, storages.NewAppSecretsStorage(secretReader), S_GET)
-	state.addStorage(sys.Storage_RequestSubject, storages.NewSubjectStorage(principalsFunc, tokenFunc), S_GET)
-	state.addStorage(sys.Storage_Result, storages.NewResultStorage(cmdResultBuilderFunc), S_INSERT)
-	state.addStorage(sys.Storage_Uniq, storages.NewUniquesStorage(appStructsFunc, wsidFunc, stateOpts.UniquesHandler), S_GET)
-	state.addStorage(sys.Storage_Response, storages.NewResponseStorage(), S_INSERT)
-	state.addStorage(sys.Storage_CommandContext, storages.NewCommandContextStorage(argFunc, unloggedArgFunc, wsidFunc, wlogOffsetFunc, originFunc), S_GET)
-	state.addStorage(sys.Storage_Logger, storages.NewLoggerStorage(), S_INSERT)
+	s.addStorage(sys.Storage_View, storages.NewViewRecordsStorage(ctx, params.AppStructs, params.WSID, nil), S_GET|S_GET_BATCH)
+	s.addStorage(sys.Storage_Record, storages.NewRecordsStorage(params.AppStructs, params.WSID, params.CUD), S_GET|S_GET_BATCH|S_INSERT|S_UPDATE)
+	s.addStorage(sys.Storage_WLog, storages.NewWLogStorage(ctx, ieventsFunc, params.WSID), S_GET)
+	s.addStorage(sys.Storage_AppSecret, storages.NewAppSecretsStorage(secretReader), S_GET)
+	s.addStorage(sys.Storage_RequestSubject, storages.NewSubjectStorage(params.Principals, params.Token), S_GET)
+	s.addStorage(sys.Storage_Result, storages.NewResultStorage(params.CmdResultBuilder), S_INSERT)
+	s.addStorage(sys.Storage_Uniq, storages.NewUniquesStorage(params.AppStructs, params.WSID, stateOpts.UniquesHandler), S_GET)
+	s.addStorage(sys.Storage_Response, storages.NewResponseStorage(), S_INSERT)
+	s.addStorage(sys.Storage_CommandContext, storages.NewCommandContextStorage(params.Arg, params.UnloggedArg, params.WSID, params.WLogOffset, params.Origin), S_GET)
+	s.addStorage(sys.Storage_Logger, storages.NewLoggerStorage(), S_INSERT)
 
-	return state
+	return s
 }
