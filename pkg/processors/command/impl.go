@@ -197,12 +197,17 @@ func getIWorkspace(_ context.Context, cmd *cmdWorkpiece) (err error) {
 	return nil
 }
 
+func setPLogOffset(_ context.Context, cmd *cmdWorkpiece) (err error) {
+	cmd.pLogOffset = cmd.appPartition.nextPLogOffset
+	return nil
+}
+
 func getWSKind(_ context.Context, work pipeline.IWorkpiece) (err error) {
 	cmd := work.(*cmdWorkpiece)
 	if cmd.cmdQName == workspacemgmt.QNameCommandCreateWorkspace {
 		args, _, err := cmd.requestData.AsObject("args")
 		if err != nil {
-			// notest: gauranteed by unmarshalRequestBody
+			// notest: guaranteed by unmarshalRequestBody
 			return err
 		}
 		wsKindStr, _, err := args.AsString(authnz.Field_WSKind)
@@ -210,6 +215,9 @@ func getWSKind(_ context.Context, work pipeline.IWorkpiece) (err error) {
 			return err
 		}
 		cmd.wsKind, err = appdef.ParseQName(wsKindStr)
+		if err != nil {
+			return err
+		}
 	} else {
 		cmd.wsKind = cmd.iWorkspace.Descriptor()
 	}
