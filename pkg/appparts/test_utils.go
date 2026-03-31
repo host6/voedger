@@ -8,9 +8,8 @@ package appparts
 import (
 	"context"
 
-	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/goutils/testingu"
-	"github.com/voedger/voedger/pkg/irates"
+	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 )

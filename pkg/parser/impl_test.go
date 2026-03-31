@@ -3189,7 +3189,7 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 				StatelessResources: statelessResources,
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
-		iratesce.TestBucketsFactory, isequencer.NullIVVMSeqStorageAdapter(),
+		iratesce.TestBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
 	require.NoError(err)
 	defer func() {
@@ -3248,7 +3248,7 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 				StatelessResources: statelessResources,
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
-		iratesce.TestBucketsFactory, isequencer.NullIVVMSeqStorageAdapter(),
+		iratesce.TestBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
 	)
 	require.NoError(err)
 	defer func() {

@@ -220,8 +220,8 @@ func getWSKind(_ context.Context, work pipeline.IWorkpiece) (err error) {
 }
 
 func getCmdQName(_ context.Context, cmd *cmdWorkpiece) (err error) {
-	if cmdWorkpiece.cmdMes.APIPath() == processors.APIPath_Docs {
-		cmdWorkpiece.cmdQName = istructs.QNameCommandCUD
+	if cmd.cmdMes.APIPath() == processors.APIPath_Docs {
+		cmd.cmdQName = istructs.QNameCommandCUD
 	} else {
 		cmd.cmdQName = cmd.cmdMes.QName()
 	}

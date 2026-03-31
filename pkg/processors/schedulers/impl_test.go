@@ -18,6 +18,7 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/testingu"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
@@ -143,4 +144,7 @@ func (m *mockAppPartition) IsLimitExceeded(_ appdef.QName, _ appdef.OperationKin
 	panic("not implemented")
 }
 func (m *mockAppPartition) ResetRateLimit(_ appdef.QName, _ appdef.OperationKind, _ istructs.WSID, _ string) {
+}
+func (m *mockAppPartition) Sequencer() isequencer.ISequencer {
+	panic("not implemented")
 }

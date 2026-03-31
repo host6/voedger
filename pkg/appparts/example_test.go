@@ -50,7 +50,8 @@ func Example() {
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
 		provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0, nil)
 
-	appParts := appparts.NewForTests(appStructsProvider)
+	appParts, cleanup := appparts.NewTestAppParts(appStructsProvider)
+	defer cleanup()
 
 	report := func(part appparts.IAppPartition) {
 		fmt.Println(part.App(), "partition", part.ID())
