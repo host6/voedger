@@ -6,21 +6,27 @@
 package router
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"runtime/debug"
 	"strconv"
-	"strings"
+	"time"
 
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/processors"
 )
 
 var onBeforeWriteResponse func(w http.ResponseWriter) // not nil in tests only
@@ -34,7 +40,7 @@ func WriteTextResponse(w http.ResponseWriter, msg string, code int) {
 func ReplyCommonError(w http.ResponseWriter, msg string, code int) {
 	w.Header().Set(httpu.ContentType, httpu.ContentType_ApplicationJSON)
 	w.WriteHeader(code)
-	writeCommonError(w, msg, code)
+	writeCommonError_V2(w, errors.New(msg), code)
 }
 
 func ReplyJSON(w http.ResponseWriter, data string, code int) {
@@ -43,15 +49,22 @@ func ReplyJSON(w http.ResponseWriter, data string, code int) {
 	writeResponse(w, data)
 }
 
-func writeCommonError(w http.ResponseWriter, msg string, code int) bool {
-	return writeResponse(w, fmt.Sprintf(`{"status":%d,"message":%q}`, code, msg))
+func writeCommonError_V2(w http.ResponseWriter, err error, code int) bool {
+	return writeResponse(w, fmt.Sprintf(`{"status":%d,"message":%q}`, code, err.Error()))
+}
+
+func writeCommonError_V1(w http.ResponseWriter, err error, code int) bool {
+	w.Header().Set(httpu.ContentType, httpu.ContentType_ApplicationJSON)
+	w.WriteHeader(code)
+	sysErr := coreutils.WrapSysErrorToExact(err, code)
+	return writeResponse(w, sysErr.ToJSON_APIV1())
 }
 
 func writeResponse(w http.ResponseWriter, data string) bool {
 	if onBeforeWriteResponse != nil {
 		onBeforeWriteResponse(w)
 	}
-	if _, err := w.Write([]byte(data)); err != nil {
+	if _, err := w.Write([]byte(data)); err != nil { //nolint G705 data is always JSON; Content-Type is set to application/json by all callers
 		stack := debug.Stack()
 		log.Println("failed to write response:", err, "\n", string(stack))
 		return false
@@ -60,15 +73,15 @@ func writeResponse(w http.ResponseWriter, data string) bool {
 	return true
 }
 
-type filteringWriter struct {
+type annoyingErrorsFilter struct {
 	w io.Writer
 }
 
-func (fw *filteringWriter) Write(p []byte) (n int, err error) {
-	if strings.Contains(string(p), "TLS handshake error") {
+func (f *annoyingErrorsFilter) Write(p []byte) (n int, err error) {
+	if bytes.Contains(p, []byte("TLS handshake error")) {
 		return len(p), nil
 	}
-	return fw.w.Write(p)
+	return f.w.Write(p)
 }
 
 func replyServiceUnavailable(rw http.ResponseWriter) {
@@ -112,6 +125,7 @@ func createBusRequest(data validatedData, req *http.Request) bus.Request {
 		AppQName: data.appQName,
 		Resource: data.vars[URLPlaceholder_resourceName],
 		Body:     data.body,
+		Host:     remoteIP(req.RemoteAddr),
 	}
 
 	if docIDStr, hasDocID := data.vars[URLPlaceholder_id]; hasDocID {
@@ -127,4 +141,68 @@ func createBusRequest(data validatedData, req *http.Request) bus.Request {
 		res.Query[k] = v[0]
 	}
 	return res
+}
+
+func withLogAttribs(ctx context.Context, data validatedData, busRequest bus.Request, req *http.Request) context.Context {
+	extension := busRequest.Resource
+	if busRequest.IsAPIV2 {
+		if busRequest.QName == appdef.NullQName {
+			extension = apiPathToExtension(processors.APIPath(busRequest.APIPath))
+		} else {
+			extension = busRequest.QName.String()
+		}
+	}
+	newReqID := fmt.Sprintf("%s-%d", globalServerStartTime, reqID.Add(1))
+	enrichedCtx := logger.WithContextAttrs(ctx, map[string]any{
+		logger.LogAttr_ReqID:     newReqID,
+		logger.LogAttr_WSID:      data.wsid,
+		logger.LogAttr_VApp:      data.appQName,
+		logger.LogAttr_Extension: extension,
+		logAttrib_Origin:         req.Header.Get(httpu.Origin),
+	})
+	return enrichedCtx
+}
+
+func logLatency(ctx context.Context, sentAt time.Time) {
+	if logger.IsVerbose() {
+		logger.VerboseCtx(ctx, "routing.latency1", fmt.Sprintf("%dms", time.Since(sentAt).Milliseconds()))
+	}
+}
+
+func logServeRequest(ctx context.Context) {
+	if logger.IsVerbose() {
+		logger.LogCtx(ctx, 1, logger.LogLevelVerbose, "routing.accepted", "")
+	}
+}
+
+func apiPathToExtension(apiPath processors.APIPath) string {
+	switch apiPath {
+	case processors.APIPath_Docs:
+		return "sys._Docs"
+	case processors.APIPath_CDocs:
+		return "sys._CDocs"
+	case processors.APIPaths_Schema:
+		return "sys._Schema"
+	case processors.APIPath_Schemas_WorkspaceRoles:
+		return "sys._Schemas_WorkspaceRoles"
+	case processors.APIPath_Schemas_WorkspaceRole:
+		return "sys._Schemas_WorkspaceRole"
+	case processors.APIPath_Auth_Login:
+		return "sys._Auth_Login"
+	case processors.APIPath_Auth_Refresh:
+		return "sys._Auth_Refresh"
+	case processors.APIPath_Users:
+		return "sys._Users"
+	case processors.APIPath_N10N_SubscribeAndWatch:
+		return "sys._N10N_SubscribeAndWatch"
+	}
+	return strconv.Itoa(int(apiPath))
+}
+
+func remoteIP(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		return remoteAddr
+	}
+	return host
 }

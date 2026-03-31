@@ -18,21 +18,6 @@ import (
 
 type SyncActualizerFactory = func(istructs.IAppStructs, istructs.PartitionID) pipeline.ISyncOperator
 
-// NewForTests only for tests where sync actualizer is not used
-func NewForTests(structs istructs.IAppStructsProvider) IAppPartitions {
-	iAppParts, _ := New2(
-		context.Background(),
-		structs,
-		NullSyncActualizerFactory,
-		NullActualizerRunner,
-		NullSchedulerRunner,
-		NullExtensionEngineFactories,
-		irates.NullBucketsFactory,
-		nil, nil,
-	)
-	return iAppParts
-}
-
 // New2 creates new app partitions.
 //
 // # Parameters:

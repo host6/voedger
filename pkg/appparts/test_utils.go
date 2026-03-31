@@ -8,6 +8,7 @@ package appparts
 import (
 	"context"
 
+	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/irates"
 	"github.com/voedger/voedger/pkg/isequencer"
@@ -23,7 +24,7 @@ func NewTestAppParts(asp istructs.IAppStructsProvider) (IAppPartitions, func()) 
 		NullActualizerRunner,
 		NullSchedulerRunner,
 		NullExtensionEngineFactories,
-		irates.NullBucketsFactory,
+		iratesce.TestBucketsFactory,
 		testingu.MockTime,
 		isequencer.NullIVVMSeqStorageAdapter(),
 	)

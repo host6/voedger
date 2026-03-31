@@ -8,7 +8,6 @@ package router
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -22,13 +21,14 @@ import (
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/sys"
 	"golang.org/x/net/netutil"
 
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
 func (s *httpsService) Prepare(work interface{}) error {
-	if err := s.httpService.Prepare(work); err != nil {
+	if err := s.routerService.Prepare(work); err != nil {
 		return err
 	}
 
@@ -39,12 +39,12 @@ func (s *httpsService) Prepare(work interface{}) error {
 func (s *httpsService) Run(ctx context.Context) {
 	s.preRun(ctx)
 	if err := s.server.ServeTLS(s.listener, "", ""); err != http.ErrServerClosed {
-		s.log("ServeTLS() error: %s", err.Error())
+		logger.ErrorCtx(s.rootLogCtx, "endpoint.unexpectedstop", err.Error())
 	}
 }
 
 // pipeline.IService
-func (s *httpService) Prepare(work interface{}) (err error) {
+func (s *routerService) Prepare(work interface{}) error {
 	s.router = mux.NewRouter()
 
 	// https://dev.untill.com/projects/#!627072
@@ -63,63 +63,74 @@ func (s *httpService) Prepare(work interface{}) (err error) {
 		return err
 	}
 
+	return s.prepareBasicServer(s.router)
+}
+
+// pipeline.IService
+func (s *routerService) Stop() {
+	s.httpServer.Stop()
+	if s.n10n != nil {
+		for s.n10n.MetricNumSubscriptions() > 0 {
+			time.Sleep(subscriptionsCloseCheckInterval)
+		}
+	}
+}
+
+func (s *httpServer) prepareBasicServer(handler http.Handler) (err error) {
 	if s.listener, err = net.Listen("tcp", s.listenAddress); err != nil {
 		return err
 	}
 
 	s.listeningPort.Store(uint32(s.listener.Addr().(*net.TCPAddr).Port)) // nolint G115
 
-	if s.RouterParams.ConnectionsLimit > 0 {
-		s.listener = netutil.LimitListener(s.listener, s.RouterParams.ConnectionsLimit)
+	if s.ConnectionsLimit > 0 {
+		s.listener = netutil.LimitListener(s.listener, s.ConnectionsLimit)
 	}
 
 	s.server = &http.Server{
 		Addr:         s.listenAddress,
-		Handler:      s.router,
-		ReadTimeout:  time.Duration(s.RouterParams.ReadTimeout) * time.Second,
-		WriteTimeout: time.Duration(s.RouterParams.WriteTimeout) * time.Second,
+		Handler:      handler,
+		ReadTimeout:  time.Duration(s.ReadTimeout) * time.Second,
+		WriteTimeout: time.Duration(s.WriteTimeout) * time.Second,
+		ErrorLog:     log.New(&annoyingErrorsFilter{log.Default().Writer()}, log.Default().Prefix(), log.Default().Flags()),
 	}
-
 	return nil
 }
 
-func (s *httpService) preRun(ctx context.Context) {
+func (s *httpServer) preRun(ctx context.Context) {
+	s.rootLogCtx = logger.WithContextAttrs(ctx, map[string]any{
+		logger.LogAttr_VApp:      sys.VApp_SysVoedger,
+		logger.LogAttr_Extension: s.name,
+	})
 	s.server.BaseContext = func(l net.Listener) context.Context {
-		return ctx // need to track both client disconnect and app finalize
+		return s.rootLogCtx // need to track both client disconnect and app finalize
 	}
-	s.log("starting on %s", s.listener.Addr().(*net.TCPAddr).String())
+	logger.InfoCtx(s.rootLogCtx, "endpoint.listen.start", s.listener.Addr().(*net.TCPAddr).String())
 }
 
 // pipeline.IService
-func (s *httpService) Run(ctx context.Context) {
+func (s *httpServer) Run(ctx context.Context) {
 	s.preRun(ctx)
 	if err := s.server.Serve(s.listener); err != http.ErrServerClosed {
-		s.log("Serve() error: %s", err.Error())
+		logger.ErrorCtx(s.rootLogCtx, "endpoint.unexpectedstop", err.Error())
 	}
-}
-
-func (s *httpService) log(format string, args ...interface{}) {
-	logger.Info(fmt.Sprintf("%s: %s", s.name, fmt.Sprintf(format, args...)))
 }
 
 // pipeline.IService
-func (s *httpService) Stop() {
+func (s *httpServer) Stop() {
 	// ctx here is used to avoid eternal waiting for close idle connections and listeners
 	// all connections and listeners are closed in the explicit way (they're tracks ctx.Done()) so it is not necessary to track ctx here
-	if err := s.server.Shutdown(context.Background()); err != nil {
-		s.log("Shutdown() failed: %s", err.Error())
+	ctx := context.Background()
+	if err := s.server.Shutdown(ctx); err != nil {
+		logger.ErrorCtx(s.rootLogCtx, "endpoint.shutdown.error", err.Error())
 		s.listener.Close()
 		s.server.Close()
+		return
 	}
-	if s.n10n != nil {
-		for s.n10n.MetricNumSubcriptions() > 0 {
-			time.Sleep(subscriptionsCloseCheckInterval)
-		}
-	}
-	s.blobWG.Wait()
+	logger.InfoCtx(s.rootLogCtx, "endpoint.shutdown")
 }
 
-func (s *httpService) GetPort() int {
+func (s *httpServer) GetPort() int {
 	port := s.listeningPort.Load()
 	if port == 0 {
 		panic("listener is not listening. Need to call http funcs before public service is started -> use IFederation.AdminFunc()")
@@ -127,7 +138,7 @@ func (s *httpService) GetPort() int {
 	return int(port)
 }
 
-func (s *httpService) registerDebugHandlers() {
+func (s *routerService) registerDebugHandlers() {
 	// pprof profile
 	s.router.Handle("/debug/pprof", http.HandlerFunc(pprof.Index))
 	s.router.Handle("/debug/cmdline", http.HandlerFunc(pprof.Cmdline))
@@ -141,7 +152,7 @@ func (s *httpService) registerDebugHandlers() {
 	})) // must be the last
 }
 
-func (s *httpService) registerReverseProxyHandler() error {
+func (s *routerService) registerReverseProxyHandler() error {
 	redirectMatcher, err := s.getRedirectMatcher()
 	if err != nil {
 		return err
@@ -151,11 +162,11 @@ func (s *httpService) registerReverseProxyHandler() error {
 	return nil
 }
 
-func (s *httpService) registerRouterCheckerHandler() {
+func (s *routerService) registerRouterCheckerHandler() {
 	s.router.HandleFunc("/api/check", corsHandler(checkHandler())).Methods("POST", "GET", "OPTIONS").Name("router check")
 }
 
-func (s *httpService) registerHandlersV1() {
+func (s *routerService) registerHandlersV1() {
 	/*
 		launching app from localhost from browser. Trying to execute POST from web app within browser.
 		Browser sees that hosts differs: from localhost to alpha -> need CORS -> denies POST and executes the same request with OPTIONS header
@@ -177,7 +188,7 @@ func (s *httpService) registerHandlersV1() {
 		URLPlaceholder_wsid, URLPlaceholder_resourceName), corsHandler(RequestHandler_V1(s.requestSender, s.numsAppsWorkspaces))).
 		Methods("POST", "PATCH", "OPTIONS").Name("api")
 
-	s.router.Handle("/n10n/channel", corsHandler(s.subscribeAndWatchHandler(s.requestSender))).Methods("GET")
+	s.router.Handle("/n10n/channel", corsHandler(s.subscribeAndWatchHandler())).Methods("GET")
 	s.router.Handle("/n10n/subscribe", corsHandler(s.subscribeHandler())).Methods("GET")
 	s.router.Handle("/n10n/unsubscribe", corsHandler(s.unSubscribeHandler())).Methods("GET")
 	s.router.Handle("/n10n/update/{offset:[0-9]{1,10}}", corsHandler(s.updateHandler()))
@@ -185,37 +196,37 @@ func (s *httpService) registerHandlersV1() {
 
 func RequestHandler_V1(requestSender bus.IRequestSender, numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) http.HandlerFunc {
 	return withValidateForFuncs(numsAppsWorkspaces, func(req *http.Request, rw http.ResponseWriter, data validatedData) {
-		request := createBusRequest(data, req)
+		busRequest := createBusRequest(data, req)
+
+		reqCtxWithExtensionAttrib := withLogAttribs(req.Context(), data, busRequest, req)
 
 		// req's BaseContext is router service's context. See service.Start()
 		// router app closing or client disconnected -> req.Context() is done
 		// will create new cancellable context and cancel it if write to http socket is failed.
 		// requestCtx.Done() -> SendRequest2 implementation will notify the handler that the consumer has left us
-		requestCtx, cancel := context.WithCancel(req.Context())
+		requestCtx, cancel := context.WithCancel(reqCtxWithExtensionAttrib)
 		defer cancel() // to avoid context leak
-		responseCh, responseMeta, responseErr, err := requestSender.SendRequest(requestCtx, request)
+
+		logServeRequest(requestCtx)
+
+		sentAt := time.Now()
+		responseCh, responseMeta, responseErr, err := requestSender.SendRequest(requestCtx, busRequest)
 		if err != nil {
-			logger.Error("sending request to VVM on", request.Resource, "is failed:", err, ". Body:\n", string(request.Body))
-			status := http.StatusInternalServerError
-			if errors.Is(err, bus.ErrSendTimeoutExpired) {
-				status = http.StatusServiceUnavailable
-			}
-			WriteTextResponse(rw, err.Error(), status)
+			logger.ErrorCtx(requestCtx, "routing.send2vvm.error", "sending request to VVM on", busRequest.Resource, "is failed:", err, ". Body:\n", string(busRequest.Body))
+			writeCommonError_V1(rw, err, http.StatusInternalServerError)
 			return
 		}
+		logLatency(requestCtx, sentAt)
 
 		initResponse(rw, responseMeta)
-		reply_v1(requestCtx, rw, responseCh, responseErr, responseMeta.ContentType, cancel, request, responseMeta.Mode())
+		reply_v1(requestCtx, rw, responseCh, responseErr, responseMeta.ContentType, cancel, busRequest, responseMeta.Mode())
 	})
 }
 
 func corsHandler(h http.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if logger.IsVerbose() {
-			logger.Verbose("serving", r.Method, r.URL.Path, ", origin", r.Header.Get(httpu.Origin))
-		}
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, Authorization")
+		w.Header().Set("Access-Control-Allow-Headers", "Accept, Content-Type, Content-Length, Accept-Encoding, Authorization, Blob-Name")
 		if r.Method == "OPTIONS" {
 			return
 		}

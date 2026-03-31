@@ -14,7 +14,6 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
-	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/iprocbus"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/processors"
@@ -36,6 +35,7 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 		}
 		if request.IsN10N {
 			n10nArgs := n10n.N10NProcArgs{
+				Host:             request.Host,
 				Body:             request.Body,
 				Token:            token,
 				Method:           request.Method,
@@ -45,12 +45,12 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 				AppQName:         request.AppQName,
 				ChannelIDFromURL: request.Resource,
 			}
+			// This Handle call does not block even if the n10n processor is busy with a previous long-polling request,
+			// because a new pipeline is created for each request.
+			// The call is made directly instead of via procbus; n10n concurrency is already limited by the number of
+			// subscriptions per subject and per login.
 			n10nProc.Handle(requestCtx, n10nArgs)
 			return
-		}
-		if logger.IsVerbose() {
-			// FIXME: eliminate this. Unlogged params are logged
-			logger.Verbose("request body:\n", string(request.Body))
 		}
 
 		if !vvmApps.Exists(request.AppQName) {
@@ -73,13 +73,7 @@ func provideRequestHandler(appParts appparts.IAppPartitions, procbus iprocbus.IP
 		if request.IsAPIV2 {
 			if request.Method == http.MethodGet {
 				// QP
-				queryParams, err := query2.ParseQueryParams(request.Query)
-				if err != nil {
-					bus.ReplyBadRequest(responder, "parse query params failed: "+err.Error())
-					return
-				}
-
-				iqm := query2.NewIQueryMessage(requestCtx, request.AppQName, request.WSID, responder, *queryParams, request.DocID, processors.APIPath(request.APIPath), request.QName,
+				iqm := query2.NewIQueryMessage(requestCtx, request.AppQName, request.WSID, responder, request.Query, request.DocID, processors.APIPath(request.APIPath), request.QName,
 					partitionID, request.Host, token, request.WorkspaceQName, request.Header[httpu.Accept])
 				if !procbus.Submit(uint(qpcgIdx_v2), 0, iqm) {
 					bus.ReplyErrf(responder, http.StatusServiceUnavailable, "no query_v2 processors available")

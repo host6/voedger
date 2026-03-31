@@ -11,6 +11,7 @@ import (
 	"net/http"
 
 	"github.com/voedger/voedger/pkg/bus"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
@@ -18,22 +19,23 @@ func subscribeExtraPipeline(requestCtx context.Context, p *implIN10NProc) pipeli
 	return pipeline.NewSyncPipeline(requestCtx, "Subscribe on Extra View Processor",
 		pipeline.WireFunc("validateToken", p.validateToken),
 		pipeline.WireFunc("denyBody", denyBody),
+		pipeline.WireFunc("getAppStructs", p.getAppStructs),
 		pipeline.WireFunc("addProjectionKeyFromURL", addProjectionKeyFromURL),
+		pipeline.WireFunc("authnzEntities", p.authnzEntities),
 		pipeline.WireFunc("subscribe", p.subscribe),
+		pipeline.WireFunc("logSubscribeSuccess", logSubscribeSuccess),
 		pipeline.WireFunc("replyOK", p.replyOK),
 	)
 }
 
-func denyBody(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	n10nWP := work.(*n10nWorkpiece)
+func denyBody(ctx context.Context, n10nWP *n10nWorkpiece) (err error) {
 	if len(n10nWP.body) > 0 {
 		return errors.New("unexpected body")
 	}
 	return nil
 }
 
-func addProjectionKeyFromURL(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	n10nWP := work.(*n10nWorkpiece)
+func addProjectionKeyFromURL(ctx context.Context, n10nWP *n10nWorkpiece) (err error) {
 	n10nWP.subscriptions = append(n10nWP.subscriptions, subscription{
 		entity: n10nWP.entityFromURL,
 		wsid:   n10nWP.wsidFromURL,
@@ -41,7 +43,15 @@ func addProjectionKeyFromURL(ctx context.Context, work pipeline.IWorkpiece) (err
 	return nil
 }
 
-func (p *implIN10NProc) replyOK(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	n10nWP := work.(*n10nWorkpiece)
+func logSubscribeSuccess(ctx context.Context, n10nWP *n10nWorkpiece) (err error) {
+	if logger.IsVerbose() {
+		for _, pk := range n10nWP.subscribedProjectionKeys {
+			logger.VerboseCtx(n10nProjectionLogCtx(n10nWP.logCtx, pk), "n10n.subscribe.success")
+		}
+	}
+	return nil
+}
+
+func (p *implIN10NProc) replyOK(ctx context.Context, n10nWP *n10nWorkpiece) (err error) {
 	return n10nWP.responder.Respond(bus.ResponseMeta{StatusCode: http.StatusOK}, nil)
 }

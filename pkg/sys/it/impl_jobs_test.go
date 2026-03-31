@@ -16,6 +16,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/istructs"
 	it "github.com/voedger/voedger/pkg/vit"
 	"github.com/voedger/voedger/pkg/vvm"
@@ -23,7 +24,7 @@ import (
 
 const testJobFireInterval = time.Minute
 
-func TestJobjs_BasicUsage_Builtin(t *testing.T) {
+func TestJobs_BasicUsage_Builtin(t *testing.T) {
 	cfg := it.NewOwnVITConfig(
 		it.WithApp(istructs.AppQName_test1_app2, it.ProvideApp2WithJob, it.WithUserLogin("login", "1")),
 	)
@@ -31,35 +32,33 @@ func TestJobjs_BasicUsage_Builtin(t *testing.T) {
 	vit := it.NewVIT(t, &cfg)
 	defer vit.TearDown()
 
-	// the job have run here because time is increased by 1 day per each NewVIT
-	// case:
-	//   VVM is launched, timer for Job1_builtin is charged to MockTime.Now()+1minute (according to cron schedule)
-	//   MockTime.Now+1day is made on NewVIT()
-	//   timer for Job1_builtin is fired
+	// With isolated scheduler time, jobs do NOT fire automatically on NewVIT() because
+	// the scheduler has its own time that starts from the same instant as global MockTime
+	// but is not advanced by vit.TimeAdd(). We need to use vit.SchedulerTimeAdd() to trigger jobs.
 
 	// will query the view from an any App Workspace
 	anyAppWSID := istructs.NewWSID(istructs.CurrentClusterID(), istructs.FirstBaseAppWSID)
 	sysToken := vit.GetSystemPrincipal(istructs.AppQName_test1_app2).Token
 
-	// need to wait for the job to fire for the first time beause of day++ on NewVIT()
-	require.True(t, isJobFiredForCurrentInstant_builtin(vit, anyAppWSID, sysToken, vit.Now().UnixMilli(), true))
-
-	// proceed to the next minute second by second
+	// proceed to the next minute second by second using scheduler time
 	// collect instants on each second to check later that the job has not fired until the next minute
 	instantsToCheck := []int64{}
-	for second := vit.Now().Second(); second < 59; second++ { // 60 instead of 59 -> time++ -> current time cross the minute if current second if 59 -> fail
-		vit.TimeAdd(time.Second)
-		instantsToCheck = append(instantsToCheck, vit.Now().UnixMilli())
+	for second := vit.SchedulerNow().Second(); second < 59; second++ { // 60 instead of 59 -> time++ -> current time cross the minute if current second if 59 -> fail
+		vit.SchedulerTimeAdd(time.Second)
+		instantsToCheck = append(instantsToCheck, vit.SchedulerNow().UnixMilli())
 	}
 
 	// now current second is 59
 	// proceed to the next minute -> job should fire
-	vit.TimeAdd(time.Second)
+	vit.SchedulerTimeAdd(time.Second)
+
+	logger.Info("vit.SchedulerNow() before 1st job run:", vit.SchedulerNow())
 
 	// expect the job have fired and inserted the record into its view
 	start := time.Now()
 	fired := false
 	for time.Since(start) < 3*time.Second {
+		// use vit.Now() instead of vit.SchedulerNow() because the job impl uses vit.Now()
 		body := fmt.Sprintf(`{"args":{"Query":"select * from a1.app2pkg.Jobs where RunUnixMilli = %d"},"elements":[{"fields":["Result"]}]}`, vit.Now().UnixMilli())
 		resp := vit.PostApp(istructs.AppQName_test1_app2, anyAppWSID, "q.sys.SqlQuery", body, httpu.WithAuthorizeBy(sysToken))
 		if !resp.IsEmpty() {
@@ -86,31 +85,33 @@ func TestJobs_BasicUsage_Sidecar(t *testing.T) {
 	vit := it.NewVIT(t, &cfg)
 	defer vit.TearDown()
 
-	// the job have run here because time is increased by 1 day per each NewVIT
-	// case:
-	//   VVM is launched, timer for Job1_builtin is charged to MockTime.Now()+1minute (according to cron schedule)
-	//   MockTime.Now+1day is made on NewVIT()
-	//   timer for Job1_builtin is fired
+	// With isolated scheduler time, jobs do NOT fire automatically on NewVIT() because
+	// the scheduler has its own time that is not advanced by vit.TimeAdd().
+	// We need to use vit.SchedulerTimeAdd() to trigger jobs.
 
 	// will query the view from an any App Workspace
 	anyAppWSID := istructs.NewWSID(istructs.CurrentClusterID(), istructs.FirstBaseAppWSID)
 	sysToken := vit.GetSystemPrincipal(istructs.AppQName_test2_app1).Token
 
-	// need to wait for the job to fire for the first time beause day++ on NewVIT()
+	logger.Info("vit.SchedulerNow() before 1st job run:", vit.SchedulerNow())
+
+	// advance scheduler time to fire the first job
 	waitForSidecarJobCounter(vit, anyAppWSID, sysToken, 1)
 
 	// expect that the job will not fire again during the current minute
-	for second := vit.Now().Second(); second < 59; second++ { // 60 instead of 59 -> time++ -> current time cross the minute if current second is 59 -> fail
-		vit.TimeAdd(time.Second)
+	for second := vit.SchedulerNow().Second(); second < 59; second++ { // 60 instead of 59 -> time++ -> current time cross the minute if current second is 59 -> fail
+		vit.SchedulerTimeAdd(time.Second)
 		waitForSidecarJobCounter(vit, anyAppWSID, sysToken, 1)
 	}
 
 	// now current second is 59
 	// proceed to the next minute -> job should fire
-	vit.TimeAdd(time.Second)
+	vit.SchedulerTimeAdd(time.Second)
 
 	// expect the job have fired and inserted the record into its view
 	waitForSidecarJobCounter(vit, anyAppWSID, sysToken, 2)
+
+	logger.Info("vit.SchedulerNow() after 2nd job run:", vit.SchedulerNow())
 }
 
 func isJobFiredForCurrentInstant_builtin(vit *it.VIT, wsid istructs.WSID, token string, instant int64, waitForFire bool) bool {
@@ -124,7 +125,7 @@ func isJobFiredForCurrentInstant_builtin(vit *it.VIT, wsid istructs.WSID, token 
 				return true
 			}
 			time.Sleep(100 * time.Millisecond)
-			vit.TimeAdd(testJobFireInterval) // force job to fire
+			vit.SchedulerTimeAdd(testJobFireInterval) // force job to fire using scheduler time
 			currentInstant += testJobFireInterval.Milliseconds()
 		} else {
 			return !resp.IsEmpty()
@@ -133,15 +134,44 @@ func isJobFiredForCurrentInstant_builtin(vit *it.VIT, wsid istructs.WSID, token 
 	return false
 }
 
+func TestJobs_SendEmail(t *testing.T) {
+	cfg := it.NewOwnVITConfig(
+		it.WithApp(istructs.AppQName_test1_app2, it.ProvideApp2WithJobSendMail),
+	)
+	vit := it.NewVIT(t, &cfg)
+	defer vit.TearDown()
+
+	// expect that the job will not fire again during the current minute
+	for second := vit.SchedulerNow().Second(); second < 59; second++ { // 60 instead of 59 -> time++ -> current time cross the minute if current second is 59 -> fail
+		vit.SchedulerTimeAdd(time.Second)
+	}
+
+	// now current second is 59
+	// proceed to the next minute -> job should fire
+	vit.SchedulerTimeAdd(time.Second)
+
+	email := vit.CaptureEmail()
+	require.Equal(t, "Test Subject", email.Subject)
+	require.Equal(t, "from@test.com", email.From)
+	require.Equal(t, []string{"to@test.com"}, email.To)
+	require.Equal(t, "Test body", email.Body)
+}
+
 func waitForSidecarJobCounter(vit *it.VIT, wsid istructs.WSID, token string, expectedMinimalCounterValue int) {
+	vit.T.Helper()
 	start := time.Now()
 	lastValue := 0
+	counter := 0
 	for time.Since(start) < 5*time.Second {
 		body := `{"args":{"Query":"select * from a0.sidecartestapp.JobStateView where Pk = 1 and Cc = 1"},"elements":[{"fields":["Result"]}]}`
 		resp := vit.PostApp(istructs.AppQName_test2_app1, wsid, "q.sys.SqlQuery", body, httpu.WithAuthorizeBy(token))
 		if resp.IsEmpty() {
+			if counter == 0 {
+				// force job to fire only once using scheduler time.
+				vit.SchedulerTimeAdd(testJobFireInterval)
+			}
 			time.Sleep(100 * time.Millisecond)
-			vit.TimeAdd(testJobFireInterval) // force job to fire
+			counter++
 			continue
 		}
 		m := map[string]interface{}{}
@@ -151,5 +181,5 @@ func waitForSidecarJobCounter(vit *it.VIT, wsid istructs.WSID, token string, exp
 			return
 		}
 	}
-	vit.T.Fatal("failed to wait for sidecar job counter. Last value:", lastValue)
+	vit.T.Fatal("failed to wait for sidecar job counter. Last value:", lastValue, ", expected:", expectedMinimalCounterValue)
 }

@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,7 +22,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
@@ -31,17 +31,15 @@ import (
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/itokensjwt"
 	"github.com/voedger/voedger/pkg/parser"
-	"github.com/voedger/voedger/pkg/processors/actualizers"
 	"github.com/wneessen/go-mail"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
-	"github.com/voedger/voedger/pkg/irates"
+
 	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istorage/cas"
 	"github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/sys/authnz"
@@ -50,7 +48,8 @@ import (
 )
 
 // shared among all VIT instances
-var sysAppsSchemasCache = &implISchemasCache_sysApps{schemas: map[appdef.AppQName]*parser.AppSchemaAST{}}
+// caches schemas for apps that are not test apps (i.e., not test1_app1, test1_app2, test2_app1, or test2_app2)
+var nonTestAppsSchemasCache = &implISchemasCache_nonTestApps{schemas: map[appdef.AppQName]*parser.AppSchemaAST{}}
 
 func NewVIT(t testing.TB, vitCfg *VITConfig, opts ...vitOptFunc) (vit *VIT) {
 	useCas := coreutils.IsCassandraStorage()
@@ -97,8 +96,7 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool, vvmLaunchOnly bool) *V
 	cfg.SequencesTrustLevel = isequencer.SequencesTrustLevel_0
 
 	cfg.Time = testingu.MockTime
-	cfg.AsyncActualizersRetryDelay = actualizers.RetryDelay(100 * time.Millisecond)
-	cfg.SchemasCache = sysAppsSchemasCache
+	cfg.SchemasCache = nonTestAppsSchemasCache
 
 	emailCaptor := &implIEmailSender_captor{
 		emailCaptorCh: make(chan state.EmailMessage, 1), // must be buffered
@@ -133,7 +131,12 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool, vvmLaunchOnly bool) *V
 	// eliminate timeouts impact for debugging
 	cfg.RouterReadTimeout = int(debugTimeout)
 	cfg.RouterWriteTimeout = int(debugTimeout)
-	cfg.SendTimeout = bus.SendTimeout(debugTimeout)
+
+	// append retry on WSAECONNREFUSED to in-VVM IFederationWithRetry
+	// Otherwise stress tests on Windows are failed due of WSAECONNREFUSED on workspace post-init
+	policyOptsForWithRetry := slices.Clone(cfg.PolicyOptsForFederationWithRetry)
+	policyOptsForWithRetry = append(policyOptsForWithRetry, withRetryOnConnRefused)
+	cfg.PolicyOptsForFederationWithRetry = policyOptsForWithRetry
 
 	vvm, err := vvmpkg.Provide(&cfg)
 	require.NoError(t, err)
@@ -158,11 +161,14 @@ func newVit(t testing.TB, vitCfg *VITConfig, useCas bool, vvmLaunchOnly bool) *V
 		emailCaptor:          emailCaptor,
 		mockTime:             testingu.MockTime,
 	}
-	httpClient, httpClientCleanup := httpu.NewIHTTPClient()
+	httpClient, httpClientCleanup := httpu.NewIHTTPClient(httpu.WithRetryPolicy(vitHTTPClientRetryPolicy...))
 	vit.httpClient = httpClient
 
 	vit.cleanups = append(vit.cleanups, vitPreConfig.cleanups...)
 	vit.cleanups = append(vit.cleanups, func(vit *VIT) { httpClientCleanup() })
+
+	// get rid of huge amount of logs reporting about workspaces init process
+	defer logger.SetLogLevelWithRestore(logger.LogLevelWarning)()
 
 	// launch the server
 	// leadership duration - ten years to avoid leadership expiration when time bumps in tests (including 1 day add on each test)
@@ -411,7 +417,7 @@ func (vit *VIT) UploadBLOB(appQName appdef.AppQName, wsid istructs.WSID, name st
 		},
 		ReadCloser: io.NopCloser(bytes.NewReader(content)),
 	}
-	o := []httpu.ReqOptFunc{WithVITOpts()}
+	o := []httpu.ReqOptFunc{createVITOpts()}
 	o = append(o, opts...)
 	blobID, err := vit.IFederation.UploadBLOB(appQName, wsid, blobReader, o...)
 	require.NoError(vit.T, err)
@@ -447,7 +453,7 @@ func (vit *VIT) UploadTempBLOB(appQName appdef.AppQName, wsid istructs.WSID, nam
 		},
 		ReadCloser: io.NopCloser(bytes.NewReader(content)),
 	}
-	o := []httpu.ReqOptFunc{WithVITOpts()}
+	o := []httpu.ReqOptFunc{createVITOpts()}
 	o = append(o, opts...)
 	blobSUUID, err := vit.IFederation.UploadTempBLOB(appQName, wsid, blobReader, duration, o...)
 	require.NoError(vit.T, err)
@@ -456,7 +462,7 @@ func (vit *VIT) UploadTempBLOB(appQName appdef.AppQName, wsid istructs.WSID, nam
 
 func (vit *VIT) Func(url string, body string, opts ...httpu.ReqOptFunc) *federation.FuncResponse {
 	vit.T.Helper()
-	o := []httpu.ReqOptFunc{WithVITOpts(), httpu.WithOptsValidator(httpu.DenyGETAndDiscardResponse), httpu.WithDefaultMethod(http.MethodPost)}
+	o := []httpu.ReqOptFunc{createVITOpts(), httpu.WithOptsValidator(httpu.DenyGETAndDiscardResponse), httpu.WithDefaultMethod(http.MethodPost)}
 	o = append(o, opts...)
 	httpResp, err := vit.httpClient.Req(context.Background(), vit.URLStr()+"/"+url, body, o...)
 	funcResp, err := federation.HTTPRespToFuncResp(httpResp, err)
@@ -470,7 +476,7 @@ func (vit *VIT) Func(url string, body string, opts ...httpu.ReqOptFunc) *federat
 func (vit *VIT) ReadBLOB(appQName appdef.AppQName, wsid istructs.WSID, ownerRecord appdef.QName, ownerRecordField appdef.FieldName, ownerID istructs.RecordID,
 	optFuncs ...httpu.ReqOptFunc) iblobstorage.BLOBReader {
 	vit.T.Helper()
-	o := []httpu.ReqOptFunc{WithVITOpts()}
+	o := []httpu.ReqOptFunc{createVITOpts()}
 	o = append(o, optFuncs...)
 	reader, err := vit.IFederation.ReadBLOB(appQName, wsid, ownerRecord, ownerRecordField, ownerID, o...)
 	require.NoError(vit.T, err)
@@ -507,7 +513,7 @@ func (vit *VIT) ReadTempBLOB(appQName appdef.AppQName, wsid istructs.WSID, blobS
 
 func (vit *VIT) GET(relativeURL string, opts ...httpu.ReqOptFunc) *httpu.HTTPResponse {
 	vit.T.Helper()
-	o := []httpu.ReqOptFunc{WithVITOpts(), httpu.WithOptsValidator(httpu.DenyGETAndDiscardResponse), httpu.WithDefaultMethod(http.MethodGet)}
+	o := []httpu.ReqOptFunc{createVITOpts(), httpu.WithOptsValidator(httpu.DenyGETAndDiscardResponse), httpu.WithDefaultMethod(http.MethodGet)}
 	o = append(o, opts...)
 	url := vit.URLStr() + "/" + relativeURL
 	res, err := vit.httpClient.Req(context.Background(), url, "", o...)
@@ -517,7 +523,7 @@ func (vit *VIT) GET(relativeURL string, opts ...httpu.ReqOptFunc) *httpu.HTTPRes
 
 func (vit *VIT) POST(relativeURL string, body string, opts ...httpu.ReqOptFunc) *httpu.HTTPResponse {
 	vit.T.Helper()
-	o := []httpu.ReqOptFunc{WithVITOpts(), httpu.WithOptsValidator(httpu.DenyGETAndDiscardResponse), httpu.WithDefaultMethod(http.MethodPost)}
+	o := []httpu.ReqOptFunc{createVITOpts(), httpu.WithOptsValidator(httpu.DenyGETAndDiscardResponse), httpu.WithDefaultMethod(http.MethodPost)}
 	o = append(o, opts...)
 	url := vit.URLStr() + "/" + relativeURL
 	httpResp, err := vit.httpClient.Req(context.Background(), url, body, o...)
@@ -527,7 +533,7 @@ func (vit *VIT) POST(relativeURL string, body string, opts ...httpu.ReqOptFunc) 
 }
 
 func (vit *VIT) checkExpectationsInHTTPResp(httpResp *httpu.HTTPResponse) {
-	if len(httpResp.Opts.(*vitReqOpts).expectedMessages) == 0 {
+	if len(httpResp.Opts.CustomOpts(vitOptsKey{}).(*vitReqOpts).expectedMessages) == 0 {
 		return
 	}
 	vit.T.Helper()
@@ -537,19 +543,20 @@ func (vit *VIT) checkExpectationsInHTTPResp(httpResp *httpu.HTTPResponse) {
 }
 
 func (vit *VIT) satisfySysErrorExpectations(funcResp *federation.FuncResponse, opts httpu.IReqOpts) {
-	if len(opts.(*vitReqOpts).expectedMessages) == 0 {
+	vitOpts := opts.CustomOpts(vitOptsKey{}).(*vitReqOpts)
+	if len(vitOpts.expectedMessages) == 0 {
 		return
 	}
 	if funcResp == nil || funcResp.SysError == nil {
-		vit.T.Fatal("expected error messages", opts.(*vitReqOpts).expectedMessages, "but no response or no error in response")
+		vit.T.Fatal("expected error messages", vitOpts.expectedMessages, "but no response or no error in response")
 	}
 	var sysError coreutils.SysError
 	if !errors.As(funcResp.SysError, &sysError) {
 		require.NoError(vit.T, funcResp.SysError)
 	}
 	index := 0
-	for _, expectedMes := range opts.(*vitReqOpts).expectedMessages {
-		require.Containsf(vit.T, sysError.Message[index:], expectedMes, `actual message "%s", ordered expected %#v`, sysError.Message, opts.(*vitReqOpts).expectedMessages)
+	for _, expectedMes := range vitOpts.expectedMessages {
+		require.Containsf(vit.T, sysError.Message[index:], expectedMes, `actual message "%s", ordered expected %#v`, sysError.Message, vitOpts.expectedMessages)
 		index = strings.Index(sysError.Message[index:], expectedMes) + len(expectedMes)
 	}
 }
@@ -557,7 +564,7 @@ func (vit *VIT) satisfySysErrorExpectations(funcResp *federation.FuncResponse, o
 func (vit *VIT) PostApp(appQName appdef.AppQName, wsid istructs.WSID, funcName string, body string, opts ...httpu.ReqOptFunc) *federation.FuncResponse {
 	vit.T.Helper()
 	url := fmt.Sprintf("%s/api/%s/%d/%s", vit.URLStr(), appQName, wsid, funcName)
-	o := []httpu.ReqOptFunc{WithVITOpts(), httpu.WithOptsValidator(httpu.DenyGETAndDiscardResponse), httpu.WithDefaultMethod(http.MethodPost)}
+	o := []httpu.ReqOptFunc{createVITOpts(), httpu.WithOptsValidator(httpu.DenyGETAndDiscardResponse), httpu.WithDefaultMethod(http.MethodPost)}
 	o = append(o, opts...)
 	httpResp, err := vit.httpClient.Req(context.Background(), url, body, o...)
 	funcResp, err := federation.HTTPRespToFuncResp(httpResp, err)
@@ -617,25 +624,21 @@ func (vit *VIT) TimeAdd(dur time.Duration) {
 	vit.RefreshTokens()
 }
 
-func (vit *VIT) NextName() string {
-	return "name_" + strconv.Itoa(vit.NextNumber())
+// SchedulerTimeAdd advances the scheduler's isolated time by the given duration.
+// This is used to control job scheduler timing independently from global MockTime.
+// Jobs will only fire when this isolated time is advanced past their scheduled time.
+func (vit *VIT) SchedulerTimeAdd(dur time.Duration) {
+	vit.ISchedulerRunner.SchedulersTime().(testingu.IMockTime).Add(dur)
 }
 
-// sets `bs` as state of Buckets for `rateLimitName` in `appQName`
-// will be automatically restored on vit.TearDown() to the state the Bucket was before MockBuckets() call
-func (vit *VIT) MockBuckets(appQName appdef.AppQName, rateLimitName appdef.QName, bs irates.BucketState) {
-	vit.T.Helper()
-	as, err := vit.BuiltIn(appQName)
-	require.NoError(vit.T, err)
-	appBuckets := istructsmem.IBucketsFromIAppStructs(as)
-	initialState, err := appBuckets.GetDefaultBucketsState(rateLimitName)
-	require.NoError(vit.T, err)
-	appBuckets.SetDefaultBucketState(rateLimitName, bs)
-	appBuckets.ResetRateBuckets(rateLimitName, bs)
-	vit.cleanups = append(vit.cleanups, func(vit *VIT) {
-		appBuckets.SetDefaultBucketState(rateLimitName, initialState)
-		appBuckets.ResetRateBuckets(rateLimitName, initialState)
-	})
+// SchedulerNow returns the current scheduler's isolated time.
+// This is the time used by job schedulers, which may differ from global MockTime.
+func (vit *VIT) SchedulerNow() time.Time {
+	return vit.ISchedulerRunner.SchedulersTime().Now()
+}
+
+func (vit *VIT) NextName() string {
+	return "name_" + strconv.Itoa(vit.NextNumber())
 }
 
 // CaptureEmail waits for and returns the next sent email

@@ -21,8 +21,8 @@ import (
 	retrier "github.com/voedger/voedger/pkg/goutils/retry"
 )
 
-// body and bodyReader are mutual exclusive
-func req(ctx context.Context, method, url, body string, bodyReader io.Reader, headers, cookies map[string]string) (req *http.Request, err error) {
+// body and bodyReader are mutually exclusive
+func newRequest(ctx context.Context, method, url, body string, bodyReader io.Reader, headers, cookies map[string]string) (req *http.Request, err error) {
 	if bodyReader != nil {
 		req, err = http.NewRequestWithContext(ctx, method, url, bodyReader)
 	} else {
@@ -55,29 +55,24 @@ func (c *implIHTTPClient) Req(ctx context.Context, urlStr string, body string, o
 	return c.req(ctx, urlStr, body, optFuncs...)
 }
 
-func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
-	opts := &reqOpts{
+func (c *implIHTTPClient) compileOpts(urlStr string, optFuncs ...ReqOptFunc) (opts *reqOpts, err error) {
+	opts = &reqOpts{
 		headers: map[string]string{},
 		cookies: map[string]string{},
 		validators: []func(IReqOpts) (panicMessage string){
 			optsValidator_responseHandling,
-			optsValidator_retryOn503,
 		},
+		customOpts: map[any]any{},
+		urlStr:     urlStr,
 	}
 	for _, defaultOptFunc := range c.defaultOpts {
 		defaultOptFunc(opts)
 	}
-	var iOpts IReqOpts = opts
-	var prevCustomOptsProvider func(IReqOpts) IReqOpts = nil
 	for _, optFunc := range optFuncs {
-		optFunc(iOpts)
-		if prevCustomOptsProvider == nil && opts.customOptsProvider != nil {
-			iOpts = opts.customOptsProvider(iOpts)
-			prevCustomOptsProvider = opts.customOptsProvider
-		}
+		optFunc(opts)
 	}
 	for _, optFunc := range opts.appendedOpts {
-		optFunc(iOpts)
+		optFunc(opts)
 	}
 	if len(opts.method) == 0 {
 		opts.method = http.MethodGet
@@ -87,12 +82,12 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 		opts.expectedHTTPCodes = append(opts.expectedHTTPCodes, http.StatusOK, http.StatusCreated)
 	}
 	if len(opts.urlPath) > 0 {
-		netURL, err := url.Parse(urlStr)
+		netURL, err := url.Parse(opts.urlStr)
 		if err != nil {
 			return nil, err
 		}
 		netURL.Path = opts.urlPath
-		urlStr = netURL.String()
+		opts.urlStr = netURL.String()
 	}
 	if opts.withoutAuth {
 		delete(opts.headers, Authorization)
@@ -104,14 +99,31 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 			panic(panicMessage)
 		}
 	}
+	return opts, nil
+}
+
+func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, optFuncs ...ReqOptFunc) (*HTTPResponse, error) {
+	opts, err := c.compileOpts(urlStr, optFuncs...)
+	if err != nil {
+		return nil, err
+	}
+
 	startTime := time.Now()
 
 	reqCtx, cancel := context.WithTimeout(ctx, maxHTTPRequestTimeout)
 	defer cancel()
 
+	// For long-polling (SSE) requests, use the caller's context so the
+	// connection stays alive after req() returns (defer cancel() would
+	// kill reqCtx immediately). reqCtx is still used for the retry loop.
+	httpCtx := reqCtx
+	if opts.responseHandler != nil {
+		httpCtx = ctx
+	}
+
 	retrierCfg := retrier.NewConfig(httpBaseRetryDelay, httpMaxRetryDelay)
 	retrierCfg.OnError = func(attempt int, delay time.Duration, opErr error) (retry bool, abortErr error) {
-		for _, matcher := range opts.retryErrsMatchers {
+		for _, matcher := range opts.retryOnErr {
 			if matcher(opErr) {
 				return true, nil
 			}
@@ -120,25 +132,39 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 	}
 
 	resp, err := retrier.Retry(reqCtx, retrierCfg, func() (*http.Response, error) {
-		req, err := req(ctx, opts.method, urlStr, body, opts.bodyReader, opts.headers, opts.cookies)
+		req, err := newRequest(httpCtx, opts.method, opts.urlStr, body, opts.bodyReader, opts.headers, opts.cookies)
 		if err != nil {
 			return nil, err
 		}
-		resp, err := c.client.Do(req)
+		resp, err := c.client.Do(req) //nolint G704 URL is intentionally caller-provided
 		if err != nil {
 			return nil, err
 		}
 
-		if resp.StatusCode == http.StatusServiceUnavailable && opts.shouldHandle503() {
-			if opts.maxRetryDurationOn503 > 0 && time.Since(startTime) > opts.maxRetryDurationOn503 {
-				return resp, nil
+		for _, retryPolicy := range opts.retryOnStatus {
+			if resp.StatusCode != retryPolicy.statusCode {
+				continue
 			}
-			defer resp.Body.Close()
+			if retryPolicy.maxRetryDuration > 0 && time.Since(startTime) > retryPolicy.maxRetryDuration {
+				break
+			}
 			if err := discardRespBody(resp); err != nil {
 				return nil, err
 			}
-			logger.Verbose("503. retrying...")
-			return nil, errHTTPStatus503
+			if retryPolicy.respectRetryAfter {
+				retryAfterDuration := parseRetryAfterHeader(resp)
+				if retryAfterDuration > 0 {
+					logger.Verbose("%d. retrying after %v...", resp.StatusCode, retryAfterDuration)
+					// Sleep for the custom delay, respecting context cancellation
+					select {
+					case <-time.After(retryAfterDuration):
+					case <-reqCtx.Done():
+						return nil, reqCtx.Err()
+					}
+				}
+			}
+			logger.Verbose(resp.StatusCode, "retrying...")
+			return nil, errRetry
 		}
 		return resp, nil
 	})
@@ -152,7 +178,7 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 	}
 	httpResponse := &HTTPResponse{
 		HTTPResp: resp,
-		Opts:     iOpts,
+		Opts:     opts,
 	}
 	if resp.StatusCode == http.StatusOK && isCodeExpected && opts.responseHandler != nil {
 		opts.responseHandler(resp)

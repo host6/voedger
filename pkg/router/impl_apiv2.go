@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/voedger/voedger/pkg/appdef"
@@ -21,6 +22,7 @@ import (
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/iblobstorage"
+	"github.com/voedger/voedger/pkg/iblobstoragestg"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -28,7 +30,7 @@ import (
 	blobprocessor "github.com/voedger/voedger/pkg/processors/blobber"
 )
 
-func (s *httpService) registerHandlersV2() {
+func (s *routerService) registerHandlersV2() {
 	// create: /api/v2/apps/{owner}/{app}/workspaces/{wsid}/docs/{pkg}.{table}
 	s.router.HandleFunc(fmt.Sprintf("/api/v2/apps/{%s}/{%s}/workspaces/{%s:[0-9]+}/docs/{%s}.{%s}",
 		URLPlaceholder_appOwner, URLPlaceholder_appName, URLPlaceholder_wsid, URLPlaceholder_pkg, URLPlaceholder_table),
@@ -171,7 +173,7 @@ func requestHandlerV2_schemas(reqSender bus.IRequestSender, numsAppsWorkspaces m
 		busRequest := createBusRequest(data, req)
 		busRequest.IsAPIV2 = true
 		busRequest.APIPath = int(processors.APIPaths_Schema)
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
@@ -181,7 +183,7 @@ func requestHandlerV2_schemas_wsRoles(reqSender bus.IRequestSender, numsAppsWork
 		busRequest.IsAPIV2 = true
 		busRequest.APIPath = int(processors.APIPath_Schemas_WorkspaceRoles)
 		busRequest.WorkspaceQName = appdef.NewQName(data.vars[URLPlaceholder_pkg], data.vars[URLPlaceholder_workspaceName])
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
@@ -195,8 +197,21 @@ func requestHandlerV2_changePassword(numsAppsWorkspaces map[appdef.AppQName]istr
 			return
 		}
 		pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, login, istructs.CurrentClusterID())
-		body := fmt.Sprintf(`{"args":{"Login":"%s","AppName":"%s"},"unloggedArgs":{"OldPassword":"%s","NewPassword":"%s"}}`,
-			login, busRequest.AppQName, oldPassword, newPassword)
+		bodyBytes, err := json.Marshal(map[string]any{
+			"args": map[string]any{
+				"Login":   login,
+				"AppName": busRequest.AppQName.String(),
+			},
+			"unloggedArgs": map[string]any{
+				"OldPassword": oldPassword,
+				"NewPassword": newPassword,
+			},
+		})
+		if err != nil {
+			ReplyCommonError(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		body := string(bodyBytes)
 		url := fmt.Sprintf("api/v2/apps/sys/registry/workspaces/%d/commands/registry.ChangePassword", pseudoWSID)
 		if _, err = federation.Func(url, body, httpu.WithMethod(http.MethodPost), httpu.WithDiscardResponse()); err != nil { // null auth
 			replyErr(rw, err)
@@ -226,8 +241,23 @@ func requestHandlerV2_create_user(numsAppsWorkspaces map[appdef.AppQName]istruct
 		pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, email, istructs.CurrentClusterID())
 		url := fmt.Sprintf("api/v2/apps/sys/registry/workspaces/%d/commands/registry.CreateEmailLogin", pseudoWSID)
 		wsKindInitData := fmt.Sprintf(`{"DisplayName":%q}`, displayName)
-		body := fmt.Sprintf(`{"args":{"Email":"%s","AppName":"%s","SubjectKind":%d,"WSKindInitializationData":%q,"ProfileCluster":%d},"unloggedArgs":{"Password":"%s"}}`,
-			verifiedEmailToken, busRequest.AppQName, istructs.SubjectKind_User, wsKindInitData, istructs.CurrentClusterID(), pwd)
+		bodyBytes, err := json.Marshal(map[string]any{
+			"args": map[string]any{
+				"Email":                    verifiedEmailToken,
+				"AppName":                  busRequest.AppQName.String(),
+				"SubjectKind":              istructs.SubjectKind_User,
+				"WSKindInitializationData": wsKindInitData,
+				"ProfileCluster":           istructs.CurrentClusterID(),
+			},
+			"unloggedArgs": map[string]any{
+				"Password": pwd,
+			},
+		})
+		if err != nil {
+			ReplyCommonError(rw, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		body := string(bodyBytes)
 		sysToken, err := payloads.GetSystemPrincipalToken(iTokens, istructs.AppQName_sys_registry)
 		if err != nil {
 			// notest
@@ -257,7 +287,7 @@ func requestHandlerV2_notifications_subscribeAndWatch(numsAppsWorkspaces map[app
 		busRequest := createBusRequest(data, req)
 		busRequest.IsAPIV2 = true
 		busRequest.IsN10N = true
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
@@ -276,7 +306,7 @@ func requestHandlerV2_notifications(numsAppsWorkspaces map[appdef.AppQName]istru
 			return
 		}
 
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
@@ -310,7 +340,7 @@ func requestHandlerV2_auth_refresh(reqSender bus.IRequestSender, numsAppsWorkspa
 		busRequest.IsAPIV2 = true
 		busRequest.APIPath = int(processors.APIPath_Auth_Refresh)
 		busRequest.Method = http.MethodGet
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
@@ -324,7 +354,7 @@ func requestHandlerV2_auth_login(reqSender bus.IRequestSender, numsAppsWorkspace
 		queryParams := map[string]string{}
 		queryParams["args"] = string(busRequest.Body)
 		busRequest.Query = queryParams
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
@@ -340,9 +370,9 @@ func requestHandlerV2_blobs_read(blobRequestHandler blobprocessor.IRequestHandle
 			panic(err)
 		}
 		if !blobRequestHandler.HandleRead_V2(data.appQName, data.wsid, data.header, req.Context(),
-			newBLOBOKResponseIniter(rw, http.StatusOK), func(statusCode int, args ...interface{}) {
-				replyErr(rw, args[0].(error))
-			}, ownerRecord, ownerRecordField, istructs.RecordID(ownerID), requestSender) {
+			newBLOBOKResponseIniter(rw, http.StatusOK), func(sysErr coreutils.SysError) {
+				replyErr(rw, sysErr)
+			}, ownerRecord, ownerRecordField, istructs.RecordID(ownerID), requestSender, iblobstoragestg.RLimiter_Null) {
 			replyServiceUnavailable(rw)
 		}
 	})
@@ -354,9 +384,9 @@ func requestHandlerV2_tempblobs_read(blobRequestHandler blobprocessor.IRequestHa
 		vars := mux.Vars(req)
 		suuid := iblobstorage.SUUID(vars[URLPlaceholder_blobIDOrSUUID])
 		if !blobRequestHandler.HandleReadTemp_V2(data.appQName, data.wsid, data.header, req.Context(),
-			newBLOBOKResponseIniter(rw, http.StatusOK), func(statusCode int, args ...interface{}) {
-				replyErr(rw, args[0].(error))
-			}, requestSender, suuid) {
+			newBLOBOKResponseIniter(rw, http.StatusOK), func(sysErr coreutils.SysError) {
+				replyErr(rw, sysErr)
+			}, requestSender, suuid, iblobstoragestg.RLimiter_Null) {
 			replyServiceUnavailable(rw)
 		}
 	})
@@ -366,8 +396,8 @@ func requestHandlerV2_tempblobs_create(blobRequestHandler blobprocessor.IRequest
 	numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces) http.HandlerFunc {
 	return withValidateForBLOBs(numsAppsWorkspaces, func(req *http.Request, rw http.ResponseWriter, data validatedData) {
 		if !blobRequestHandler.HandleWriteTemp_V2(data.appQName, data.wsid, data.header, req.Context(),
-			newBLOBOKResponseIniter(rw, http.StatusCreated), req.Body, func(statusCode int, args ...interface{}) {
-				replyErr(rw, args[0].(error))
+			newBLOBOKResponseIniter(rw, http.StatusCreated), req.Body, func(sysErr coreutils.SysError) {
+				replyErr(rw, sysErr)
 			}, requestSender) {
 			replyServiceUnavailable(rw)
 		}
@@ -381,8 +411,8 @@ func requestHandlerV2_blobs_create(blobRequestHandler blobprocessor.IRequestHand
 		ownerRecord := appdef.NewQName(vars[URLPlaceholder_pkg], vars[URLPlaceholder_table])
 		ownerRecordField := vars[URLPlaceholder_field]
 		if !blobRequestHandler.HandleWrite_V2(data.appQName, data.wsid, data.header, req.Context(),
-			newBLOBOKResponseIniter(rw, http.StatusCreated), req.Body, func(statusCode int, args ...interface{}) {
-				replyErr(rw, args[0].(error))
+			newBLOBOKResponseIniter(rw, http.StatusCreated), req.Body, func(sysErr coreutils.SysError) {
+				replyErr(rw, sysErr)
 			}, requestSender, ownerRecord, ownerRecordField) {
 			replyServiceUnavailable(rw)
 		}
@@ -396,7 +426,7 @@ func requestHandlerV2_schemas_wsRole(reqSender bus.IRequestSender, numsAppsWorks
 		busRequest.APIPath = int(processors.APIPath_Schemas_WorkspaceRole)
 		busRequest.WorkspaceQName = appdef.NewQName(data.vars[URLPlaceholder_pkg], data.vars[URLPlaceholder_workspaceName])
 		busRequest.QName = appdef.NewQName(data.vars[URLPlaceholder_rolePkg], data.vars[URLPlaceholder_role])
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
@@ -406,7 +436,7 @@ func requestHandlerV2_view(reqSender bus.IRequestSender, numsAppsWorkspaces map[
 		busRequest.IsAPIV2 = true
 		busRequest.APIPath = int(processors.APIPath_Views)
 		busRequest.QName = appdef.NewQName(data.vars[URLPlaceholder_pkg], data.vars[URLPlaceholder_view])
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
@@ -423,7 +453,7 @@ func requestHandlerV2_extension(reqSender bus.IRequestSender, apiPath processors
 		busRequest.IsAPIV2 = true
 		busRequest.APIPath = int(apiPath)
 		busRequest.QName = appdef.NewQName(data.vars[URLPlaceholder_pkg], entity)
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
@@ -442,27 +472,35 @@ func requestHandlerV2_table(reqSender bus.IRequestSender, apiPath processors.API
 		busRequest.IsAPIV2 = true
 		busRequest.APIPath = int(apiPath)
 		busRequest.QName = appdef.NewQName(data.vars[URLPlaceholder_pkg], data.vars[URLPlaceholder_table])
-		sendRequestAndReadResponse(req, busRequest, reqSender, rw)
+		sendRequestAndReadResponse(req, busRequest, reqSender, rw, data)
 	})
 }
 
-func sendRequestAndReadResponse(req *http.Request, busRequest bus.Request, reqSender bus.IRequestSender, rw http.ResponseWriter) {
+func sendRequestAndReadResponse(req *http.Request, busRequest bus.Request, reqSender bus.IRequestSender, rw http.ResponseWriter, data validatedData) {
+	reqCtxWithExtensionAttrib := withLogAttribs(req.Context(), data, busRequest, req)
+
 	// req's BaseContext is router service's context. See service.Start()
 	// router app closing or client disconnected -> req.Context() is done
 	// will create new cancellable context and cancel it if http section send is failed.
-	// requestCtx.Done() -> SendRequest implementation will notify the handler that the consumer has left us
-	requestCtx, cancel := context.WithCancel(req.Context())
+	// case: the client is gracefully disconnected
+	// 	- reqCtxWithExtensionAttrib is done, no additional cancelation needed
+	// case: the ethernet cable is broken
+	//   - reqCtxWithExtensionAttrib is not done
+	//   - the router is failed to send data to the client.
+	//   - need to explicitly cancel the context to inform the handler that the client is gone.
+	requestCtx, cancel := context.WithCancel(reqCtxWithExtensionAttrib)
 	defer cancel() // to avoid context leak
+
+	logServeRequest(requestCtx)
+
+	sentAt := time.Now()
 	respCh, respMeta, respErr, err := reqSender.SendRequest(requestCtx, busRequest)
 	if err != nil {
-		logger.Error("sending request to VVM on", busRequest.QName, "is failed:", err, ". Body:\n", string(busRequest.Body))
-		status := http.StatusInternalServerError
-		if errors.Is(err, bus.ErrSendTimeoutExpired) {
-			status = http.StatusServiceUnavailable
-		}
-		WriteTextResponse(rw, err.Error(), status)
+		logger.ErrorCtx(requestCtx, "routing.send2vvm.error", "sending request to VVM on", busRequest.QName, "is failed:", err, ". Body:\n", string(busRequest.Body))
+		ReplyCommonError(rw, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	logLatency(requestCtx, sentAt)
 
 	initResponse(rw, respMeta)
 	reply_v2(requestCtx, rw, respCh, respErr, cancel, respMeta)

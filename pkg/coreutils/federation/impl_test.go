@@ -48,14 +48,14 @@ func TestFederationFunc(t *testing.T) {
 	require.NoError(err)
 	federation, cleanup := New(context.Background(), func() *url.URL {
 		return federationURL
-	}, coreutils.NilAdminPortGetter)
+	}, coreutils.NilAdminPortGetter, httpu.DefaultRetryPolicyOpts)
 	defer cleanup()
 
 	t.Run("basic", func(t *testing.T) {
 		handler = func(w http.ResponseWriter, r *http.Request) {
 			body, err := io.ReadAll(r.Body)
 			require.NoError(err)
-			require.Equal(`{"fld":"val"}`, string(body))
+			require.JSONEq(`{"fld":"val"}`, string(body))
 			_, err = w.Write([]byte(`{
 				"newIDs":{"1":2},
 				"sections":[{"type":"","elements":[[[["hello, world"]]]]}],
@@ -193,11 +193,11 @@ func TestFederationFunc(t *testing.T) {
 		require.NoError(err)
 		require.Nil(resp)
 	})
-	t.Run("context cancel during retry on 503", func(t *testing.T) {
+	t.Run("context cancel during retry on status", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		federation, cleanup := New(ctx, func() *url.URL {
 			return federationURL
-		}, coreutils.NilAdminPortGetter)
+		}, coreutils.NilAdminPortGetter, httpu.DefaultRetryPolicyOpts)
 		defer cleanup()
 		counter := 0
 		handler = func(w http.ResponseWriter, _ *http.Request) {
@@ -208,7 +208,7 @@ func TestFederationFunc(t *testing.T) {
 			}
 			cancel()
 		}
-		_, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, httpu.WithRetryOn503())
+		_, err := federation.Func("/api/123456789/c.sys.CUD", `{"fld":"val"}`, httpu.ReqOptFunc(httpu.WithRetryOnStatus(http.StatusServiceUnavailable)))
 		require.ErrorIs(err, context.Canceled)
 	})
 }
@@ -219,7 +219,7 @@ func TestPanicOnGETAndDiscardResponse(t *testing.T) {
 	require.NoError(err)
 	federation, cleanup := New(context.Background(), func() *url.URL {
 		return federationURL
-	}, coreutils.NilAdminPortGetter)
+	}, coreutils.NilAdminPortGetter, httpu.DefaultRetryPolicyOpts)
 	defer cleanup()
 
 	require.Panics(func() {

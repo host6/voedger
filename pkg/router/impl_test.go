@@ -89,7 +89,7 @@ func TestBasicUsage_ApiArray(t *testing.T) {
 					}
 					respWriter.Close(c.err)
 				}()
-			}, bus.DefaultSendTimeout)
+			})
 			defer tearDown(router)
 
 			resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v2/apps/test1/app1/workspaces/%d/queries/test.query", router.port(), testWSID))
@@ -144,7 +144,7 @@ func TestBasicUsage_Respond(t *testing.T) {
 					err := responder.Respond(bus.ResponseMeta{ContentType: httpu.ContentType_ApplicationJSON, StatusCode: http.StatusOK}, c.obj)
 					require.NoError(err)
 				}()
-			}, bus.DefaultSendTimeout)
+			})
 			defer tearDown(router)
 
 			resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v2/apps/test1/app1/workspaces/%d/queries/test.query", router.port(), testWSID))
@@ -156,25 +156,6 @@ func TestBasicUsage_Respond(t *testing.T) {
 	}
 }
 
-func TestBeginResponseTimeout(t *testing.T) {
-	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
-		// bump the mock time to make timeout timer fire
-		testingu.MockTime.Add(2 * time.Millisecond)
-		// just do not use the responder
-	}, bus.SendTimeout(time.Millisecond))
-	defer tearDown(router)
-
-	resp, err := http.Post(fmt.Sprintf("http://127.0.0.1:%d/api/test1/app1/%d/somefunc_SectionedSendResponseError", router.port(), testWSID), "application/json", http.NoBody)
-	require.NoError(t, err)
-	defer resp.Body.Close()
-	defer resp.Request.Body.Close()
-
-	respBodyBytes, err := io.ReadAll(resp.Body)
-	require.NoError(t, err)
-	require.Equal(t, bus.ErrSendTimeoutExpired.Error(), string(respBodyBytes))
-	expectResp(t, resp, httpu.ContentType_TextPlain, http.StatusServiceUnavailable)
-}
-
 type testObject struct {
 	IntField int
 	StrField string
@@ -183,7 +164,7 @@ type testObject struct {
 func TestHandlerPanic(t *testing.T) {
 	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		panic("test panic HandlerPanic")
-	}, bus.DefaultSendTimeout)
+	})
 	defer tearDown(router)
 
 	body := []byte("")
@@ -195,7 +176,7 @@ func TestHandlerPanic(t *testing.T) {
 	respBodyBytes, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Contains(t, string(respBodyBytes), "test panic HandlerPanic")
-	expectResp(t, resp, "text/plain", http.StatusInternalServerError)
+	expectResp(t, resp, httpu.ContentType_ApplicationJSON, http.StatusInternalServerError)
 }
 
 func TestClientDisconnect_CtxCanceledOnElemSend(t *testing.T) {
@@ -225,7 +206,7 @@ func TestClientDisconnect_CtxCanceledOnElemSend(t *testing.T) {
 				StrField: "str1",
 			})
 		}()
-	}, bus.SendTimeout(5*time.Second))
+	})
 	defer tearDown(router)
 
 	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v2/apps/test1/app1/workspaces/%d/queries/test.query", router.port(), testWSID))
@@ -255,7 +236,7 @@ func TestClientDisconnect_CtxCanceledOnElemSend(t *testing.T) {
 
 func TestCheck(t *testing.T) {
 	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
-	}, bus.SendTimeout(1*time.Second))
+	})
 	defer tearDown(router)
 
 	bodyReader := bytes.NewReader(nil)
@@ -265,12 +246,12 @@ func TestCheck(t *testing.T) {
 	respBodyBytes, err := io.ReadAll(resp.Body)
 	require.NoError(t, err)
 	require.Equal(t, "ok", string(respBodyBytes))
-	expectOKRespPlainText(t, resp)
+	expectResp(t, resp, httpu.ContentType_TextPlain, http.StatusOK)
 }
 
 func Test404(t *testing.T) {
 	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
-	}, bus.SendTimeout(1*time.Second))
+	})
 	defer tearDown(router)
 
 	bodyReader := bytes.NewReader(nil)
@@ -314,11 +295,15 @@ func TestClientDisconnect_FailedToWriteResponse(t *testing.T) {
 				StrField: "str1",
 			})
 		}()
-	}, bus.SendTimeout(time.Hour)) // one hour timeout to eliminate case when client context closes longer than bus timeout on client disconnect. It could take up to few seconds
+	})
 	defer tearDown(router)
 
 	// client side
-	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v2/apps/test1/app1/workspaces/%d/queries/test.query", router.port(), testWSID))
+	client := &http.Client{
+		Transport: &http.Transport{DisableKeepAlives: true},
+	}
+	defer client.CloseIdleConnections()
+	resp, err := client.Get(fmt.Sprintf("http://127.0.0.1:%d/api/v2/apps/test1/app1/workspaces/%d/queries/test.query", router.port(), testWSID))
 	require.NoError(err)
 
 	// ensure the first element is sent successfully
@@ -345,8 +330,15 @@ func TestClientDisconnect_FailedToWriteResponse(t *testing.T) {
 	// but will be failed in router (will be disconnected right on writeResponse)
 	close(setDisconnectOnWriteResponse)
 
-	// first elem send after client disconnect should be successful
-	require.NoError(<-expectedErrCh)
+	// The second write may return nil or context.Canceled depending on timing:
+	// - The write to bus channel succeeds (data is delivered)
+	// - Router managed to call resp.Body.Close() in the hook
+	// - We've got the result of `return rs.clientCtx.Err()` at implResponseWriter.Write()
+	// Both outcomes are valid - what matters is the write reached the router
+	secondWriteErr := <-expectedErrCh
+	if secondWriteErr != nil {
+		require.ErrorIs(secondWriteErr, context.Canceled)
+	}
 
 	// next sending to the bus must be failed because the requestCtx is closed
 	require.ErrorIs(<-expectedErrCh, context.Canceled)
@@ -361,7 +353,7 @@ func TestAdminService(t *testing.T) {
 	require := require.New(t)
 	router := setUp(t, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		go bus.ReplyJSON(responder, http.StatusOK, "test resp AdminService")
-	}, bus.DefaultSendTimeout)
+	})
 	defer tearDown(router)
 
 	t.Run("basic", func(t *testing.T) {
@@ -405,13 +397,12 @@ type testRouter struct {
 	wg                   *sync.WaitGroup
 	httpService          pipeline.IService
 	adminService         pipeline.IService
-	sendTimeout          bus.SendTimeout
 	clientDisconnections chan struct{}
 }
 
-func startRouter(t *testing.T, router *testRouter, rp RouterParams, sendTimeout bus.SendTimeout, requestHandler bus.RequestHandler) {
+func startRouter(t *testing.T, router *testRouter, rp RouterParams, requestHandler bus.RequestHandler) {
 	ctx, cancel := context.WithCancel(context.Background())
-	requestSender := bus.NewIRequestSender(testingu.MockTime, sendTimeout, requestHandler)
+	requestSender := bus.NewIRequestSender(testingu.MockTime, requestHandler)
 	httpSrv, acmeSrv, adminService := Provide(rp, nil, nil, nil, requestSender,
 		map[appdef.AppQName]istructs.NumAppWorkspaces{istructs.AppQName_test1_app1: 10}, nil, nil, nil)
 	require.Nil(t, acmeSrv)
@@ -434,20 +425,21 @@ func startRouter(t *testing.T, router *testRouter, rp RouterParams, sendTimeout 
 	}
 }
 
-func setUp(t *testing.T, requestHandler bus.RequestHandler, sendTimeout bus.SendTimeout) *testRouter {
+func setUp(t *testing.T, requestHandler bus.RequestHandler) *testRouter {
 	rp := RouterParams{
-		Port:             0,
-		WriteTimeout:     DefaultRouterWriteTimeout,
-		ReadTimeout:      DefaultRouterReadTimeout,
-		ConnectionsLimit: DefaultConnectionsLimit,
+		HTTPServerParams: HTTPServerParams{
+			Port:             0,
+			WriteTimeout:     DefaultRouterWriteTimeout,
+			ReadTimeout:      DefaultRouterReadTimeout,
+			ConnectionsLimit: DefaultConnectionsLimit,
+		},
 	}
 	router := &testRouter{
 		wg:                   &sync.WaitGroup{},
-		sendTimeout:          sendTimeout,
 		clientDisconnections: make(chan struct{}, 1),
 	}
 
-	startRouter(t, router, rp, sendTimeout, requestHandler)
+	startRouter(t, router, rp, requestHandler)
 	return router
 }
 
@@ -487,15 +479,7 @@ func expectJSONResp(t *testing.T, expectedJSON string, expectedString string, re
 	} else {
 		require.Equal(t, expectedString, string(b))
 	}
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Contains(t, resp.Header["Content-Type"][0], "application/json", resp.Header)
-	require.Equal(t, []string{"*"}, resp.Header["Access-Control-Allow-Origin"])
-	require.Equal(t, []string{"Accept, Content-Type, Content-Length, Accept-Encoding, Authorization"}, resp.Header["Access-Control-Allow-Headers"])
-}
-
-func expectOKRespPlainText(t *testing.T, resp *http.Response) {
-	t.Helper()
-	expectResp(t, resp, "text/plain", http.StatusOK)
+	expectResp(t, resp, httpu.ContentType_ApplicationJSON, http.StatusOK)
 }
 
 func expectResp(t *testing.T, resp *http.Response, contentType string, statusCode int) {
@@ -503,5 +487,5 @@ func expectResp(t *testing.T, resp *http.Response, contentType string, statusCod
 	require.Equal(t, statusCode, resp.StatusCode)
 	require.Contains(t, resp.Header["Content-Type"][0], contentType, resp.Header)
 	require.Equal(t, []string{"*"}, resp.Header["Access-Control-Allow-Origin"])
-	require.Equal(t, []string{"Accept, Content-Type, Content-Length, Accept-Encoding, Authorization"}, resp.Header["Access-Control-Allow-Headers"])
+	require.Equal(t, []string{"Accept, Content-Type, Content-Length, Accept-Encoding, Authorization, Blob-Name"}, resp.Header["Access-Control-Allow-Headers"])
 }

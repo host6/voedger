@@ -19,7 +19,6 @@ import (
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/processors"
@@ -28,7 +27,7 @@ import (
 )
 
 func queryRateLimitExceeded(ctx context.Context, qw *queryWork) error {
-	if qw.appStructs.IsFunctionRateLimitsExceeded(qw.msg.QName(), qw.msg.WSID()) {
+	if exceeded, _ := qw.appPart.IsLimitExceeded(qw.msg.QName(), appdef.OperationKind_Execute, qw.msg.WSID(), qw.msg.Host()); exceeded {
 		return coreutils.NewSysError(http.StatusTooManyRequests)
 	}
 	return nil
@@ -69,7 +68,6 @@ type queryWork struct {
 	rowsProcessorErrCh   chan error // will contain the first error from rowProcessor if any. The rest of errors in rowsProcessor will be just logged
 	metrics              queryprocessor.IMetrics
 	principals           []iauthnz.Principal
-	principalPayload     payloads.PrincipalPayload
 	roles                []appdef.QName
 	secretReader         isecrets.ISecretReader
 	iWorkspace           appdef.IWorkspace
@@ -82,9 +80,15 @@ type queryWork struct {
 	responseWriterGetter func() bus.IResponseWriter
 	apiPathHandler       apiPathHandler
 	federation           federation.IFederation
+	profileWSID          istructs.WSID
 }
 
 var _ pipeline.IWorkpiece = (*queryWork)(nil) // ensure that queryWork implements pipeline.IWorkpiece
+
+// used by e.g. q.sys.IssueVerifiedValueToken
+func (qw *queryWork) ResetRateLimit(resource appdef.QName, operation appdef.OperationKind) {
+	qw.appPart.ResetRateLimit(resource, operation, qw.msg.WSID(), qw.msg.Host())
+}
 
 func (qw *queryWork) Release() {
 	if ap := qw.appPart; ap != nil {
@@ -104,8 +108,8 @@ func (qw *queryWork) borrow() (err error) {
 }
 
 func (qw *queryWork) isDeveloper() bool {
-	for _, role := range qw.principalPayload.Roles {
-		if role.QName == appdef.QNameRoleDeveloper {
+	for _, prn := range qw.principals {
+		if prn.Kind == iauthnz.PrincipalKind_Role && prn.QName == appdef.QNameRoleDeveloper {
 			return true
 		}
 	}
@@ -133,8 +137,8 @@ func newQueryWork(msg IQueryMessage, appParts appparts.IAppPartitions,
 		metrics:            metrics,
 		secretReader:       secretReader,
 		rowsProcessorErrCh: make(chan error, 1),
-		queryParams:        msg.QueryParams(),
-		federation:         federation,
+
+		federation: federation,
 	}
 }
 
@@ -150,19 +154,17 @@ func borrowAppPart(_ context.Context, qw *queryWork) error {
 }
 
 func operator(name string, doSync func(ctx context.Context, qw *queryWork) (err error)) *pipeline.WiredOperator {
-	return pipeline.WireFunc(name, func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-		return doSync(ctx, work.(*queryWork))
-	})
+	return pipeline.WireFunc(name, doSync)
 }
 
 func NewIQueryMessage(requestCtx context.Context, appQName appdef.AppQName, wsid istructs.WSID, responder bus.IResponder,
-	queryParams QueryParams, docID istructs.IDType, apiPath processors.APIPath,
+	rawParams map[string]string, docID istructs.IDType, apiPath processors.APIPath,
 	qName appdef.QName, partition istructs.PartitionID, host string, token string, workspaceQName appdef.QName, headerAccept string) IQueryMessage {
 	return &implIQueryMessage{
 		appQName:       appQName,
 		wsid:           wsid,
 		responder:      responder,
-		queryParams:    queryParams,
+		rawParams:      rawParams,
 		docID:          docID,
 		apiPath:        apiPath,
 		requestCtx:     requestCtx,

@@ -6,6 +6,7 @@
 package testingu
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -26,6 +27,12 @@ type IMockTime interface {
 	FireNextTimerImmediately()
 
 	SetOnNextNewTimerChan(f func())
+	SetOnNextTimerArmed(f func())
+
+	// NewIsolatedTime creates a new isolated MockTime instance that starts from the same time
+	// but advances independently from the original MockTime.
+	// Used to isolate scheduler time from global MockTime in tests.
+	NewIsolatedTime() timeu.ITime
 }
 
 func NewMockTime() IMockTime {
@@ -42,6 +49,7 @@ type mockedTime struct {
 	timers                   map[mockTimer]struct{}
 	fireNextTimerImmediately bool
 	onNextNewTimerChan       func()
+	onNextTimerArmed         func()
 }
 
 func (t *mockedTime) Now() time.Time {
@@ -59,6 +67,9 @@ func (t *mockedTime) NewTimerChan(d time.Duration) <-chan time.Time {
 	mt := mockTimer{
 		c:          make(chan time.Time, 1),
 		expiration: t.now.Add(d),
+	}
+	if t.onNextTimerArmed != nil {
+		t.onNextTimerArmed()
 	}
 	t.timers[mt] = struct{}{}
 	if t.fireNextTimerImmediately {
@@ -79,6 +90,15 @@ func (t *mockedTime) SetOnNextNewTimerChan(f func()) {
 	t.onNextNewTimerChan = func() {
 		f()
 		t.onNextNewTimerChan = nil
+	}
+	t.Unlock()
+}
+
+func (t *mockedTime) SetOnNextTimerArmed(f func()) {
+	t.Lock()
+	t.onNextTimerArmed = func() {
+		f()
+		t.onNextTimerArmed = nil
 	}
 	t.Unlock()
 }
@@ -105,5 +125,30 @@ func (t *mockedTime) checkTimers() {
 			timer.c <- t.now
 			delete(t.timers, timer)
 		}
+	}
+}
+
+// String implements fmt.Stringer to prevent reflection-based unprotected access to internal fields
+// if mockedTime is used as a mock argument then the mock engine will compare fmt.Sprintf("%v", expectedArg) and fmt.Sprintf("%v", actualArg) to check expectations
+// where actualArg is *mockedTime
+// that could lead to data race: fmt.Sprintf() reads fields of mockedTime via reflection without protection
+// whereas someone calls mockedTime methods that writes internal fields (protected via mutex)
+// String method exists -> fmt.Sprintf() will use it instead of reflection
+func (t *mockedTime) String() string {
+	t.RLock()
+	defer t.RUnlock()
+	return fmt.Sprintf("mockedTime{now=%s, timers=%d, fireNextTimerImmediately=%t}",
+		t.now.Format(time.RFC3339Nano), len(t.timers), t.fireNextTimerImmediately)
+}
+
+// NewIsolatedTime creates a new isolated MockTime instance that starts from the same time
+// but advances independently from the original MockTime.
+func (t *mockedTime) NewIsolatedTime() timeu.ITime {
+	t.RLock()
+	defer t.RUnlock()
+	return &mockedTime{
+		now:     t.now,
+		RWMutex: sync.RWMutex{},
+		timers:  map[mockTimer]struct{}{},
 	}
 }

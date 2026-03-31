@@ -11,6 +11,7 @@ import (
 	"net/url"
 
 	"github.com/voedger/voedger/pkg/isequencer"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/pipeline"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -113,6 +114,9 @@ type IAppPartition interface {
 	// If resource usage is exceeded then returns name of first exceeded limit.
 	IsLimitExceeded(resource appdef.QName, operation appdef.OperationKind, workspace istructs.WSID, remoteAddr string) (exceed bool, limit appdef.QName)
 
+	// Resets rate limit buckets for specified resource, operation and workspace to their default state.
+	ResetRateLimit(resource appdef.QName, operation appdef.OperationKind, workspace istructs.WSID, remoteAddr string)
+
 	Sequencer() isequencer.ISequencer
 }
 
@@ -140,4 +144,10 @@ type ISchedulerRunner interface {
 
 	// Creates and runs new specified job scheduler for specified application partition and workspace
 	NewAndRun(ctx context.Context, app appdef.AppQName, partition istructs.PartitionID, wsIdx istructs.AppWorkspaceNumber, wsid istructs.WSID, job appdef.QName)
+
+	// SchedulersTime returns the time instance used by schedulers.
+	// In tests, this returns an isolated MockTime that can be advanced independently
+	// from the global MockTime to control job scheduling.
+	// Used in tests only.
+	SchedulersTime() timeu.ITime
 }

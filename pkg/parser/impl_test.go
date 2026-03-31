@@ -19,7 +19,7 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/iextengine"
-	"github.com/voedger/voedger/pkg/irates"
+	"github.com/voedger/voedger/pkg/iratesce"
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	"github.com/voedger/voedger/pkg/istorage/provider"
@@ -1110,7 +1110,7 @@ func Test_Views(t *testing.T) {
 				COMMAND Orders()
 			);
 			)
-	`, "file.vsql:4:18: varchar field field1 not supported in partition key")
+	`, "file.vsql:4:18: varchar field field1 not supported in partition key\nfile.vsql:4:17: clustering columns not defined")
 
 	require.AppSchemaError(`APPLICATION test(); WORKSPACE Workspace (
 		VIEW test(
@@ -1122,7 +1122,7 @@ func Test_Views(t *testing.T) {
 			COMMAND Orders()
 		);
 	)
-	`, "file.vsql:4:17: bytes field field1 not supported in partition key")
+	`, "file.vsql:4:17: bytes field field1 not supported in partition key\nfile.vsql:4:16: clustering columns not defined")
 
 	require.AppSchemaError(`APPLICATION test(); WORKSPACE Workspace (
 		VIEW test(
@@ -1188,7 +1188,8 @@ func Test_Views(t *testing.T) {
 			);
 			)
 		`, "file.vsql:4:5: record fields are only allowed in sys package",
-			"file.vsql:5:18: record field field1 not supported in partition key")
+			"file.vsql:5:18: record field field1 not supported in partition key",
+			"file.vsql:5:17: clustering columns not defined")
 	})
 
 	t.Run("record field in clustering key", func(t *testing.T) {
@@ -1325,6 +1326,28 @@ func Test_Views2(t *testing.T) {
 		})
 		require.Error(err, "file2.vsql:2:4: projector Proj1 does not declare intent for view test")
 
+	}
+	{
+		ast, err := ParseFile("file2.vsql", `APPLICATION test(); WORKSPACE Workspace (
+			VIEW test(
+				field1 int,
+				PRIMARY KEY((field1))
+			) AS RESULT OF Proj1;
+			EXTENSION ENGINE BUILTIN (
+				PROJECTOR Proj1 AFTER EXECUTE ON (Orders) INTENTS (sys.View(test));
+				COMMAND Orders()
+			);
+		)
+		`)
+		require.NoError(err)
+		pkg, err := BuildPackageSchema("test", []*FileSchemaAST{ast})
+		require.NoError(err)
+
+		_, err = BuildAppSchema([]*PackageSchemaAST{
+			getSysPackageAST(),
+			pkg,
+		})
+		require.Error(err, "file2.vsql:4:17: clustering columns not defined")
 	}
 
 }
@@ -3154,9 +3177,9 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 	appQName := appdef.NewAppQName("pkg", "test")
 	cfgs := istructsmem.AppConfigsType{}
 	cfgs.AddAppConfig(appQName, 1, appDef, 1)
-	appStructsProvider := istructsmem.Provide(cfgs, irates.NullBucketsFactory,
+	appStructsProvider := istructsmem.Provide(cfgs,
 		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
-		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
+		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0, nil)
 	statelessResources := istructsmem.NewStatelessResources()
 	vvmCtx, cancel := context.WithCancel(context.Background())
 	appParts, cleanup := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
@@ -3166,7 +3189,9 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 				StatelessResources: statelessResources,
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
-		irates.NullBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter())
+		iratesce.TestBucketsFactory, isequencer.NullIVVMSeqStorageAdapter(),
+	)
+	require.NoError(err)
 	defer func() {
 		cancel()
 		cleanup()
@@ -3211,9 +3236,9 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 	appQName := appdef.NewAppQName("pkg", "test")
 	cfgs := istructsmem.AppConfigsType{}
 	cfgs.AddAppConfig(appQName, 1, appDef, 1)
-	appStructsProvider := istructsmem.Provide(cfgs, irates.NullBucketsFactory,
+	appStructsProvider := istructsmem.Provide(cfgs,
 		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
-		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0)
+		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0, nil)
 	statelessResources := istructsmem.NewStatelessResources()
 	vvmCtx, cancel := context.WithCancel(context.Background())
 	appParts, cleanup := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
@@ -3223,7 +3248,9 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 				StatelessResources: statelessResources,
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
-		irates.NullBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter())
+		iratesce.TestBucketsFactory, isequencer.NullIVVMSeqStorageAdapter(),
+	)
+	require.NoError(err)
 	defer func() {
 		cancel()
 		cleanup()

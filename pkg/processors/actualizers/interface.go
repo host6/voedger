@@ -12,6 +12,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
+	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -23,8 +24,6 @@ import (
 
 type TimeAfterFunc func(d time.Duration) <-chan time.Time
 
-type LogErrorFunc func(args ...interface{})
-
 type BasicAsyncActualizerConfig struct {
 	VvmName string
 
@@ -34,10 +33,9 @@ type BasicAsyncActualizerConfig struct {
 	Broker       in10n.IN10nBroker
 	Federation   federation.IFederation
 
-	StateOpts state.StateOpts
+	StateOpts  state.StateOpts
+	HTTPClient httpu.IHTTPClient
 
-	// Optional. Default value: `core-logger.Error`
-	LogError LogErrorFunc
 	// Optional.
 	AAMetrics AsyncActualizerMetrics
 	//IntentsLimit top limit per event, optional, default value is 100
@@ -49,7 +47,6 @@ type BasicAsyncActualizerConfig struct {
 	// FlushPositionInterval specifies how often actualizer must save it's position, even when no events has been processed by actualizer. Default is 1 minute
 	FlushPositionInterval time.Duration
 
-	RetryDelay  RetryDelay
 	EmailSender state.IEmailSender
 }
 

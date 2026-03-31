@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - 'pkg/istorage/**'
+
+jobs:
+  call-workflow-ci:
+    if: github.repository == 'voedger/voedger'
+    uses: untillpro/ci-action/.github/workflows/ci.yml@main
+    with:
+      short_test: "true"
+      go_race: "false"
+      install_tinygo: "true"
+    secrets:
+      reporeading_token: ${{ secrets.REPOREADING_TOKEN }}
+
+
+  call-workflow-cd_voeger:
+    needs: call-workflow-ci
+    if: github.repository == 'voedger/voedger'
+    uses: voedger/voedger/.github/workflows/cd-voedger.yml@main
+    secrets:
+      dockerusername: ${{ secrets.DOCKER_USERNAME }}
+      dockerpassword: ${{ secrets.DOCKER_PASSWORD }}
+      personaltoken: ${{ secrets.PERSONAL_TOKEN }}
+      reporeading_token: ${{ secrets.REPOREADING_TOKEN }}

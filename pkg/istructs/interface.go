@@ -65,7 +65,6 @@ type IAppStructs interface {
 	ClusterAppID() ClusterAppID
 	AppQName() appdef.AppQName
 
-	IsFunctionRateLimitsExceeded(funcQName appdef.QName, wsid WSID) bool // FIXME: eliminate, use the one from iappparts?
 	// Describe package names
 	DescribePackageNames() []string
 
@@ -89,7 +88,36 @@ type IAppStructs interface {
 	SeqTypes() map[QNameID]map[QNameID]uint64
 
 	QNameID(qName appdef.QName) (QNameID, error)
+
+	// AppTTLStorage returns application-level TTL storage
+	AppTTLStorage() IAppTTLStorage
 }
+
+// IAppTTLStorage provides application-level key-value storage with TTL support
+type IAppTTLStorage interface {
+	// TTLGet retrieves value by key considering its TTL
+	// Returns: value, exists, error
+	// Errors: ErrKeyEmpty, ErrKeyTooLong
+	TTLGet(key string) (value string, ok bool, err error)
+
+	// InsertIfNotExists inserts only if key doesn't exist
+	// Returns: true if inserted, false if key already exists
+	// Errors: ErrKeyEmpty, ErrKeyTooLong, ErrValueTooLong, ErrInvalidTTL
+	InsertIfNotExists(key, value string, ttlSeconds int) (ok bool, err error)
+
+	// CompareAndSwap performs atomic update with TTL reset
+	// Returns: true if swapped, false if current value != expectedValue
+	// Errors: ErrKeyEmpty, ErrKeyTooLong, ErrValueTooLong, ErrInvalidTTL
+	CompareAndSwap(key, expectedValue, newValue string, ttlSeconds int) (ok bool, err error)
+
+	// CompareAndDelete performs atomic deletion with value verification
+	// Returns: true if deleted, false if current value != expectedValue
+	// Errors: ErrKeyEmpty, ErrKeyTooLong
+	CompareAndDelete(key, expectedValue string) (ok bool, err error)
+}
+
+// AppTTLStorageFactory creates IAppTTLStorage instances for a given ClusterAppID
+type AppTTLStorageFactory func(clusterAppID ClusterAppID) IAppTTLStorage
 
 // need to re-apply an already stored PLog
 // does not consider SequencesTrustLevel

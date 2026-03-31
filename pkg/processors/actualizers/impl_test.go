@@ -229,7 +229,6 @@ func deployTestAppEx(
 	appStructs istructs.IAppStructs,
 	stop func(),
 ) {
-	actualizerCfg.RetryDelay = RetryDelay(100 * time.Millisecond)
 	adb := builder.New()
 	adb.AddPackage("test", "test.com/test")
 
@@ -299,7 +298,7 @@ func deployTestAppEx(
 	)
 
 	if actualizerCfg.Broker == nil {
-		n10nBroker, n10cleanup = in10nmem.ProvideEx2(in10n.Quotas{
+		n10nBroker, n10cleanup = in10nmem.NewN10nBroker(in10n.Quotas{
 			Channels:                1000,
 			ChannelsPerSubject:      10,
 			Subscriptions:           1000,
@@ -312,10 +311,9 @@ func deployTestAppEx(
 
 	appStructsProvider := istructsmem.Provide(
 		cfgs,
-		iratesce.TestBucketsFactory,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
 		storageProvider,
-		isequencer.SequencesTrustLevel_0)
+		isequencer.SequencesTrustLevel_0, nil)
 
 	appStructs, err = appStructsProvider.BuiltIn(appName)
 	if err != nil {

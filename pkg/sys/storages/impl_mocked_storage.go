@@ -226,10 +226,10 @@ func newMockedKeyBuilder(mockedStorage *MockedStorage, entity appdef.QName) *moc
 func (mkb *mockedKeyBuilder) HashCode() (uint64, error) {
 	if mkb.ID_ == 0 && len(mkb.Data) > 0 {
 		// Convert map to a sorted slice of key-value pairs to ensure consistent ordering
-		var pairs []struct {
+		pairs := make([]struct {
 			Key   string
 			Value any
-		}
+		}, 0, len(mkb.Data))
 		for k, v := range mkb.Data {
 			pairs = append(pairs, struct {
 				Key   string
@@ -386,7 +386,7 @@ func (mkb *mockedKeyBuilder) PutQName(field appdef.FieldName, value appdef.QName
 
 func (mkb *mockedKeyBuilder) PutBool(field appdef.FieldName, value bool) {
 	mkb.TestObject.Data[field] = value
-	// if IsSingleton is true, then ID must be set to MinReservedBaseRecordID
+	// if IsSingleton is true, then ID must be set to FirstSingletonID
 	// it is workaround for singleton entities
 	if field == sys.Storage_Record_Field_IsSingleton && value {
 		mkb.TestObject.ID_ = mkb.mockedStorage.GetSingletonID(mkb.Name)

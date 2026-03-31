@@ -17,15 +17,13 @@ import (
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/iblobstorage"
-	"github.com/voedger/voedger/pkg/iblobstoragestg"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/processors"
 )
 
 // [~server.apiv2.blobs/cmp.blobber.ServicePipeline_getBLOBKeyRead~impl]
-func getBLOBKeyRead(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	bw := work.(*blobWorkpiece)
+func getBLOBKeyRead(ctx context.Context, bw *blobWorkpiece) (err error) {
 	if bw.isPersistent() {
 		existingBLOBIDUint, err := strconvu.ParseUint64(bw.blobMessageRead.existingBLOBIDOrSUUID)
 		if err != nil {
@@ -52,19 +50,18 @@ func getBLOBKeyRead(ctx context.Context, work pipeline.IWorkpiece) (err error) {
 }
 
 // [~server.apiv2.blobs/cmp.blobber.ServicePipeline_initResponse~impl]
-func initResponse(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	bw := work.(*blobWorkpiece)
+func initResponse(ctx context.Context, bw *blobWorkpiece) (err error) {
 	bw.writer = bw.blobMessageRead.okResponseIniter(
 		httpu.ContentType, bw.blobState.Descr.ContentType,
 		coreutils.BlobName, bw.blobState.Descr.Name,
+		httpu.ContentLength, strconvu.UintToString(bw.blobState.Size),
 	)
 	return nil
 }
 
 // [~server.apiv2.blobs/cmp.blobber.ServicePipeline_queryBLOBState~impl]
-func provideQueryAndCheckBLOBState(blobStorage iblobstorage.IBLOBStorage) func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	return func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-		bw := work.(*blobWorkpiece)
+func provideQueryAndCheckBLOBState(blobStorage iblobstorage.IBLOBStorage) func(ctx context.Context, bw *blobWorkpiece) (err error) {
+	return func(ctx context.Context, bw *blobWorkpiece) (err error) {
 		bw.blobState, err = blobStorage.QueryBLOBState(bw.blobMessageRead.requestCtx, bw.blobKey)
 		if err != nil {
 			if errors.Is(err, iblobstorage.ErrBLOBNotFound) {
@@ -83,8 +80,7 @@ func provideQueryAndCheckBLOBState(blobStorage iblobstorage.IBLOBStorage) func(c
 }
 
 // [~server.apiv2.blobs/cmp.blobber.ServicePipeline_downloadBLOBHelper~impl]
-func downloadBLOBHelper(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	bw := work.(*blobWorkpiece)
+func downloadBLOBHelper(ctx context.Context, bw *blobWorkpiece) (err error) {
 	if !bw.blobMessageRead.isAPIv2 {
 		return nil
 	}
@@ -107,23 +103,23 @@ func downloadBLOBHelper(ctx context.Context, work pipeline.IWorkpiece) (err erro
 }
 
 // [~server.apiv2.blobs/cmp.blobber.ServicePipeline_readBLOB~impl]
-func provideReadBLOB(blobStorage iblobstorage.IBLOBStorage) func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-	return func(ctx context.Context, work pipeline.IWorkpiece) (err error) {
-		bw := work.(*blobWorkpiece)
-		err = blobStorage.ReadBLOB(bw.blobMessageRead.requestCtx, bw.blobKey, nil, bw.writer, iblobstoragestg.RLimiter_Null)
-		if err != nil {
-			logger.Error(fmt.Sprintf("failed to read BLOB: id %s, appQName %s, wsid %d: %s", bw.blobKey.ID(), bw.blobMessageRead.appQName,
-				bw.blobMessageRead.wsid, err.Error()))
+func provideReadBLOB(blobStorage iblobstorage.IBLOBStorage) func(ctx context.Context, bw *blobWorkpiece) (err error) {
+	return func(ctx context.Context, bw *blobWorkpiece) (err error) {
+		err = blobStorage.ReadBLOB(bw.blobMessageRead.requestCtx, bw.blobKey, nil, bw.writer, bw.blobMessageRead.rLimiter)
+		if err == nil {
+			logger.VerboseCtx(bw.logCtx, "bp.success")
 		}
 		return err
 	}
 }
 
 // [~server.apiv2.blobs/cmp.blobber.ServicePipeline_getBLOBIDFromOwner~impl]
-func getBLOBIDFromOwner(_ context.Context, work pipeline.IWorkpiece) (err error) {
-	bw := work.(*blobWorkpiece)
+func getBLOBIDFromOwner(_ context.Context, bw *blobWorkpiece) (err error) {
 	if !bw.blobMessageRead.isAPIv2 || !bw.isPersistent() {
 		// temp blob in APIv2 -> skip, suuid is already known
+		bw.logCtx = logger.WithContextAttrs(bw.logCtx, map[string]any{
+			attrBlobID: bw.blobMessageRead.existingBLOBIDOrSUUID,
+		})
 		return nil
 	}
 	req := bus.Request{
@@ -158,13 +154,29 @@ func getBLOBIDFromOwner(_ context.Context, work pipeline.IWorkpiece) (err error)
 		return coreutils.NewHTTPErrorf(http.StatusBadRequest, fmt.Errorf("owner field %s.%s is not of blob type", bw.blobMessageRead.ownerRecord, bw.blobMessageRead.ownerRecordField))
 	}
 	bw.blobMessageRead.existingBLOBIDOrSUUID = strconvu.UintToString(blobID)
+	bw.logCtx = logger.WithContextAttrs(bw.logCtx, map[string]any{
+		attrBlobID: bw.blobMessageRead.existingBLOBIDOrSUUID,
+	})
 	return nil
 }
 
 // [~server.apiv2.blobs/cmp.blobber.ServicePipeline_getBLOBMessageRead~impl]
-func getBLOBMessageRead(_ context.Context, work pipeline.IWorkpiece) error {
-	bw := work.(*blobWorkpiece)
+func getBLOBMessageRead(_ context.Context, bw *blobWorkpiece) error {
 	bw.blobMessageRead = bw.blobMessage.(*implIBLOBMessage_Read)
+	bw.logCtx = bw.blobMessageRead.requestCtx
+	if bw.blobMessageRead.isAPIv2 {
+		bw.logCtx = logger.WithContextAttrs(bw.logCtx, map[string]any{
+			attrOwnerQName: bw.blobMessageRead.ownerRecord.String(),
+			attrOwnerField: bw.blobMessageRead.ownerRecordField,
+			attrOwnerID:    uint64(bw.blobMessageRead.ownerID),
+		})
+	} else {
+		bw.logCtx = logger.WithContextAttrs(bw.logCtx, map[string]any{
+			attrOwnerQName: notApplicableInAPIv1,
+			attrOwnerField: notApplicableInAPIv1,
+			attrOwnerID:    notApplicableInAPIv1,
+		})
+	}
 	return nil
 }
 
@@ -178,10 +190,12 @@ func (b *catchReadError) DoSync(_ context.Context, work pipeline.IWorkpiece) (er
 	bw := work.(*blobWorkpiece)
 	var sysError coreutils.SysError
 	if errors.As(bw.resultErr, &sysError) {
-		if logger.IsVerbose() {
-			logger.Verbose("blob read error:", sysError.HTTPStatus, ":", sysError.Message)
+		if sysError.HTTPStatus == http.StatusBadRequest {
+			logger.ErrorCtx(bw.logCtx, "bp.error", bw.resultErr, ", headers=", bw.blobMessageRead.header)
+		} else {
+			logger.ErrorCtx(bw.logCtx, "bp.error", bw.resultErr)
 		}
-		bw.blobMessageRead.errorResponder(sysError.HTTPStatus, sysError)
+		bw.blobMessageRead.errorResponder(sysError)
 		return nil
 	}
 	return bw.resultErr

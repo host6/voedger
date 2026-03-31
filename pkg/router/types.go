@@ -6,11 +6,11 @@
 package router
 
 import (
+	"context"
 	"encoding/json"
 	"net"
 	"net/http"
 	"net/url"
-	"sync"
 	"sync/atomic"
 
 	"github.com/gorilla/mux"
@@ -26,12 +26,16 @@ import (
 	blobprocessor "github.com/voedger/voedger/pkg/processors/blobber"
 )
 
+type HTTPServerParams struct {
+	Port             int
+	WriteTimeout     int
+	ReadTimeout      int
+	ConnectionsLimit int
+}
+
 type RouterParams struct {
-	Port                 int
+	HTTPServerParams
 	AdminPort            int
-	WriteTimeout         int
-	ReadTimeout          int
-	ConnectionsLimit     int
 	HTTP01ChallengeHosts []string
 	CertDir              string
 	RouteDefault         string            // http://10.0.0.3:3000/not-found : https://alpha.dev.untill.ru/unknown/foo -> http://10.0.0.3:3000/not-found/unknown/foo
@@ -40,18 +44,26 @@ type RouterParams struct {
 	RouteDomains         map[string]string // resellerportal.dev.untill.ru=http://resellerportal : https://resellerportal.dev.untill.ru/foo -> http://resellerportal/foo
 }
 
-type httpService struct {
-	RouterParams
-	listenAddress      string
+type httpServer struct {
+	HTTPServerParams
+	listenAddress string
+	server        *http.Server
+	listener      net.Listener
+	name          string
+	listeningPort atomic.Uint32
+	rootLogCtx    context.Context // initialized on Run()
+}
+
+type routerService struct {
+	httpServer
+	routeDefault       string
+	routes             map[string]string
+	routesRewrite      map[string]string
+	routeDomains       map[string]string
 	router             *mux.Router
-	server             *http.Server
-	listener           net.Listener
 	n10n               in10n.IN10nBroker
-	blobWG             sync.WaitGroup
 	requestSender      bus.IRequestSender
 	numsAppsWorkspaces map[appdef.AppQName]istructs.NumAppWorkspaces
-	name               string
-	listeningPort      atomic.Uint32
 	blobRequestHandler blobprocessor.IRequestHandler
 	iTokens            itokens.ITokens
 	federation         federation.IFederation
@@ -59,12 +71,13 @@ type httpService struct {
 }
 
 type httpsService struct {
-	*httpService
+	*routerService
 	crtMgr *autocert.Manager
 }
 
 type acmeService struct {
-	http.Server
+	httpServer
+	handler http.Handler
 }
 
 type route struct {
@@ -97,4 +110,4 @@ type validatedData struct {
 	body     []byte
 }
 
-type validatorFunc func(validateData validatedData, req *http.Request, rw http.ResponseWriter) (validatedData, bool)
+type validatorFunc func(validateData validatedData, req *http.Request) (validatedData, error)

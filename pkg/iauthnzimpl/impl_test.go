@@ -78,7 +78,7 @@ func TestBasicUsage(t *testing.T) {
 			RequestWSID: 1,
 			Token:       token,
 		}
-		principals, principalPayload, err := authn.Authenticate(context.Background(), appStructs, appTokens, req)
+		principals, profileWSID, err := authn.Authenticate(context.Background(), appStructs, appTokens, req)
 		require.NoError(err)
 		require.Len(principals, 4)
 		require.Equal(iauthnz.PrincipalKind_Role, principals[0].Kind)
@@ -94,7 +94,7 @@ func TestBasicUsage(t *testing.T) {
 		require.Equal(iauthnz.PrincipalKind_Host, principals[3].Kind)
 		require.Equal("127.0.0.1", principals[3].Name)
 
-		require.Equal(pp, principalPayload)
+		require.Equal(pp.ProfileWSID, profileWSID)
 	})
 
 	t.Run("authenticate in the owned workspace", func(t *testing.T) {
@@ -104,7 +104,7 @@ func TestBasicUsage(t *testing.T) {
 			Token:       token,
 		}
 		// request to WSID 2, there is a cdoc.sys.WorkspaceDescriptor.OwnerWSID = 1 -> the workspace is owned by the user with ProfileWSID=1
-		principals, principalPayload, err := authn.Authenticate(context.Background(), appStructs, appTokens, req)
+		principals, profileWSID, err := authn.Authenticate(context.Background(), appStructs, appTokens, req)
 		require.NoError(err)
 		require.Len(principals, 4)
 		require.Equal(iauthnz.PrincipalKind_Role, principals[0].Kind)
@@ -120,7 +120,7 @@ func TestBasicUsage(t *testing.T) {
 		require.Equal(iauthnz.PrincipalKind_Host, principals[3].Kind)
 		require.Equal("127.0.0.1", principals[3].Name)
 
-		require.Equal(pp, principalPayload)
+		require.Equal(pp.ProfileWSID, profileWSID)
 	})
 
 	t.Run("authenticate in the child workspace", func(t *testing.T) {
@@ -143,7 +143,7 @@ func TestBasicUsage(t *testing.T) {
 			Token:       token,
 		}
 		// request to WSID 2, there is a cdoc.sys.WorkspaceDescriptor.OwnerWSID = 1 -> the workspace is owned by the user with ProfileWSID=1
-		principals, principalPayload, err := authn.Authenticate(context.Background(), appStructs, appTokens, req)
+		principals, profileWSID, err := authn.Authenticate(context.Background(), appStructs, appTokens, req)
 		require.NoError(err)
 		require.Len(principals, 4)
 		require.Equal(iauthnz.PrincipalKind_Role, principals[0].Kind)
@@ -158,7 +158,7 @@ func TestBasicUsage(t *testing.T) {
 
 		require.Equal(iauthnz.PrincipalKind_Host, principals[3].Kind)
 		require.Equal("127.0.0.1", principals[3].Name)
-		require.Equal(pp, principalPayload)
+		require.Equal(pp.ProfileWSID, profileWSID)
 	})
 }
 
@@ -462,17 +462,14 @@ type implIAppStructs struct {
 	appQName appdef.AppQName
 }
 
-func (as *implIAppStructs) AppDef() appdef.IAppDef                             { panic("") }
-func (as *implIAppStructs) Events() istructs.IEvents                           { panic("") }
-func (as *implIAppStructs) Records() istructs.IRecords                         { return as.records }
-func (as *implIAppStructs) ViewRecords() istructs.IViewRecords                 { return as.views }
-func (as *implIAppStructs) ObjectBuilder(appdef.QName) istructs.IObjectBuilder { panic("") }
-func (as *implIAppStructs) Resources() istructs.IResources                     { panic("") }
-func (as *implIAppStructs) ClusterAppID() istructs.ClusterAppID                { panic("") }
-func (as *implIAppStructs) AppQName() appdef.AppQName                          { return as.appQName }
-func (as *implIAppStructs) IsFunctionRateLimitsExceeded(appdef.QName, istructs.WSID) bool {
-	panic("")
-}
+func (as *implIAppStructs) AppDef() appdef.IAppDef                                         { panic("") }
+func (as *implIAppStructs) Events() istructs.IEvents                                       { panic("") }
+func (as *implIAppStructs) Records() istructs.IRecords                                     { return as.records }
+func (as *implIAppStructs) ViewRecords() istructs.IViewRecords                             { return as.views }
+func (as *implIAppStructs) ObjectBuilder(appdef.QName) istructs.IObjectBuilder             { panic("") }
+func (as *implIAppStructs) Resources() istructs.IResources                                 { panic("") }
+func (as *implIAppStructs) ClusterAppID() istructs.ClusterAppID                            { panic("") }
+func (as *implIAppStructs) AppQName() appdef.AppQName                                      { return as.appQName }
 func (as *implIAppStructs) DescribePackageNames() []string                                 { panic("") }
 func (as *implIAppStructs) DescribePackage(string) interface{}                             { panic("") }
 func (as *implIAppStructs) SyncProjectors() istructs.Projectors                            { panic("") }
@@ -484,6 +481,7 @@ func (as *implIAppStructs) AppTokens() istructs.IAppTokens                      
 func (as *implIAppStructs) GetEventReapplier(istructs.IPLogEvent) istructs.IEventReapplier { panic("") }
 func (as *implIAppStructs) SeqTypes() map[istructs.QNameID]map[istructs.QNameID]uint64     { panic("") }
 func (as *implIAppStructs) QNameID(appdef.QName) (istructs.QNameID, error)                 { panic("") }
+func (as *implIAppStructs) AppTTLStorage() istructs.IAppTTLStorage                         { panic("") }
 
 type implIRecords struct {
 	data map[istructs.WSID]map[appdef.QName]map[istructs.RecordID]map[string]interface{}

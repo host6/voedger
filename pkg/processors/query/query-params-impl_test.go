@@ -18,6 +18,7 @@ import (
 	"github.com/voedger/voedger/pkg/isecretsimpl"
 	"github.com/voedger/voedger/pkg/itokensjwt"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
+	"github.com/voedger/voedger/pkg/state"
 )
 
 func TestWrongTypes(t *testing.T) {
@@ -35,7 +36,7 @@ func TestWrongTypes(t *testing.T) {
 		appParts,
 		3, // maxPrepareQueries
 
-		imetrics.Provide(), "vvm", authn, itokensjwt.TestTokensJWT(), nil, statelessResources, isecretsimpl.TestSecretReader)
+		imetrics.Provide(), "vvm", authn, itokensjwt.TestTokensJWT(), nil, statelessResources, isecretsimpl.TestSecretReader, state.StateOpts{}, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		queryProcessor.Run(ctx)
@@ -267,7 +268,7 @@ func TestWrongTypes(t *testing.T) {
 	sysToken := getSystemToken(appTokens)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			requestSender := bus.NewIRequestSender(testingu.MockTime, sendTimeout, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+			requestSender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 				serviceChannel <- NewQueryMessage(context.Background(), appName, partID, wsID, responder, []byte(test.body), qNameFunction, "", sysToken)
 			})
 			respCh, respMeta, respErr, err := requestSender.SendRequest(context.Background(), bus.Request{})

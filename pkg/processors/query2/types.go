@@ -27,6 +27,7 @@ import (
 type QueryParams struct {
 	Constraints *Constraints
 	Argument    map[string]interface{}
+	RawArg      string
 }
 
 type Constraints struct {
@@ -42,7 +43,7 @@ type IQueryMessage interface {
 	AppQName() appdef.AppQName
 	WSID() istructs.WSID
 	Responder() bus.IResponder
-	QueryParams() QueryParams
+	RawParams() map[string]string
 	DocID() istructs.IDType
 	APIPath() processors.APIPath
 	RequestCtx() context.Context
@@ -90,7 +91,7 @@ type implIQueryMessage struct {
 	appQName       appdef.AppQName
 	wsid           istructs.WSID
 	responder      bus.IResponder
-	queryParams    QueryParams
+	rawParams      map[string]string
 	docID          istructs.IDType
 	apiPath        processors.APIPath
 	requestCtx     context.Context
@@ -116,8 +117,8 @@ func (qm *implIQueryMessage) WSID() istructs.WSID {
 func (qm *implIQueryMessage) Responder() bus.IResponder {
 	return qm.responder
 }
-func (qm *implIQueryMessage) QueryParams() QueryParams {
-	return qm.queryParams
+func (qm *implIQueryMessage) RawParams() map[string]string {
+	return qm.rawParams
 }
 func (qm *implIQueryMessage) DocID() istructs.IDType {
 	return qm.docID
@@ -523,6 +524,7 @@ type include struct {
 	records                istructs.IRecords
 	viewRecords            istructs.IViewRecords
 	cdoc                   bool
+	events                 istructs.IEvents
 }
 
 func newInclude(qw *queryWork, cdoc bool) (o pipeline.IAsyncOperator) {
@@ -533,6 +535,7 @@ func newInclude(qw *queryWork, cdoc bool) (o pipeline.IAsyncOperator) {
 		records:                qw.appStructs.Records(),
 		viewRecords:            qw.appStructs.ViewRecords(),
 		cdoc:                   cdoc,
+		events:                 qw.appStructs.Events(),
 	}
 	for _, s := range qw.queryParams.Constraints.Include {
 		i.refFieldsAndContainers = append(i.refFieldsAndContainers, strings.Split(s, "."))
@@ -555,6 +558,13 @@ func (i include) DoAsync(ctx context.Context, work pipeline.IWorkpiece) (outWork
 }
 func (i include) recordToMap(id istructs.RecordID) (obj map[string]interface{}, err error) {
 	record, err := i.records.Get(i.wsid, true, id)
+	if err != nil {
+		return
+	}
+	if record.AsQName(appdef.SystemField_QName) != appdef.NullQName {
+		return coreutils.FieldsToMap(record, i.ad), nil
+	}
+	record, err = i.events.GetORec(i.wsid, id, istructs.NullOffset)
 	if err != nil {
 		return
 	}

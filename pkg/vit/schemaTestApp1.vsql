@@ -737,6 +737,35 @@ ALTERABLE WORKSPACE test_wsWS (
 		UNIQUE (Int8Fld, Int16Fld, Int32Fld, Int64Fld, Float32Fld, Float64Fld, RefFld, StrFld, QNameFld, BoolFld, BytesFld)
 	);
 
+	-- SELECT is not granted
+	VIEW CategoryIdxDenied (
+		IntFld int32,
+		StrFld varchar,
+		PRIMARY KEY ((IntFld), StrFld)
+	) AS RESULT OF ApplyCategoryIdx;
+
+	-- TTL Storage test types
+	TYPE TTLStorageParams (
+		Operation text NOT NULL,
+		Key text NOT NULL,
+		Value text,
+		ExpectedValue text,
+		TTLSeconds int32
+	);
+
+	TYPE TTLStorageResult (
+		Ok bool NOT NULL
+	);
+
+	TYPE TTLGetParams (
+		Key text NOT NULL
+	);
+
+	TYPE TTLGetResult (
+		Value text,
+		Exists bool NOT NULL
+	);
+
 	EXTENSION ENGINE BUILTIN (
 		QUERY RatedQry(RatedQryParams) RETURNS RatedQryResult WITH Tags=(WorkspaceOwnerFuncTag);
 		QUERY MockQry(MockQryParams) RETURNS MockQryResult WITH Tags=(WorkspaceOwnerFuncTag);
@@ -748,14 +777,17 @@ ALTERABLE WORKSPACE test_wsWS (
 
 		COMMAND TestDeniedCmd;
 		QUERY TestDeniedQuery() RETURNS TestCmdResult;
+		QUERY QryAny(any) RETURNS any WITH Tags=(ApiFeatureTag);
+		COMMAND CmdAny(any) RETURNS any WITH Tags=(ApiFeatureTag);
 
 		COMMAND CmdODocOne(odoc1, UNLOGGED odoc1) WITH Tags=(WorkspaceOwnerFuncTag, ApiFeatureTag);
 		COMMAND CmdODocTwo(odoc2, UNLOGGED odoc2) WITH Tags=(WorkspaceOwnerFuncTag);
 
 		COMMAND TestCmdRawArg(sys.Raw) WITH Tags=(WorkspaceOwnerFuncTag);
+		QUERY TestQryRawArg(sys.Raw) RETURNS MockQryResult WITH Tags=(WorkspaceOwnerFuncTag);
 		PROJECTOR ProjDummy AFTER INSERT ON (sys.CRecord) INTENTS(sys.View(View)); -- does nothing, only to define view.app1pkg.View
 		PROJECTOR ProjDummyQName AFTER INSERT ON (sys.CRecord) INTENTS(sys.View(ViewWithQName)); -- does nothing, only to define view.app1pkg.ViewQName
-		SYNC PROJECTOR ApplyCategoryIdx AFTER INSERT ON (category) INTENTS(sys.View(CategoryIdx));
+		SYNC PROJECTOR ApplyCategoryIdx AFTER INSERT ON (category) INTENTS(sys.View(CategoryIdx), sys.View(CategoryIdxDenied));
 		SYNC PROJECTOR ApplyDailyIdx AFTER INSERT ON (Daily) INTENTS(sys.View(DailyIdx));
 		PROJECTOR ApplyClient AFTER INSERT ON (Client) INTENTS(sys.View(Clients));
 
@@ -764,11 +796,28 @@ ALTERABLE WORKSPACE test_wsWS (
 		QUERY QryDailyIdx(QryDailyIdxParams) RETURNS QryDailyIdxResult WITH Tags=(WorkspaceOwnerFuncTag);
 		QUERY QryReturnsCategory(QryReturnsCategoryParams) RETURNS QryReturnsCategoryResult WITH Tags=(WorkspaceOwnerFuncTag, ApiFeatureTag);
 		QUERY QryVoid RETURNS void;
+		COMMAND CmdVoid WITH Tags=(WorkspaceOwnerFuncTag);
 		COMMAND CmdODocWithBLOB(ODocWithBLOB) WITH Tags=(WorkspaceOwnerFuncTag);
 
 		COMMAND CmdAllowedToAnonymousOnly;
 		QUERY QryAllowedToAnonymousOnly RETURNS void;
+
+		COMMAND TTLStorageCmd(TTLStorageParams) RETURNS TTLStorageResult WITH Tags=(WorkspaceOwnerFuncTag);
+		QUERY TTLGetQry(TTLGetParams) RETURNS TTLGetResult WITH Tags=(WorkspaceOwnerFuncTag);
+
+		COMMAND IPRatedCmd(RatedCmdParams) WITH Tags =(WorkspaceOwnerFuncTag);
+		QUERY IPRatedQry(RatedQryParams) RETURNS RatedQryResult WITH Tags =(WorkspaceOwnerFuncTag);
 	);
+
+	RATE RatedPerMinute 2 PER MINUTE PER APP PARTITION;
+	RATE RatedPerHour 4 PER HOUR PER WORKSPACE;
+	RATE IPRatedPerMinute 2 PER MINUTE PER IP;
+	LIMIT RatedCmdPerMinute ON COMMAND RatedCmd WITH RATE RatedPerMinute;
+	LIMIT RatedQryPerMinute ON QUERY RatedQry WITH RATE RatedPerMinute;
+	LIMIT RatedCmdPerHour ON COMMAND RatedCmd WITH RATE RatedPerHour;
+	LIMIT RatedQryPerHour ON QUERY RatedQry WITH RATE RatedPerHour;
+	LIMIT IPRatedCmdPerMinute ON COMMAND IPRatedCmd WITH RATE IPRatedPerMinute;
+	LIMIT IPRatedQryPerMinute ON QUERY IPRatedQry WITH RATE IPRatedPerMinute;
 
 	ROLE Updated; -- need for invite tests
 	ROLE SpecialAPITokenRole; -- need to test foreign auth using APIToken
@@ -787,7 +836,10 @@ ALTERABLE WORKSPACE test_wsWS (
 	GRANT SELECT, INSERT ON TABLE articles TO ApiRole;
 	GRANT INSERT ON TABLE orecord1 TO ApiRole;
 	GRANT EXECUTE ON COMMAND CmdODocOne TO ApiRole;
+	GRANT EXECUTE ON QUERY sys.SqlQuery TO ApiRole;
 	GRANT EXECUTE ON QUERY QryReturnsCategory TO ApiRole;
+	GRANT EXECUTE ON QUERY QryAny TO ApiRole;
+	GRANT EXECUTE ON COMMAND CmdAny TO ApiRole;
 	GRANT SELECT ON VIEW Clients TO ApiRole;
 
 	GRANT SELECT, UPDATE, INSERT ON TABLE Root TO sys.WorkspaceOwner;
@@ -812,6 +864,7 @@ ALTERABLE WORKSPACE test_wsWS (
 	GRANT SELECT(Year, Month, Day, offs) ON VIEW DailyIdx TO LimitedAccessRole;
 
 	GRANT EXECUTE ON QUERY QryVoid TO sys.WorkspaceOwner;
+	GRANT EXECUTE ON QUERY TestQryRawArg TO sys.WorkspaceOwner;
 
 	GRANT SELECT ON TABLE DocWithBLOB TO sys.WorkspaceOwner;
 	GRANT SELECT ON TABLE Country TO sys.WorkspaceOwner;

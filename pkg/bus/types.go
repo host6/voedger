@@ -7,7 +7,6 @@ package bus
 
 import (
 	"context"
-	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/goutils/timeu"
@@ -21,7 +20,7 @@ type Request struct {
 	Resource string
 	Body     []byte
 	AppQName appdef.AppQName
-	Host     string // used by authenticator to emit Host principal
+	Host     string // client IP address (host only, port stripped) from http.Request.RemoteAddr
 	IsN10N   bool
 
 	// apiV2
@@ -48,19 +47,15 @@ const (
 )
 
 type implIRequestSender struct {
-	timeout        SendTimeout
 	tm             timeu.ITime
 	requestHandler RequestHandler
 }
 
-type SendTimeout time.Duration
-
 type implResponseWriter struct {
-	ch          chan any
-	clientCtx   context.Context
-	sendTimeout SendTimeout
-	tm          timeu.ITime
-	resultErr   *error
+	ch        chan any
+	clientCtx context.Context
+	tm        timeu.ITime
+	resultErr *error
 }
 
 type implIResponder struct {
@@ -68,3 +63,5 @@ type implIResponder struct {
 	responseMetaCh chan ResponseMeta
 	started        bool
 }
+
+type IRequestSenderPtr *IRequestSender

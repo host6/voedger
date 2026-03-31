@@ -1,0 +1,23 @@
+name: CI on Pull Request
+
+on:
+  pull_request_target:
+    paths-ignore:
+      - 'pkg/istorage/**'
+
+jobs:
+  call-workflow-ci:
+    if: github.repository == 'voedger/voedger'
+    uses: untillpro/ci-action/.github/workflows/ci_pr.yml@main
+    with:
+      short_test: "true"
+      running_workflow: "CI pkg-cmd PR"
+      go_race: "false"
+      install_tinygo: "true"
+    secrets:
+      reporeading_token: ${{ secrets.REPOREADING_TOKEN }}
+  auto-merge-pr:
+    needs: call-workflow-ci
+    uses: ./.github/workflows/merge.yml
+    secrets:
+      personaltoken: ${{ secrets.REPOREADING_TOKEN }}

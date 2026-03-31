@@ -15,7 +15,6 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/apppartsctl"
-	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/extensionpoints"
 	"github.com/voedger/voedger/pkg/goutils/timeu"
@@ -32,7 +31,6 @@ import (
 	"github.com/voedger/voedger/pkg/parser"
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/processors"
-	"github.com/voedger/voedger/pkg/processors/actualizers"
 	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
 	"github.com/voedger/voedger/pkg/router"
 	"github.com/voedger/voedger/pkg/state"
@@ -132,40 +130,40 @@ type VVM struct {
 	BuiltInAppsPackages []BuiltInAppPackages
 	TTLStorage          ielections.ITTLStorage[storage.TTLStorageImplKey, string]
 	BuildInfo           *debug.BuildInfo
+	ISchedulerRunner    appparts.ISchedulerRunner
 }
 
 type AppsExtensionPoints map[appdef.AppQName]extensionpoints.IExtensionPoint
 
 type VVMConfig struct {
-	VVMAppsBuilder             VVMAppsBuilder // is a map
-	Time                       timeu.ITime
-	RouterWriteTimeout         int
-	RouterReadTimeout          int
-	RouterConnectionsLimit     int
-	RouterHTTP01ChallengeHosts []string
-	RouteDefault               string
-	Routes                     map[string]string
-	RoutesRewrite              map[string]string
-	RouteDomains               map[string]string
-	SendTimeout                bus.SendTimeout
-	StorageFactory             func(time timeu.ITime) (provider istorage.IAppStorageFactory, err error)
-	BLOBMaxSize                iblobstorage.BLOBMaxSizeType
-	Name                       processors.VVMName
-	NumCommandProcessors       istructs.NumCommandProcessors
-	NumQueryProcessors         istructs.NumQueryProcessors
-	NumBLOBProcessors          istructs.NumBLOBProcessors
-	MaxPrepareQueries          MaxPrepareQueriesType
-	StorageCacheSize           StorageCacheSizeType
-	processorsChannels         []ProcesorChannel
-	EmailSender                state.IEmailSender
-	SecretsReader              isecrets.ISecretReader
-	SMTPConfig                 smtp.Cfg
-	WSPostInitFunc             workspace.WSPostInitFunc
-	DataPath                   string
-	MetricsServicePort         metrics.MetricsServicePort
-	AsyncActualizersRetryDelay actualizers.RetryDelay
-	AdminPort                  int
-	SchemasCache               ISchemasCache // normally NullSchemasCache in production, vit.SysAppsSchemasCache in VIT tests
+	VVMAppsBuilder                   VVMAppsBuilder // is a map
+	Time                             timeu.ITime
+	RouterWriteTimeout               int
+	RouterReadTimeout                int
+	RouterConnectionsLimit           int
+	RouterHTTP01ChallengeHosts       []string
+	RouteDefault                     string
+	Routes                           map[string]string
+	RoutesRewrite                    map[string]string
+	RouteDomains                     map[string]string
+	StorageFactory                   func(time timeu.ITime) (provider istorage.IAppStorageFactory, err error)
+	BLOBMaxSize                      iblobstorage.BLOBMaxSizeType
+	Name                             processors.VVMName
+	NumCommandProcessors             istructs.NumCommandProcessors
+	NumQueryProcessors               istructs.NumQueryProcessors
+	NumBLOBProcessors                istructs.NumBLOBProcessors
+	MaxPrepareQueries                MaxPrepareQueriesType
+	StorageCacheSize                 StorageCacheSizeType
+	processorsChannels               []ProcesorChannel
+	EmailSender                      state.IEmailSender
+	SecretsReader                    isecrets.ISecretReader
+	SMTPConfig                       smtp.Cfg
+	WSPostInitFunc                   workspace.WSPostInitFunc
+	DataPath                         string
+	MetricsServicePort               metrics.MetricsServicePort
+	AdminPort                        int
+	SchemasCache                     ISchemasCache // normally NullSchemasCache in production, vit.SysAppsSchemasCache in VIT tests
+	PolicyOptsForFederationWithRetry federation.PolicyOptsForWithRetry
 
 	// 0 -> dynamic port will be used, new on each vvmIdx
 	// >0 -> vVMPort+vvmIdx will be actually used

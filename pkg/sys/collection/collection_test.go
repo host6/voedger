@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/require"
 
@@ -51,7 +50,6 @@ var qNameTestWSKind = appdef.NewQName(appdef.SysPackage, "test_ws")
 
 const (
 	maxPrepareQueries = 10
-	sendTimeout       = bus.SendTimeout(10 * time.Second)
 )
 
 func deployTestApp(t *testing.T) (appParts appparts.IAppPartitions, appStructs istructs.IAppStructs, cleanup func(),
@@ -195,11 +193,11 @@ func deployTestApp(t *testing.T) (appParts appparts.IAppPartitions, appStructs i
 
 	Provide(statelessResources)
 
-	appStructsProvider := istructsmem.Provide(cfgs, iratesce.TestBucketsFactory,
-		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), asp, isequencer.SequencesTrustLevel_0)
+	appStructsProvider := istructsmem.Provide(cfgs,
+		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()), asp, isequencer.SequencesTrustLevel_0, nil)
 
 	secretReader := isecretsimpl.ProvideSecretReader()
-	n10nBroker, n10nBrokerCleanup := in10nmem.ProvideEx2(in10n.Quotas{
+	n10nBroker, n10nBrokerCleanup := in10nmem.NewN10nBroker(in10n.Quotas{
 		Channels:                1000,
 		ChannelsPerSubject:      10,
 		Subscriptions:           1000,
@@ -498,11 +496,11 @@ func TestBasicUsage_QueryFunc_Collection(t *testing.T) {
 		serviceChannel,
 		appParts,
 		maxPrepareQueries,
-		imetrics.Provide(), "vvm", authn, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
+		imetrics.Provide(), "vvm", authn, tokens, nil, statelessResources, isecretsimpl.TestSecretReader, state.StateOpts{}, nil)
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	sender := bus.NewIRequestSender(testingu.MockTime, sendTimeout, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+	sender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, responder, requestBody, qNameQueryCollection, "", sysToken)
 	})
 
@@ -612,12 +610,12 @@ func TestBasicUsage_QueryFunc_CDoc(t *testing.T) {
 	tokens := itokensjwt.TestTokensJWT()
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
 	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, appParts, maxPrepareQueries, imetrics.Provide(),
-		"vvm", authn, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
+		"vvm", authn, tokens, nil, statelessResources, isecretsimpl.TestSecretReader, state.StateOpts{}, nil)
 
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	sender := bus.NewIRequestSender(testingu.MockTime, sendTimeout, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+	sender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, responder, []byte(requestBody), qNameQueryGetCDoc, "", sysToken)
 	})
 
@@ -730,12 +728,12 @@ func TestBasicUsage_State(t *testing.T) {
 	tokens := itokensjwt.TestTokensJWT()
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
 	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, appParts, maxPrepareQueries, imetrics.Provide(),
-		"vvm", authn, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
+		"vvm", authn, tokens, nil, statelessResources, isecretsimpl.TestSecretReader, state.StateOpts{}, nil)
 
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	sender := bus.NewIRequestSender(testingu.MockTime, sendTimeout, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+	sender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, responder, []byte(`{"args":{"After":0},"elements":[{"fields":["State"]}]}`),
 			qNameQueryState, "", sysToken)
 	})
@@ -898,12 +896,12 @@ func TestState_withAfterArgument(t *testing.T) {
 	tokens := itokensjwt.TestTokensJWT()
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(test.appQName)
 	queryProcessor := queryprocessor.ProvideServiceFactory()(serviceChannel, appParts, maxPrepareQueries, imetrics.Provide(),
-		"vvm", authn, tokens, nil, statelessResources, isecretsimpl.TestSecretReader)
+		"vvm", authn, tokens, nil, statelessResources, isecretsimpl.TestSecretReader, state.StateOpts{}, nil)
 
 	go queryProcessor.Run(context.Background())
 	sysToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	sender := bus.NewIRequestSender(testingu.MockTime, sendTimeout, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+	sender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		serviceChannel <- queryprocessor.NewQueryMessage(context.Background(), test.appQName, test.partition, test.workspace, responder, []byte(`{"args":{"After":6},"elements":[{"fields":["State"]}]}`),
 			qNameQueryState, "", sysToken)
 	})

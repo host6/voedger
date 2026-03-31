@@ -63,8 +63,13 @@ func (vit *VIT) signUp(login Login, opts ...httpu.ReqOptFunc) {
 	}
 	verifiedEmailToken, err := vit.ITokens.IssueToken(istructs.AppQName_sys_registry, 10*time.Minute, &p)
 	require.NoError(vit.T, err)
-	body := fmt.Sprintf(`{"verifiedEmailToken": "%s","password": "%s","displayName": "%s"}`, verifiedEmailToken, login.Pwd, login.Name)
-	vit.Func(fmt.Sprintf("api/v2/apps/%s/%s/users", login.AppQName.Owner(), login.AppQName.Name()), body, opts...)
+	bodyBytes, err := json.Marshal(map[string]any{
+		"verifiedEmailToken": verifiedEmailToken,
+		"password":           login.Pwd,
+		"displayName":        login.Name,
+	})
+	require.NoError(vit.T, err)
+	vit.Func(fmt.Sprintf("api/v2/apps/%s/%s/users", login.AppQName.Owner(), login.AppQName.Name()), string(bodyBytes), opts...)
 }
 
 func WithClusterID(clusterID istructs.ClusterID) signUpOptFunc {
@@ -291,15 +296,21 @@ func (vit *VIT) SignIn(login Login, optFuncs ...signInOptFunc) (prn *Principal) 
 	}
 	deadline := time.Now().Add(getWorkspaceInitAwaitTimeout())
 	for time.Now().Before(deadline) {
-		body := fmt.Sprintf(`{"login": "%s","password": "%s"}`, login.Name, login.Pwd)
-		resp := vit.POST(fmt.Sprintf("api/v2/apps/%s/%s/auth/login", login.AppQName.Owner(), login.AppQName.Name()), body, httpu.Expect409(), httpu.WithExpectedCode(http.StatusOK))
-		if resp.HTTPResp.StatusCode == http.StatusConflict {
+		bodyBytes, err := json.Marshal(map[string]any{"login": login.Name, "password": login.Pwd})
+		require.NoError(vit.T, err)
+		body := string(bodyBytes)
+		resp := vit.POST(fmt.Sprintf("api/v2/apps/%s/%s/auth/login", login.AppQName.Owner(), login.AppQName.Name()), body,
+			httpu.Expect409(),
+			httpu.Expect503(),
+			httpu.WithExpectedCode(http.StatusOK),
+		)
+		if resp.HTTPResp.StatusCode == http.StatusConflict || resp.HTTPResp.StatusCode == http.StatusServiceUnavailable {
 			time.Sleep(workspaceQueryDelay)
 			continue
 		}
 		require.Equal(vit.T, http.StatusOK, resp.HTTPResp.StatusCode)
 		result := make(map[string]interface{})
-		err := json.Unmarshal([]byte(resp.Body), &result)
+		err = json.Unmarshal([]byte(resp.Body), &result)
 		require.NoError(vit.T, err)
 		profileWSID := istructs.WSID(result["profileWSID"].(float64))
 		token := result["principalToken"].(string)
@@ -392,7 +403,7 @@ func (vit *VIT) SubscribeForN10nProjectionKey(pk in10n.ProjectionKey) federation
 
 func (vit *VIT) SubscribeForN10nUnsubscribe(pk in10n.ProjectionKey) (offsetsChan federation.OffsetsChan, unsubscribe func()) {
 	vit.T.Helper()
-	offsetsChan, unsubscribe, err := vit.IFederation.N10NSubscribe(pk)
+	offsetsChan, unsubscribe, err := vit.IFederation.N10NSubscribe(pk, httpu.WithRetryPolicy(vitHTTPClientRetryPolicy...))
 	require.NoError(vit.T, err)
 	return offsetsChan, unsubscribe
 }
@@ -473,8 +484,9 @@ func TestRestartPreservingStorage(t *testing.T, cfg *VITConfig, testBeforeRestar
 	testAfterRestart(t, vit)
 }
 
-func (c *implISchemasCache_sysApps) Get(appQName appdef.AppQName) *parser.AppSchemaAST {
-	if !appQName.IsSys() {
+func (c *implISchemasCache_nonTestApps) Get(appQName appdef.AppQName) *parser.AppSchemaAST {
+	switch appQName {
+	case istructs.AppQName_test1_app1, istructs.AppQName_test1_app2, istructs.AppQName_test2_app1, istructs.AppQName_test2_app2:
 		return nil
 	}
 	c.lock.Lock()
@@ -482,8 +494,9 @@ func (c *implISchemasCache_sysApps) Get(appQName appdef.AppQName) *parser.AppSch
 	return c.schemas[appQName]
 }
 
-func (c *implISchemasCache_sysApps) Put(appQName appdef.AppQName, schema *parser.AppSchemaAST) {
-	if !appQName.IsSys() {
+func (c *implISchemasCache_nonTestApps) Put(appQName appdef.AppQName, schema *parser.AppSchemaAST) {
+	switch appQName {
+	case istructs.AppQName_test1_app1, istructs.AppQName_test1_app2, istructs.AppQName_test2_app1, istructs.AppQName_test2_app2:
 		return
 	}
 	c.lock.Lock()
