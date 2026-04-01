@@ -178,10 +178,9 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 						sendResponse(cmd, cmdHandlingErr)
 						if cmdHandlingErr == nil {
 							logSuccess(cmd)
-							if cmd.sequencesStarted {
-								// [~server.design.sequences/tuc.ReactualizeSequences~impl]
-								cmd.appPart.Sequencer().Actualize()
-							}
+						} else if cmd.sequencesStarted {
+							// [~server.design.sequences/tuc.ReactualizeSequences~impl]
+							cmd.appPart.Sequencer().Actualize()
 						}
 						if cmd.appPartitionRestartScheduled {
 							logger.WarningCtx(newRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID()), "cp.partition_recovery", "partition will be restarted due of an error on writing to Log: ", cmdHandlingErr)

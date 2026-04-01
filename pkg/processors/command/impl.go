@@ -202,8 +202,7 @@ func setPLogOffset(_ context.Context, cmd *cmdWorkpiece) (err error) {
 	return nil
 }
 
-func getWSKind(_ context.Context, work pipeline.IWorkpiece) (err error) {
-	cmd := work.(*cmdWorkpiece)
+func getWSKind(_ context.Context, cmd *cmdWorkpiece) (err error) {
 	if cmd.cmdQName == workspacemgmt.QNameCommandCreateWorkspace {
 		args, _, err := cmd.requestData.AsObject("args")
 		if err != nil {
@@ -573,8 +572,7 @@ func (cmdProc *cmdProc) getWorkspace(_ context.Context, cmd *cmdWorkpiece) (err 
 	return nil
 }
 
-func sequencesStart(_ context.Context, work pipeline.IWorkpiece) (err error) {
-	cmd := work.(*cmdWorkpiece)
+func sequencesStart(_ context.Context, cmd *cmdWorkpiece) (err error) {
 	wsQNameID, err := cmd.appStructs.QNameID(cmd.wsKind)
 	if err != nil {
 		return err
@@ -981,8 +979,7 @@ func (cmdProc *cmdProc) notifyAsyncActualizers(ctx context.Context, cmd *cmdWork
 	return nil
 }
 
-func sequencesFlush(_ context.Context, work pipeline.IWorkpiece) (err error) {
-	cmd := work.(*cmdWorkpiece)
+func sequencesFlush(_ context.Context, cmd *cmdWorkpiece) (err error) {
 	cmd.appPart.Sequencer().Flush()
 	return nil
 }
@@ -1043,6 +1040,9 @@ func sendResponse(cmd *cmdWorkpiece, handlingError error) {
 
 func (idGen *implIDGeneratorReporter) NextID(rawID istructs.RecordID) (storageID istructs.RecordID, err error) {
 	storageID, err = idGen.IIDGenerator.NextID(rawID)
+	if err != nil {
+		return 0, err
+	}
 	idGen.generatedIDs[rawID] = storageID
 	// [~server.design.sequences/tuc.NextSequenceNumber~impl]
 	seqNum, err := idGen.sequencer.Next(isequencer.SeqID(istructs.QNameIDRecordIDSequence))
@@ -1052,5 +1052,5 @@ func (idGen *implIDGeneratorReporter) NextID(rawID istructs.RecordID) (storageID
 	if seqNum != isequencer.Number(storageID) {
 		logger.Error("Sequencer and IDGenerator differs: storageID", storageID, ", seqNum", seqNum)
 	}
-	return
+	return storageID, nil
 }

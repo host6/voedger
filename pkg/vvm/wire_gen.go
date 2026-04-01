@@ -170,13 +170,8 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		cleanup()
 		return nil, nil, err
 	}
-	iAppPartitions, cleanup4, err := provideAppPartitions(vvmCtx, iAppStructsProvider, v3, iActualizerRunner, iSchedulerRunner, bucketsFactoryType, iStatelessResources, builtInAppsArtefacts, vvmName, iMetrics)
-	if err != nil {
-		cleanup3()
-		cleanup2()
-		cleanup()
-		return nil, nil, err
-	}
+	ivvmSeqStorageAdapter := storage.NewVVMSeqStorageAdapter(iSysVvmStorage)
+	iAppPartitions, cleanup4 := provideAppPartitions(vvmCtx, iAppStructsProvider, v3, iActualizerRunner, iSchedulerRunner, bucketsFactoryType, iStatelessResources, builtInAppsArtefacts, vvmName, iMetrics, iTime, ivvmSeqStorageAdapter)
 	v5 := provideSubjectGetterFunc()
 	isDeviceAllowedFuncs := provideIsDeviceAllowedFunc(v2)
 	iAuthenticator := iauthnzimpl.NewDefaultAuthenticator(v5, isDeviceAllowedFuncs)
@@ -463,7 +458,9 @@ func provideAppPartitions(
 	builtinAppsArtefacts BuiltInAppsArtefacts,
 	vvmName processors.VVMName, imetrics2 imetrics.IMetrics,
 
-) (ap appparts.IAppPartitions, cleanup func(), err error) {
+	iTime timeu.ITime,
+	seqStorageAdapter isequencer.IVVMSeqStorageAdapter,
+) (ap appparts.IAppPartitions, cleanup func()) {
 
 	eef := engines.ProvideExtEngineFactories(engines.ExtEngineFactoriesConfig{
 		StatelessResources: sr,
@@ -481,6 +478,8 @@ func provideAppPartitions(
 		sch,
 		eef,
 		bf,
+		iTime,
+		seqStorageAdapter,
 	)
 }
 

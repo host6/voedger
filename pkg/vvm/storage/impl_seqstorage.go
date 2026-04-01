@@ -66,7 +66,7 @@ func (s *implVVMSeqStorageAdapter) PutPLogOffset(partitionID isequencer.Partitio
 }
 
 func (s *implVVMSeqStorageAdapter) PutNumbers(appID isequencer.ClusterAppID, batch []isequencer.SeqValue) error {
-	vvmStrorageBatch := make([]istorage.BatchItem, len(batch))
+	vvmStorageBatch := make([]istorage.BatchItem, len(batch))
 	for i, b := range batch {
 		pKey := make([]byte, 0, numberPKeySize)
 		pKey = binary.BigEndian.AppendUint32(pKey, pKeyPrefix_SeqStorage_WS)
@@ -77,9 +77,9 @@ func (s *implVVMSeqStorageAdapter) PutNumbers(appID isequencer.ClusterAppID, bat
 		binary.BigEndian.PutUint16(cCols, uint16(b.Key.SeqID))
 		numberBytes := make([]byte, utils.Uint64Size)
 		binary.BigEndian.PutUint64(numberBytes, uint64(b.Value))
-		vvmStrorageBatch[i].PKey = pKey
-		vvmStrorageBatch[i].CCols = cCols
-		vvmStrorageBatch[i].Value = numberBytes
+		vvmStorageBatch[i].PKey = pKey
+		vvmStorageBatch[i].CCols = cCols
+		vvmStorageBatch[i].Value = numberBytes
 	}
-	return s.sysVVMStorage.PutBatch(vvmStrorageBatch)
+	return s.sysVVMStorage.PutBatch(vvmStorageBatch)
 }
