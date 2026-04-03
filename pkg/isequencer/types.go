@@ -48,7 +48,6 @@ type Params struct {
 }
 
 // sequencer implements ISequencer
-// [~server.design.sequences/cmp.sequencer~impl]
 type sequencer struct {
 	params     Params
 	seqStorage ISeqStorage
@@ -60,11 +59,12 @@ type sequencer struct {
 
 	cache *lruPkg.Cache[NumberKey, Number]
 
-	// Initialized by Start()
+	// Initialized by actualizer() from storage via ReadNextPLogOffset()
 	// Example:
-	// - 4 is the last processed event
+	// - 4 is the offset of the last processed event
 	// - nextOffset keeps 5
-	// - Start() returns 5 and increments nextOffset to 6
+	// - Start() returns 5 (does NOT increment)
+	// - Flush() increments nextOffset to 6
 	nextOffset PLogOffset
 
 	// If Sequencing Transaction is in progress then currentWSID has non-zero value.
@@ -103,7 +103,6 @@ type sequencer struct {
 	retrierCfg              retrier.Config
 }
 
-// [~server.design.sequences/test.isequencer.mockISeqStorage~impl]
 // MockStorage implements ISeqStorage for testing purposes
 type MockStorage struct {
 	Numbers                   map[WSID]map[SeqID]Number
