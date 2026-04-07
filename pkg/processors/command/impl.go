@@ -88,9 +88,8 @@ func (c *cmdWorkpiece) Context() context.Context {
 	return c.cmdMes.RequestCtx()
 }
 
-// need for sync projectors for logging
-func (c *cmdWorkpiece) LogCtxForSyncProjector() context.Context {
-	return c.logCtxForSyncProjectors
+func (c *cmdWorkpiece) LogCtx() context.Context {
+	return c.logCtx
 }
 
 // used in projectors.NewSyncActualizerFactoryFactory
@@ -106,6 +105,18 @@ func (c *cmdWorkpiece) GetAppStructs() istructs.IAppStructs {
 // need for sync projectors for logging
 func (c *cmdWorkpiece) PLogOffset() istructs.Offset {
 	return c.pLogOffset
+}
+
+func (c *cmdWorkpiece) GetPrincipals() []iauthnz.Principal {
+	return c.principals
+}
+
+func (c *cmdWorkpiece) ResetRateLimit(resource appdef.QName, operation appdef.OperationKind) {
+	c.appPart.ResetRateLimit(resource, operation, c.cmdMes.WSID(), c.cmdMes.Host())
+}
+
+func (c *cmdWorkpiece) Roles() []appdef.QName {
+	return c.roles
 }
 
 // https://github.com/voedger/voedger/issues/3163
@@ -148,6 +159,7 @@ func (c *cmdWorkpiece) Release() {
 		c.appPart = nil
 		ap.Release()
 	}
+	c.hostState.wp = nil
 }
 
 func borrowAppPart(_ context.Context, cmd *cmdWorkpiece) error {
@@ -275,12 +287,10 @@ func (cmdProc *cmdProc) buildCommandArgs(_ context.Context, cmd *cmdWorkpiece) (
 }
 
 func (cmdProc *cmdProc) getHostState(_ context.Context, cmd *cmdWorkpiece) (err error) {
-	hs := cmd.hostStateProvider.get(cmd.appStructs, cmd.cmdMes.WSID(), cmd.reb.CUDBuilder(),
-		cmd.principals, cmd.cmdMes.Token(), cmd.cmdResultBuilder, cmd.eca.CommandPrepareArgs, cmd.workspace.NextWLogOffset,
-		cmd.argsObject, cmd.unloggedArgsObject, cmd.cmdMes.PartitionID(), cmd.cmdMes.Origin())
-	hs.ClearIntents()
-	cmd.eca.State = hs
-	cmd.eca.Intents = hs
+	cmd.hostState.bind(cmd)
+	cmd.hostState.state.ClearIntents()
+	cmd.eca.State = cmd.hostState.state
+	cmd.eca.Intents = cmd.hostState.state
 	return nil
 }
 
@@ -343,7 +353,7 @@ func (cmdProc *cmdProc) recovery(ctx context.Context, cmd *cmdWorkpiece) (ap *ap
 
 	if lastPLogEvent != nil {
 		// re-apply the last event
-		cmd.logCtxForSyncProjectors, err = processors.LogEventAndCUDs(recoveryCtx, lastPLogEvent, lastPLogOffset, cmd.appStructs.AppDef(), 0,
+		cmd.logCtx, err = processors.LogEventAndCUDs(recoveryCtx, lastPLogEvent, lastPLogOffset, cmd.appStructs.AppDef(), 0,
 			"cp.partition_recovery.reapply", nil, "")
 		if err != nil {
 			logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.logeventandcuds.error", err)
@@ -362,7 +372,7 @@ func (cmdProc *cmdProc) recovery(ctx context.Context, cmd *cmdWorkpiece) (ap *ap
 		cmd.reapplier = nil
 		cmd.workspace = nil
 		cmd.pLogEvent = nil
-		cmd.logCtxForSyncProjectors = nil
+		cmd.logCtx = nil
 		lastPLogEvent.Release() // TODO: eliminate if there will be a better solution, see https://github.com/voedger/voedger/issues/1348
 	}
 
@@ -424,12 +434,12 @@ func logEventAndCUDs(_ context.Context, cmd *cmdWorkpiece) (err error) {
 		"",
 	)
 
-	cmd.logCtxForSyncProjectors = enrichedLogCtx
+	cmd.logCtx = enrichedLogCtx
 	return err
 }
 
 func getWSDesc(_ context.Context, cmd *cmdWorkpiece) (err error) {
-	cmd.wsDesc, err = cmd.appStructs.Records().GetSingleton(cmd.cmdMes.WSID(), authnz.QNameCDocWorkspaceDescriptor)
+	cmd.wsDesc, err = cmd.appStructs.Records().GetSingleton(cmd.cmdMes.WSID(), appdef.QNameCDocWorkspaceDescriptor)
 	return err
 }
 
@@ -716,7 +726,7 @@ func appendBLOBOwnershipUpdaters(ctx context.Context, cmd *cmdWorkpiece) (err er
 }
 
 func checkResponseIntent(_ context.Context, cmd *cmdWorkpiece) (err error) {
-	return processors.CheckResponseIntent(cmd.hostStateProvider.state)
+	return processors.CheckResponseIntent(cmd.hostState.state)
 }
 
 func buildRawEvent(_ context.Context, cmd *cmdWorkpiece) (err error) {

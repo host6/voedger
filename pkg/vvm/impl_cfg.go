@@ -58,9 +58,8 @@ func NewVVMDefaultConfig() VVMConfig {
 		EmailSender:                      storages.NewIEmailSenderSMTP(),
 		SchemasCache:                     &NullSchemasCache{},
 		PolicyOptsForFederationWithRetry: httpu.DefaultRetryPolicyOpts,
-
-		// [~server.design.sequences/tuc.VVMConfig.ConfigureSequencesTrustLevel~impl]
-		SequencesTrustLevel: isequencer.SequencesTrustLevel_0,
+		SequencesTrustLevel:              isequencer.SequencesTrustLevel_0,
+		RouterUseProxyProtocol:           true,
 	}
 	return res
 }

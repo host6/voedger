@@ -57,7 +57,7 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 		}
 
 		return pipeline.NewService(func(vvmCtx context.Context) {
-			hsp := newHostStateProvider(vvmCtx, secretReader)
+			hs := newReusableHostState(vvmCtx, secretReader)
 			cmdProc.storeOp = pipeline.NewSyncPipeline(vvmCtx, "store",
 				pipeline.WireFunc("applyRecords", func(ctx context.Context, cmd *cmdWorkpiece) (err error) {
 					if cmd.reapplier != nil {
@@ -79,9 +79,9 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 							cmd.syncProjectorsStart = tm.Now()
 							if err != nil {
 								cmd.appPartitionRestartScheduled = true
-								logger.ErrorCtx(cmd.logCtxForSyncProjectors, "sp.error", err)
+								logger.ErrorCtx(cmd.logCtx, "sp.error", err)
 							} else {
-								logger.VerboseCtx(cmd.logCtxForSyncProjectors, "sp.success")
+								logger.VerboseCtx(cmd.logCtx, "sp.success")
 							}
 							return err
 						}),
@@ -160,10 +160,10 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 					start := tm.Now()
 					cmdMes := intf.(ICommandMessage)
 					cmd := &cmdWorkpiece{
-						cmdMes:            cmdMes,
-						requestData:       coreutils.MapObject{},
-						appParts:          appParts,
-						hostStateProvider: hsp,
+						cmdMes:      cmdMes,
+						requestData: coreutils.MapObject{},
+						appParts:    appParts,
+						hostState:   hs,
 						metrics: commandProcessorMetrics{
 							vvmName: string(vvm),
 							app:     cmdMes.AppQName(),

@@ -149,6 +149,7 @@ Uses `vapp="sys/voedger"`, `extension="sys._Leadership"`, `key` attribs.
   - `wsid`: Workspace ID from validated data
   - `extension`: Resource name (API v1) or QName/API path (API v2)
   - `origin`: HTTP Origin header value
+  - `headers`: all request headers formatted as a single string for production debugging of real IP propagation
 - Request received: level `Verbose`, stage `routing.accepted`, msg (empty)
 - First response from bus (immediately after `SendRequest` returns): level `Verbose`, stage `routing.latency1`, msg `<latency_ms>`
 - Error sending request to VVM: level `Error`, stage `routing.send2vvm.error`, msg `<error message>`
@@ -213,16 +214,16 @@ The enriched context returned by `processors.LogEventAndCUDs()` (with attribs `w
 - `logEventAndCUDs` (called after PLog write) saves the enriched context to `cmdWorkpiece.logCtx`
 - During partition recovery, `LogEventAndCUDs()` is called for the re-applied event and its result is also stored in `cmdWorkpiece.logCtx`
 - Command processor sync projector handler reads `cmd.logCtx` for `sp.success` and `sp.error` logs
-- Each projector branch receives `cmd.logCtx` (via `syncActualizerWorkpiece.LogCtxForSyncProjector()`) for its per-projector logs
+- Each projector branch receives `cmd.logCtx` (via `processors.IProjectorWorkpiece.LogCtx()`) for its per-projector logs
 
 **Command processor logs** (using `cmd.logCtx`):
 
 - After all sync projectors succeed: level `Verbose`, stage `sp.success`, msg (empty)
 - Sync projector error: level `Error`, stage `sp.error`, msg `<error message>`
 
-**Each triggered sync projector** (using `LogCtxForSyncProjector()`):
+**Each triggered sync projector** (using `LogCtx()`):
 
-The event is already logged by the command processor (`cp.plog_saved`), so there is no separate `logEventAndCUDs` call per projector. The projector uses `LogCtxForSyncProjector()` directly to obtain the enriched context and extends it with `extension`=`<projector QName>`:
+The event is already logged by the command processor (`cp.plog_saved`), so there is no separate `logEventAndCUDs` call per projector. The projector uses `processors.IProjectorWorkpiece.LogCtx()` to obtain the enriched context and extends it with `extension`=`<projector QName>`:
 
 - Right before `IAppParts.Invoke()`: level `Verbose`, stage `sp.triggeredby`, msg `<triggered by qname>`, `extension`=`<projector QName>`
 - After successful `Invoke()`: level `Verbose`, stage `sp.success`, `extension`=`<projector QName>`, msg (empty)
@@ -594,6 +595,7 @@ func withLogAttribs(ctx context.Context, data validatedData,
         logger.LogAttr_VApp:      data.appQName,
         logger.LogAttr_Extension: extension,
         logAttrib_Origin:         req.Header.Get(httpu.Origin),
+        logAttrib_Headers:        formatHeaders(req.Header),
     })
 }
 ```
