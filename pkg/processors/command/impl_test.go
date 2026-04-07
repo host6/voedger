@@ -48,6 +48,7 @@ import (
 	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/processors/actualizers"
 	"github.com/voedger/voedger/pkg/vvm/engines"
+	"github.com/voedger/voedger/pkg/vvm/storage"
 )
 
 var (
@@ -800,7 +801,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "", imetrics.Provide()),
 		iratesce.TestBucketsFactory,
-		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		testingu.MockTime, storage.NewTestIVVMSeqStorageAdpater(appStorageProvider),
 	)
 
 	appParts.DeployApp(testAppName, nil, appDef, testAppPartCount, testAppEngines, cfg.NumAppWorkspaces())

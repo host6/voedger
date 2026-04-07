@@ -58,7 +58,7 @@ func TestBoostrap_BasicUsage(t *testing.T) {
 	}
 
 	t.Run("basic usage", func(t *testing.T) {
-		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider, vit.IAppStorageProvider)
 		defer cleanup()
 		postWiredInterfacePtrs := newPostWiredInterfacePtrs()
 		testBlobRequestHandler := blobprocessor.NewIRequestHandler(nil, 0, nil)
@@ -74,7 +74,7 @@ func TestBoostrap_BasicUsage(t *testing.T) {
 	})
 
 	t.Run("panic on NumPartitions change", func(t *testing.T) {
-		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider, vit.IAppStorageProvider)
 		defer cleanup()
 		otherApps[0].AppDeploymentDescriptor.NumParts++
 		defer func() {
@@ -92,7 +92,7 @@ func TestBoostrap_BasicUsage(t *testing.T) {
 	})
 
 	t.Run("panic on NumAppPartitions change", func(t *testing.T) {
-		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider, vit.IAppStorageProvider)
 		defer cleanup()
 		otherApps[0].AppDeploymentDescriptor.NumAppWorkspaces++
 		defer func() {

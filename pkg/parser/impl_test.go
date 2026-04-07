@@ -29,6 +29,7 @@ import (
 	"github.com/voedger/voedger/pkg/itokensjwt"
 	imetrics "github.com/voedger/voedger/pkg/metrics"
 	"github.com/voedger/voedger/pkg/vvm/engines"
+	"github.com/voedger/voedger/pkg/vvm/storage"
 )
 
 //go:embed sql_example_app/pmain/*.vsql
@@ -3177,9 +3178,10 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 	appQName := appdef.NewAppQName("pkg", "test")
 	cfgs := istructsmem.AppConfigsType{}
 	cfgs.AddAppConfig(appQName, 1, appDef, 1)
+	appStorageProvider := provider.Provide(mem.Provide(testingu.MockTime))
 	appStructsProvider := istructsmem.Provide(cfgs,
 		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
-		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0, nil)
+		appStorageProvider, isequencer.SequencesTrustLevel_0, nil)
 	statelessResources := istructsmem.NewStatelessResources()
 	vvmCtx, cancel := context.WithCancel(context.Background())
 	appParts, cleanup := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
@@ -3189,7 +3191,7 @@ func TestIsOperationAllowedOnNestedTable(t *testing.T) {
 				StatelessResources: statelessResources,
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
-		iratesce.TestBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		iratesce.TestBucketsFactory, testingu.MockTime, storage.NewTestIVVMSeqStorageAdpater(appStorageProvider),
 	)
 	require.NoError(err)
 	defer func() {
@@ -3236,9 +3238,10 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 	appQName := appdef.NewAppQName("pkg", "test")
 	cfgs := istructsmem.AppConfigsType{}
 	cfgs.AddAppConfig(appQName, 1, appDef, 1)
+	appStorageProvider := provider.Provide(mem.Provide(testingu.MockTime))
 	appStructsProvider := istructsmem.Provide(cfgs,
 		payloads.ProvideIAppTokensFactory(itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, testingu.MockTime)),
-		provider.Provide(mem.Provide(testingu.MockTime)), isequencer.SequencesTrustLevel_0, nil)
+		appStorageProvider, isequencer.SequencesTrustLevel_0, nil)
 	statelessResources := istructsmem.NewStatelessResources()
 	vvmCtx, cancel := context.WithCancel(context.Background())
 	appParts, cleanup := appparts.New2(vvmCtx, appStructsProvider, appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
@@ -3248,7 +3251,7 @@ func TestIsOperationAllowedOnGrantRoleToRole(t *testing.T) {
 				StatelessResources: statelessResources,
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "vvmName", imetrics.Provide()),
-		iratesce.TestBucketsFactory, testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		iratesce.TestBucketsFactory, testingu.MockTime, storage.NewTestIVVMSeqStorageAdpater(appStorageProvider),
 	)
 	require.NoError(err)
 	defer func() {

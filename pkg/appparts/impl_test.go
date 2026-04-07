@@ -30,6 +30,7 @@ import (
 	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/itokensjwt"
+	"github.com/voedger/voedger/pkg/vvm/storage"
 )
 
 type mockRunner struct {
@@ -136,10 +137,11 @@ func Test_DeployActualizersAndSchedulers(t *testing.T) {
 	appConfigs := istructsmem.AppConfigsType{}
 	appConfigs.AddBuiltInAppConfig(appName, adb1).SetNumAppWorkspaces(appWSCount)
 
+	appStorageProvider := provider.Provide(mem.Provide(testingu.MockTime), "")
 	appStructs := istructsmem.Provide(
 		appConfigs,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
-		provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0, nil)
+		appStorageProvider, isequencer.SequencesTrustLevel_0, nil)
 
 	mockActualizers := &mockActualizerRunner{}
 	mockActualizers.On("SetAppPartitions", mock.Anything).Once()
@@ -152,7 +154,7 @@ func Test_DeployActualizersAndSchedulers(t *testing.T) {
 		mockSchedulers,
 		appparts.NullExtensionEngineFactories,
 		iratesce.TestBucketsFactory,
-		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		testingu.MockTime, storage.NewTestIVVMSeqStorageAdpater(appStorageProvider),
 	)
 
 	defer cleanupParts()

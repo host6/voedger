@@ -45,12 +45,13 @@ func Example() {
 	appConfigs.AddBuiltInAppConfig(istructs.AppQName_test1_app1, adb_1_v1).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 	appConfigs.AddBuiltInAppConfig(istructs.AppQName_test1_app2, adb_2_v1).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
+	appStorageProvider := provider.Provide(mem.Provide(testingu.MockTime), "")
 	appStructsProvider := istructsmem.Provide(
 		appConfigs,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
-		provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0, nil)
+		appStorageProvider, isequencer.SequencesTrustLevel_0, nil)
 
-	appParts, cleanup := appparts.NewTestAppParts(appStructsProvider)
+	appParts, cleanup := appparts.NewTestAppParts(appStructsProvider, appStorageProvider)
 	defer cleanup()
 
 	report := func(part appparts.IAppPartition) {

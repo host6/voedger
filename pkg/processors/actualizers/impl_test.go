@@ -40,6 +40,7 @@ import (
 	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/authnz"
 	"github.com/voedger/voedger/pkg/vvm/engines"
+	"github.com/voedger/voedger/pkg/vvm/storage"
 )
 
 var newWorkspaceCmd = appdef.NewQName("sys", "NewWorkspace")
@@ -344,7 +345,7 @@ func deployTestAppEx(
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "", imetrics.Provide()),
 		iratesce.TestBucketsFactory,
-		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		testingu.MockTime, storage.NewTestIVVMSeqStorageAdpater(storageProvider),
 	)
 
 	appParts.DeployApp(appName, nil, appDef, appPartsCount, appparts.PoolSize(10, 10, 10, 0), cfg.NumAppWorkspaces())

@@ -186,12 +186,10 @@ func newAppPartitionRT(app *appRT, id istructs.PartitionID) *appPartitionRT {
 
 	var sequencer isequencer.ISequencer
 	seqCleanup := func() {}
-	if app.apps.seqStorageAdapter != nil {
-		// seqStorageAdapter is nil in tests
-		// [~server.design.sequences/tuc.InstantiateSequencer~impl]
-		seqStorage := seqstorage.New(as.ClusterAppID(), id, as.Events(), as.AppDef(), app.apps.seqStorageAdapter)
-		sequencer, seqCleanup = isequencer.New(isequencer.NewDefaultParams(getSeqTypes(as.SeqTypes())), seqStorage, app.iTime)
-	}
+	
+	// [~server.design.sequences/tuc.InstantiateSequencer~impl]
+	seqStorage := seqstorage.New(as.ClusterAppID(), id, as.Events(), as.AppDef(), app.apps.seqStorageAdapter)
+	sequencer, seqCleanup = isequencer.New(isequencer.NewDefaultParams(getSeqTypes(as.SeqTypes())), seqStorage, app.iTime)
 
 	part := &appPartitionRT{
 		app:            app,

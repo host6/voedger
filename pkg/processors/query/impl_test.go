@@ -47,6 +47,7 @@ import (
 	"github.com/voedger/voedger/pkg/sys"
 	"github.com/voedger/voedger/pkg/sys/authnz"
 	"github.com/voedger/voedger/pkg/vvm/engines"
+	"github.com/voedger/voedger/pkg/vvm/storage"
 )
 
 var (
@@ -354,7 +355,7 @@ func deployTestAppWithSecretToken(require *require.Assertions,
 				WASMConfig:         iextengine.WASMFactoryConfig{Compile: false},
 			}, "", imetrics.Provide()),
 		iratesce.TestBucketsFactory,
-		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		testingu.MockTime, storage.NewTestIVVMSeqStorageAdpater(storageProvider),
 	)
 	appParts.DeployApp(appName, nil, appDef, partCount, appEngines, cfg.NumAppWorkspaces())
 	appParts.DeployAppPartitions(appName, []istructs.PartitionID{partID})

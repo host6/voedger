@@ -10,11 +10,12 @@ import (
 
 	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/iratesce"
-	"github.com/voedger/voedger/pkg/isequencer"
+	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/vvm/storage"
 )
 
-func NewTestAppParts(asp istructs.IAppStructsProvider) (IAppPartitions, func()) {
+func NewTestAppParts(asp istructs.IAppStructsProvider, appStorageProvider istorage.IAppStorageProvider) (IAppPartitions, func()) {
 	vvmCtx, cancel := context.WithCancel(context.Background())
 	appParts, cleanup := New2(
 		vvmCtx,
@@ -25,7 +26,7 @@ func NewTestAppParts(asp istructs.IAppStructsProvider) (IAppPartitions, func()) 
 		NullExtensionEngineFactories,
 		iratesce.TestBucketsFactory,
 		testingu.MockTime,
-		isequencer.NullIVVMSeqStorageAdapter(),
+		storage.NewTestIVVMSeqStorageAdpater(appStorageProvider),
 	)
 	combinedCleanup := func() {
 		cancel()

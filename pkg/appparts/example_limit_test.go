@@ -23,6 +23,7 @@ import (
 	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/itokensjwt"
+	"github.com/voedger/voedger/pkg/vvm/storage"
 )
 
 func ExampleIAppPartition_IsLimitExceeded() {
@@ -65,10 +66,11 @@ func ExampleIAppPartition_IsLimitExceeded() {
 	appConfigs := istructsmem.AppConfigsType{}
 	appConfigs.AddBuiltInAppConfig(istructs.AppQName_test1_app1, adb).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
+	appStorageProvider := provider.Provide(mem.Provide(testingu.MockTime), "")
 	appStructsProvider := istructsmem.Provide(
 		appConfigs,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
-		provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0, nil)
+		appStorageProvider, isequencer.SequencesTrustLevel_0, nil)
 
 	vvmCtx, cancel := context.WithCancel(context.Background())
 	appParts, cleanup := appparts.New2(
@@ -79,7 +81,7 @@ func ExampleIAppPartition_IsLimitExceeded() {
 		appparts.NullSchedulerRunner,
 		appparts.NullExtensionEngineFactories,
 		iratesce.TestBucketsFactory,
-		testingu.MockTime, isequencer.NullIVVMSeqStorageAdapter(),
+		testingu.MockTime, storage.NewTestIVVMSeqStorageAdpater(appStorageProvider),
 	)
 	defer func() {
 		cancel()

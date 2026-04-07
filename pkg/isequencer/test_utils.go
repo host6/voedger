@@ -216,10 +216,6 @@ func (m *MockStorage) AddPLogEntry(offset PLogOffset, wsid WSID, seqID SeqID, nu
 	)
 }
 
-func NullIVVMSeqStorageAdapter() IVVMSeqStorageAdapter {
-	return nil
-}
-
 func NewDefaultParams(seqTypes map[WSKind]map[SeqID]Number) Params {
 	return Params{
 		SeqTypes:                          seqTypes,

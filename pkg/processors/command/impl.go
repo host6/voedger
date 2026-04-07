@@ -598,9 +598,11 @@ func sequencesStart(_ context.Context, cmd *cmdWorkpiece) (err error) {
 	}
 	if seqPLogOffset != isequencer.PLogOffset(cmd.appPartition.nextPLogOffset) {
 		logger.Error("seqPlogOffset", seqPLogOffset, "cmd.appPartition.nextPLogOffset", cmd.appPartition.nextPLogOffset)
+		panic("")
 	}
 	if seqWLogOffset != isequencer.Number(cmd.workspace.NextWLogOffset) {
 		logger.Error("seqWlogOffset", seqWLogOffset, "cmd.workspace.NextWLogOffset", cmd.workspace.NextWLogOffset)
+		panic("")
 	}
 	cmd.sequencesStarted = true
 	return nil
