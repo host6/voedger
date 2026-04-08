@@ -1,0 +1,1 @@
+{"version":"1.0","branch_type":2,"description":"Fix data race in TestHandlerPanic","issue_url":"https://untill.atlassian.net/browse/AIR-3523"}
