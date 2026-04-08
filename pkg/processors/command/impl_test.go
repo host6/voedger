@@ -839,12 +839,19 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 		close(done)
 	}()
 
-	as, err := appStructsProvider.BuiltIn(istructs.AppQName_untill_airs_bp)
+	appPart, err := appParts.Borrow(istructs.AppQName_untill_airs_bp, testAppPartID, appparts.ProcessorKind_Command)
 	require.NoError(err)
-	err = wsdescutil.CreateCDocWorkspaceDescriptorStub(as, testAppPartID, 1, qNameTestWSKind, 1, 1)
+	defer appPart.Release()
+	as := appPart.AppStructs()
+	qNameTestWSKindID, err := as.QNameID(qNameTestWSKind)
 	require.NoError(err)
-	err = wsdescutil.CreateCDocWorkspaceDescriptorStub(as, testAppPartID, 2, qNameTestWSKind, 2, 1)
-	require.NoError(err)
+
+	// initial sequencer warm-up: consume offset 0 which is not valid for events
+	appPart.Sequencer().Start(isequencer.WSKind(qNameTestWSKindID), 1)
+	appPart.Sequencer().Flush()
+
+	require.NoError(wsdescutil.CreateCDocWorkspaceDescriptorStubViaPartition(appPart, 1, qNameTestWSKind))
+	require.NoError(wsdescutil.CreateCDocWorkspaceDescriptorStubViaPartition(appPart, 2, qNameTestWSKind))
 
 	return testApp{
 		cfg:               cfg,

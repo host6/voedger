@@ -6,9 +6,12 @@
 package wsdescutil
 
 import (
+	"errors"
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/appparts"
+	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/sys/authnz"
@@ -69,4 +72,28 @@ func CreateCDocWorkspaceDescriptorStub(as istructs.IAppStructs, partNum istructs
 		return err
 	}
 	return as.Events().PutWlog(pLogEvent)
+}
+
+// CreateCDocWorkspaceDescriptorStubViaPartition creates a workspace descriptor stub
+// using the partition's sequencer to obtain PLog/WLog offsets automatically.
+// Performs a full sequencer transaction: Start → Next → create event → Flush.
+func CreateCDocWorkspaceDescriptorStubViaPartition(appPart appparts.IAppPartition, wsid istructs.WSID, wsKind appdef.QName) error {
+	as := appPart.AppStructs()
+	wsKindID, err := as.QNameID(wsKind)
+	if err != nil {
+		return err
+	}
+	pLogOffset, ok := appPart.Sequencer().Start(isequencer.WSKind(wsKindID), isequencer.WSID(wsid))
+	if !ok {
+		return errors.New("sequencer Start failed")
+	}
+	wLogOffset, err := appPart.Sequencer().Next(isequencer.SeqID(istructs.QNameIDWLogOffsetSequence))
+	if err != nil {
+		return err
+	}
+	if err := CreateCDocWorkspaceDescriptorStub(as, appPart.ID(), wsid, wsKind, istructs.Offset(pLogOffset), istructs.Offset(wLogOffset)); err != nil {
+		return err
+	}
+	appPart.Sequencer().Flush()
+	return nil
 }
