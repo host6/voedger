@@ -4,8 +4,8 @@
 
 Command processor components (active):
 
-- [appPartition](../../../../pkg/processors/command/provide.go#L41): struct — per-partition state (workspace map, next PLog offset)
-- [workspace](../../../../pkg/processors/command/provide.go#L28): struct — per-workspace state (WLog offset, ID generator)
+- [appPartition](../../../../pkg/processors/command/provide.go#L42): struct — per-partition state (workspace map, next PLog offset)
+- [workspace](../../../../pkg/processors/command/provide.go#L29): struct — per-workspace state (WLog offset, ID generator)
 - [implIIDGenerator](../../../../pkg/istructsmem/idgenerator.go#L12): struct — incrementing ID generator per workspace
 
 ISequencer package (implemented, **not yet integrated** into command processor):
