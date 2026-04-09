@@ -1,4 +1,4 @@
-# Context subsystem architecture: Sequences
+# Context subsystem architecture: Sequences (actual design)
 
 ## Key components
 
