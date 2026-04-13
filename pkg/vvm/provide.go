@@ -111,7 +111,7 @@ func Provide(vvmCfg *VVMConfig) (voedgerVM *VoedgerVM, err error) {
 		// each restaurant must go to the same cmd proc -> one single cmd processor behind the each command service channel
 		iprocbusmem.ChannelGroup{
 			NumChannels:       uint(vvmCfg.NumCommandProcessors),
-			ChannelBufferSize: uint(DefaultNumCommandProcessors), // to avoid bus timeout on big values of `vvmCfg.NumCommandProcessors``
+			ChannelBufferSize: vvmCfg.CommandProcessorChannelBufferSize,
 		},
 		ProcessorChannel_Command,
 	)
@@ -251,6 +251,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 			"SecretsReader",
 			"SequencesTrustLevel",
 			"SchemasCache",
+			"BusyProcessorLogMode",
 			"PolicyOptsForFederationWithRetry",
 		),
 	))
@@ -578,6 +579,7 @@ func provideRouterParams(cfg *VVMConfig, port VVMPortType) router.RouterParams {
 		Routes:               cfg.Routes,
 		RoutesRewrite:        cfg.RoutesRewrite,
 		RouteDomains:         cfg.RouteDomains,
+		MaxQueriesPerWS:      cfg.RouterMaxQueriesPerWS,
 	}
 	return res
 }
