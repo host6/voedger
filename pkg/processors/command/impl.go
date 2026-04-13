@@ -1063,6 +1063,7 @@ func (idGen *implIDGeneratorReporter) NextID(rawID istructs.RecordID) (storageID
 	}
 	if seqNum != isequencer.Number(storageID) {
 		logger.Error("Sequencer and IDGenerator differs: storageID", storageID, ", seqNum", seqNum)
+		panic("")
 	}
 	return storageID, nil
 }
