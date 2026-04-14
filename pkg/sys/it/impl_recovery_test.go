@@ -18,6 +18,34 @@ import (
 	"github.com/voedger/voedger/pkg/vvm"
 )
 
+func TestSingletonDoesNotCorruptRecordIDSequenceAfterRecovery(t *testing.T) {
+	require := require.New(t)
+	cfg := it.NewOwnVITConfig(
+		it.WithApp(istructs.AppQName_test1_app1, it.ProvideApp1,
+			it.WithWorkspaceTemplate(it.QNameApp1_TestWSKind, "test_template", sys_test_template.TestTemplateFS),
+			it.WithUserLogin("login", "pwd"),
+			it.WithChildWorkspace(it.QNameApp1_TestWSKind, "test_ws", "test_template", "", "login", map[string]interface{}{"IntFld": 42}),
+		),
+	)
+	it.TestRestartPreservingStorage(t, &cfg,
+		func(t *testing.T, vit *it.VIT) {
+			// insert a singleton
+			ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+			body := `{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.Config","Fld1":"42"}}]}`
+			resp := vit.PostWS(ws, "c.sys.CUD", body)
+			require.Empty(resp.NewIDs)
+		},
+		func(t *testing.T, vit *it.VIT) {
+			// insert a cdoc after restart
+			ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+			body := `{"cuds":[{"fields":{"sys.ID":1,"sys.QName":"app1pkg.category","name":"test"}}]}`
+			resp := vit.PostWS(ws, "c.sys.CUD", body)
+			newID := resp.NewID()
+			require.GreaterOrEqual(newID, istructs.FirstUserRecordID)
+		},
+	)
+}
+
 func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 	require := require.New(t)
 	keyspaceSuffix := provider.NewTestKeyspaceIsolationSuffix()
