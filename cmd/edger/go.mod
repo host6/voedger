@@ -2,8 +2,6 @@ module github.com/voedger/voedger/cmd/edger
 
 go 1.26.3
 
-replace github.com/voedger/voedger => ../..
-
 require (
 	github.com/spf13/cobra v1.10.2
 	github.com/stretchr/testify v1.11.1

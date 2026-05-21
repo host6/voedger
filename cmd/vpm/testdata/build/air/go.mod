@@ -20,12 +20,14 @@ require (
 	github.com/untillpro/dynobuffers v0.0.0-20251212090544-93da105bf1da // indirect
 	github.com/untillpro/gojay v1.2.17-0.20250325110036-70ad3373aa24 // indirect
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
-	github.com/wneessen/go-mail v0.7.2 // indirect
-	golang.org/x/exp v0.0.0-20260112195511-716be5621a96 // indirect
-	golang.org/x/mod v0.32.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
-	golang.org/x/text v0.33.0 // indirect
-	golang.org/x/tools v0.41.0 // indirect
+	github.com/wneessen/go-mail v0.7.3 // indirect
+	golang.org/x/exp v0.0.0-20260508232706-74f9aab9d74a // indirect
+	golang.org/x/mod v0.36.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
+	golang.org/x/tools v0.45.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
+
+replace github.com/voedger/voedger => github.com/untillpro/voedger v0.0.0-20260519165639-c27f74d7bd4b
