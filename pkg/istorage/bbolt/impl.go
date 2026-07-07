@@ -602,6 +602,11 @@ func (s *appStorageType) removeKey(tx *bolt.Tx, ttlKey []byte) error {
 
 func (s *appStorageType) backgroundCleaner(ctx context.Context, wg *sync.WaitGroup) {
 	defer wg.Done()
+	defer func() {
+		if err := s.db.Close(); err != nil {
+			logger.Error("bbolt storage: failed to close db: " + err.Error())
+		}
+	}()
 
 	for ctx.Err() == nil {
 		timerCh := s.iTime.NewTimerChan(cleanupInterval)

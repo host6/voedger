@@ -186,13 +186,16 @@ func TestAppStorageFactory_StopGoroutines(t *testing.T) {
 	factory := Provide(params, testingu.MockTime)
 	storageProvider := istorageimpl.Provide(factory)
 
-	_, err := storageProvider.AppStorage(istructs.AppQName_test1_app1)
+	appStorage, err := storageProvider.AppStorage(istructs.AppQName_test1_app1)
 	require.NoError(err)
 
 	storageProvider.Stop()
 
 	implFactory := factory.(*appStorageFactory)
 	require.Error(implFactory.ctx.Err())
+
+	impl := appStorage.(*appStorageType)
+	require.ErrorIs(impl.db.View(func(*bolt.Tx) error { return nil }), bolt.ErrDatabaseNotOpen)
 
 	_, err = storageProvider.AppStorage(istructs.AppQName_test1_app1)
 	require.ErrorIs(err, istorageimpl.ErrStoppingState)

@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -231,8 +230,7 @@ func TestBug_BatchedLogEventsMustOwnTheirBytes(t *testing.T) {
 }
 
 func getBboltVITCfg(t *testing.T) it.VITConfig {
-	dbDir, err := os.MkdirTemp("", "AIR-4355") //nolint:usetesting // bbolt driver does not close the connection so t.TempDir() fails
-	require.NoError(t, err)
+	dbDir := t.TempDir()
 
 	return it.NewOwnVITConfig(
 		it.WithApp(istructs.AppQName_test1_app1, it.ProvideApp1,
