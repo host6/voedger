@@ -326,15 +326,15 @@ func TestDeployApp_ValidateExtensions_MatchVSQLAndCode(t *testing.T) {
 		t.Helper()
 		appConfigs := istructsmem.AppConfigsType{}
 		appConfigs.AddBuiltInAppConfig(appName, builder.New()).SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
+		appStorageProvider := provider.Provide(mem.Provide(testingu.MockTime), "")
 		appStructs := istructsmem.Provide(
 			appConfigs,
 			payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
-			provider.Provide(mem.Provide(testingu.MockTime), ""), isequencer.SequencesTrustLevel_0, nil)
+			appStorageProvider, isequencer.SequencesTrustLevel_0, nil)
 		ctx, cancel := context.WithCancel(context.Background())
-		appParts, cleanup, err := appparts.New2(ctx, appStructs,
+		appParts, cleanup := appparts.New2(ctx, appStructs,
 			appparts.NullSyncActualizerFactory, appparts.NullActualizerRunner, appparts.NullSchedulerRunner,
-			eef, iratesce.TestBucketsFactory)
-		require.New(t).NoError(err)
+			eef, iratesce.TestBucketsFactory, testingu.MockTime, storage.NewTestIVVMSeqStorageAdpater(appStorageProvider))
 		defer func() {
 			cancel()
 			cleanup()

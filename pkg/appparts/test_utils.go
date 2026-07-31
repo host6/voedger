@@ -17,7 +17,7 @@ import (
 
 func NewTestAppParts(asp istructs.IAppStructsProvider, appStorageProvider istorage.IAppStorageProvider) (res IAppPartitions, cleanup func()) {
 	vvmCtx, cancel := context.WithCancel(context.Background())
-	res, clean, err := New2(
+	res, clean := New2(
 		vvmCtx,
 		asp,
 		NullSyncActualizerFactory,
