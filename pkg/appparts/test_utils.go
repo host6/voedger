@@ -15,9 +15,9 @@ import (
 	"github.com/voedger/voedger/pkg/vvm/storage"
 )
 
-func NewTestAppParts(asp istructs.IAppStructsProvider, appStorageProvider istorage.IAppStorageProvider) (IAppPartitions, func()) {
+func NewTestAppParts(asp istructs.IAppStructsProvider, appStorageProvider istorage.IAppStorageProvider) (res IAppPartitions, cleanup func()) {
 	vvmCtx, cancel := context.WithCancel(context.Background())
-	appParts, cleanup := New2(
+	res, clean, err := New2(
 		vvmCtx,
 		asp,
 		NullSyncActualizerFactory,
@@ -28,9 +28,8 @@ func NewTestAppParts(asp istructs.IAppStructsProvider, appStorageProvider istora
 		testingu.MockTime,
 		storage.NewTestIVVMSeqStorageAdpater(appStorageProvider),
 	)
-	combinedCleanup := func() {
+	return res, func() {
 		cancel()
-		cleanup()
+		clean()
 	}
-	return appParts, combinedCleanup
 }

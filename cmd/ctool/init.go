@@ -7,7 +7,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"net"
 
 	"github.com/spf13/cobra"
@@ -29,7 +28,7 @@ func newInitCmd() *cobra.Command {
 	initN5Cmd = &cobra.Command{
 		Use:   "n5 [<ipaddr>...]",
 		Short: "Deploy the N5 cluster",
-		Args: func(cmd *cobra.Command, args []string) error {
+		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) != se5NodeCount {
 				return ErrInvalidNumberOfArguments
 			}
@@ -41,7 +40,7 @@ func newInitCmd() *cobra.Command {
 	initN3Cmd = &cobra.Command{
 		Use:   "n3 [<ipaddr>...]",
 		Short: "Deploy the N3 cluster",
-		Args: func(cmd *cobra.Command, args []string) error {
+		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) != se3NodeCount {
 				return ErrInvalidNumberOfArguments
 			}
@@ -62,7 +61,7 @@ func newInitCmd() *cobra.Command {
 	initSeCmd = &cobra.Command{
 		Use:   "SE [<ipaddr>...]",
 		Short: "Deploy the SE cluster (alias for n5)",
-		Args: func(cmd *cobra.Command, args []string) error {
+		Args: func(_ *cobra.Command, args []string) error {
 			if len(args) != se5NodeCount {
 				return ErrInvalidNumberOfArguments
 			}
@@ -73,13 +72,13 @@ func newInitCmd() *cobra.Command {
 
 	// Only add SSH key flag to multi-node commands (N3, N5, SE)
 	// N1 and CE run locally and don't need SSH keys
-	if !addSshKeyFlag(initN3Cmd) {
+	if !addSSHKeyFlag(initN3Cmd) {
 		return nil
 	}
-	if !addSshKeyFlag(initN5Cmd) {
+	if !addSSHKeyFlag(initN5Cmd) {
 		return nil
 	}
-	if !addSshKeyFlag(initSeCmd) {
+	if !addSSHKeyFlag(initSeCmd) {
 		return nil
 	}
 
@@ -99,7 +98,6 @@ func newInitCmd() *cobra.Command {
 	initCmd.AddCommand(initN1Cmd, initN5Cmd, initN3Cmd, initCeCmd, initSeCmd)
 
 	return initCmd
-
 }
 
 // nolint
@@ -142,14 +140,14 @@ func initN1(cmd *cobra.Command, args []string) error {
 	cluster := newCluster()
 	var err error
 
-	defer saveClusterToJson(cluster)
+	defer saveClusterToJSON(cluster)
 
 	if !cluster.Draft {
 		return ErrClusterConfAlreadyExists
 	}
 
 	c := newCmd(ckInit, append([]string{clusterEditionN1}, args...))
-	if err = cluster.applyCmd(c); err != nil {
+	if err := cluster.applyCmd(c); err != nil {
 		loggerError(err.Error())
 		return err
 	}
@@ -165,7 +163,7 @@ func initN1(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	if err = cluster.Cmd.apply(cluster); err != nil {
+	if err := cluster.Cmd.apply(cluster); err != nil {
 		loggerError(err)
 		return err
 	}
@@ -185,12 +183,12 @@ func initN5(cmd *cobra.Command, args []string) error {
 
 	c := newCmd(ckInit, append([]string{clusterEditionN5}, args...))
 	c.SkipStacks = skipStacks
-	if err = cluster.applyCmd(c); err != nil {
+	if err := cluster.applyCmd(c); err != nil {
 		loggerError(err.Error())
 		return err
 	}
 
-	defer saveClusterToJson(cluster)
+	defer saveClusterToJSON(cluster)
 
 	err = mkCommandDirAndLogFile(cmd, cluster)
 	if err != nil {
@@ -205,7 +203,7 @@ func initN5(cmd *cobra.Command, args []string) error {
 	err = cluster.validate()
 	if err == nil {
 		println("cluster configuration is ok")
-		if err = cluster.Cmd.apply(cluster); err != nil {
+		if err := cluster.Cmd.apply(cluster); err != nil {
 			loggerError(err)
 			return err
 		}
@@ -214,6 +212,6 @@ func initN5(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func initN3(cmd *cobra.Command, args []string) error {
-	return fmt.Errorf("deploy N3 cluster not yet implemented")
+func initN3(*cobra.Command, []string) error {
+	return errors.New("deploy N3 cluster not yet implemented")
 }

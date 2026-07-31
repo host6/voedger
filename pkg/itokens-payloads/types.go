@@ -16,7 +16,12 @@ import (
 // Owner is a record with {WSID, IDOfOwner} key
 // isAPIToken -> principals will be built by Roles only in authenticator
 type PrincipalPayload struct {
-	Login       string
+	// Login is the canonical primary login resolved at issue time: the immutable internal identity
+	// used for credentials, routing, authorization, quotas, and metrics. Wire/JWT claim key "Login".
+	Login string
+	// Alias is the active alias snapshot at issue time, empty when no alias is set. Display-only:
+	// not to be used for internal identity, authorization, quotas, or metrics. Wire/JWT claim key "Alias".
+	Alias       string
 	SubjectKind istructs.SubjectKindType
 	ProfileWSID istructs.WSID
 	Roles       []RoleType

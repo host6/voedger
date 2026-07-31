@@ -6,7 +6,8 @@
 package filter
 
 import (
-	"fmt"
+	"slices"
+	"strings"
 
 	"github.com/voedger/voedger/pkg/appdef"
 )
@@ -31,24 +32,16 @@ func newTagsFilter(tags ...appdef.QName) *tagsFilter {
 func (tagsFilter) Kind() appdef.FilterKind { return appdef.FilterKind_Tags }
 
 func (f tagsFilter) Match(t appdef.IType) bool {
-	for _, tag := range f.tags {
-		if t.HasTag(tag) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(f.tags, t.HasTag)
 }
 
 func (f tagsFilter) String() string {
 	// TAGS(…)
-	s := "TAGS("
+	parts := make([]string, len(f.tags))
 	for i, c := range f.tags {
-		if i > 0 {
-			s += ", "
-		}
-		s += fmt.Sprint(c)
+		parts[i] = c.String()
 	}
-	return s + ")"
+	return "TAGS(" + strings.Join(parts, ", ") + ")"
 }
 
 func (f tagsFilter) Tags() []appdef.QName { return f.tags }

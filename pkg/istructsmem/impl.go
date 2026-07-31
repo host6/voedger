@@ -464,10 +464,11 @@ func (e *appEventsType) ReadPLog(ctx context.Context, partition istructs.Partiti
 				count++
 				ofs := glueLogOffset(ofsHi, binary.BigEndian.Uint16(ccols))
 				event := newEvent(e.app.config)
-				if err = event.loadFromBytes(data); err == nil {
-					err = cb(ofs, event)
+				if err := event.loadFromBytes(data); err != nil {
+					event.Free()
+					return err
 				}
-				return err
+				return cb(ofs, event)
 			})
 			return (err == nil) && (count > 0), err // stop iterate parts if error or no events in last partition
 		})
@@ -505,10 +506,11 @@ func (e *appEventsType) ReadWLog(ctx context.Context, workspace istructs.WSID, o
 				count++
 				ofs := glueLogOffset(ofsHi, binary.BigEndian.Uint16(ccols))
 				event := newEvent(e.app.config)
-				if err = event.loadFromBytes(data); err == nil {
-					err = cb(ofs, event)
+				if err := event.loadFromBytes(data); err != nil {
+					event.Free()
+					return err
 				}
-				return err
+				return cb(ofs, event)
 			})
 			return (err == nil) && (count > 0), err // stop iterate parts if error or no events in last partition
 		})

@@ -63,7 +63,7 @@ func TestExecRootCmd(t *testing.T) {
 	testData := InputControlMessage{
 		Type: "docker",
 		Value: json.RawMessage(fmt.Sprintf(`{
-			"Key": "%s",
+			"Key": %q,
 			"SP": {
 				"Version": "1.0",
 				"ComposeText": "version: \"3.7\"\nservices:\n  redis:\n    image: 'redis:7.0.11-alpine'\n    restart: always\n  nginx:\n    image: 'nginx:1.23.4'\n    restart: always\n"
@@ -106,7 +106,7 @@ func TestExecRootCmd(t *testing.T) {
 
 	sort.Sort(expectedNewState)
 	sort.Sort(newState)
-	require.Equal(t, len(expectedNewState), len(newState))
+	require.Len(t, newState, len(expectedNewState))
 	require.Equal(t, expectedNewState, newState)
 
 	err = cleanUp(projectName)

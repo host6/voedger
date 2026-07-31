@@ -47,6 +47,7 @@ func TestHTTP(t *testing.T) {
 	httpClient, cleanup := NewIHTTPClient()
 	defer cleanup()
 
+	//nolint:thelper
 	testCases := []struct {
 		name      string
 		opts      []ReqOptFunc
@@ -335,14 +336,12 @@ func TestHTTPReqWithOptions(t *testing.T) {
 			require.NoError(err)
 		}
 		var wg sync.WaitGroup
-		for i := 0; i < 10; i++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range 10 {
+			wg.Go(func() {
 				resp, err := httpClient.Req(context.Background(), url, "body")
 				require.NoError(err)
 				require.Equal("ok", resp.Body)
-			}()
+			})
 		}
 		wg.Wait()
 		require.Equal(int32(10), count)
@@ -368,7 +367,7 @@ func TestHTTPReqWithOptions(t *testing.T) {
 
 	t.Run("WithRetryPolicy replaces default policies - custom status is retried", func(t *testing.T) {
 		var retryNum int
-		handler = func(w http.ResponseWriter, r *http.Request) {
+		handler = func(w http.ResponseWriter, _ *http.Request) {
 			retryNum++
 			// Return 429 (TooManyRequests) which is in our custom policy
 			if retryNum == 1 {
@@ -391,6 +390,52 @@ func TestHTTPReqWithOptions(t *testing.T) {
 			})
 		})
 	})
+}
+
+func TestReqReaderBodyPreservedOnRetry(t *testing.T) {
+	require := require.New(t)
+
+	var bodies []string
+	var mu sync.Mutex
+	attemptCount := 0
+
+	ts := http.Server{
+		Addr: localhostDynamic,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			b, err := io.ReadAll(r.Body)
+			require.NoError(err)
+			mu.Lock()
+			bodies = append(bodies, string(b))
+			attemptCount++
+			attempt := attemptCount
+			mu.Unlock()
+			if attempt == 1 {
+				w.WriteHeader(http.StatusServiceUnavailable)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}),
+	}
+	ln, err := net.Listen("tcp", localhostDynamic)
+	require.NoError(err)
+	go ts.Serve(ln) //nolint:errcheck
+	defer func() { require.NoError(ts.Shutdown(context.Background())) }()
+	url := "http://" + ln.Addr().String()
+
+	httpClient, cleanup := NewIHTTPClient()
+	defer cleanup()
+
+	bodyContent := "important payload"
+	reader := strings.NewReader(bodyContent)
+	_, err = httpClient.ReqReader(context.Background(), url, reader,
+		ReqOptFunc(WithRetryOnStatus(http.StatusServiceUnavailable)))
+	require.NoError(err)
+
+	mu.Lock()
+	defer mu.Unlock()
+	require.GreaterOrEqual(len(bodies), 2)
+	require.Equal(bodyContent, bodies[0])
+	require.Equal(bodyContent, bodies[1])
 }
 
 func TestContextCanceled(t *testing.T) {

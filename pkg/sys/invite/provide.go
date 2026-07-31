@@ -16,7 +16,7 @@ import (
 func Provide(sr istructsmem.IStatelessResources, time timeu.ITime,
 	federation federation.IFederation, itokens itokens.ITokens, smtpCfg smtp.Cfg) {
 	provideCmdInitiateInvitationByEMail(sr, time)
-	provideCmdInitiateJoinWorkspace(sr, time)
+	provideCmdInitiateJoinWorkspace(sr, time, itokens)
 	provideCmdInitiateUpdateInviteRoles(sr, time)
 	provideCmdInitiateCancelAcceptedInvite(sr, time)
 	provideCmdInitiateLeaveWorkspace(sr, time)
@@ -25,11 +25,13 @@ func Provide(sr istructsmem.IStatelessResources, time timeu.ITime,
 	provideCmdUpdateJoinedWorkspaceRoles(sr)
 	provideCmdDeactivateJoinedWorkspace(sr)
 	sr.AddProjectors(appdef.SysPackagePath,
-		asyncProjectorApplyInvitation(time, federation, itokens, smtpCfg),
-		asyncProjectorApplyJoinWorkspace(time, federation, itokens),
-		asyncProjectorApplyUpdateInviteRoles(time, federation, itokens, smtpCfg),
-		asyncProjectorApplyCancelAcceptedInvite(time, federation, itokens),
-		asyncProjectorApplyLeaveWorkspace(time, federation, itokens),
+		// Deprecated: superseded by asyncProjectorApplyInviteEvents. Kept for backward compatibility only.
+		asyncProjectorApplyInvitation(),
+		asyncProjectorApplyJoinWorkspace(),
+		asyncProjectorApplyUpdateInviteRoles(),
+		asyncProjectorApplyCancelAcceptedInvite(),
+		asyncProjectorApplyLeaveWorkspace(),
+		asyncProjectorApplyInviteEvents(time, federation, itokens, smtpCfg),
 		syncProjectorInviteIndex(),
 		syncProjectorJoinedWorkspaceIndex(),
 		applyViewSubjectsIdx(),

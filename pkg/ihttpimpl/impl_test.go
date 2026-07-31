@@ -49,8 +49,7 @@ func TestBasicUsage_HTTPProcessor(t *testing.T) {
 			"dir2/content",
 		}
 		for _, res := range resources {
-			dir, fileName := makeTmpContent(require, res)
-			defer os.RemoveAll(dir)
+			dir, fileName := makeTmpContent(t, res)
 			dirFS := os.DirFS(dir)
 			testApp.processor.DeployStaticContent(res, dirFS)
 
@@ -118,7 +117,7 @@ func TestBasicUsage_HTTPProcessor(t *testing.T) {
 		require.Equal(`Hello, Test, {"par1":"val1","par2":"val2"}`, string(body))
 
 		body = testApp.post("/api/"+path, "application/json", "", map[string]string{"text": testText})
-		require.Equal(fmt.Sprintf(`Hello, {"text":"%s"}, {"par1":"val1","par2":"val2"}`, testText), string(body))
+		require.Equal(fmt.Sprintf(`Hello, {"text":%q}, {"par1":"val1","par2":"val2"}`, testText), string(body))
 
 		testText = ""
 		body = testApp.post("/api/"+path, "text/plain", testText, nil)
@@ -335,23 +334,17 @@ func TestRace_HTTPProcessor(t *testing.T) {
 	require.NoError(err)
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		for i := 0; i < 1000; i++ {
+	wg.Go(func() {
+		for i := range 1000 {
 			testApp.processor.DeployStaticContent(fmt.Sprintf("test_path_%d", i), testContentSubFs)
 		}
-	}()
+	})
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-
-		for i := 0; i < 1000; i++ {
+	wg.Go(func() {
+		for i := range 1000 {
 			testApp.get(fmt.Sprintf("/test_path_%d", i), []int{http.StatusOK, http.StatusNotFound}...)
 		}
-	}()
+	})
 
 	wg.Wait()
 }
@@ -391,11 +384,9 @@ func setUp(t *testing.T) *testApp {
 	require.NoError(err)
 
 	wg := sync.WaitGroup{}
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		processor.Run(ctx)
-	}()
+	})
 
 	// create API
 
@@ -453,10 +444,15 @@ func (ta *testApp) post(resource string, contentType string, requestText string,
 		requestData = []byte(requestText)
 	}
 	if requestMap != nil {
-		requestData, _ = json.Marshal(requestMap)
+		var err error
+		requestData, err = json.Marshal(requestMap)
+		if err != nil {
+			// notest
+			panic(err)
+		}
 	}
 
-	req, err := http.NewRequest("POST", url, bytes.NewBuffer(requestData))
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewBuffer(requestData))
 	require.NoError(err)
 	req.Header.Set("Content-Type", contentType)
 
@@ -471,15 +467,11 @@ func (ta *testApp) post(resource string, contentType string, requestText string,
 	return body
 }
 
-func makeTmpContent(require *require.Assertions, pattern string) (dir string, fileName string) {
-	dir, err := os.MkdirTemp("", "."+filepath.Base(pattern))
-	require.NoError(err)
-
+func makeTmpContent(t *testing.T, pattern string) (dir string, fileName string) {
+	t.Helper()
+	dir = t.TempDir()
 	fileName = "tmpcontext.txt"
-
-	err = os.WriteFile(filepath.Join(dir, fileName), []byte(filepath.Base(pattern)), filesu.FileMode_DefaultForFile)
-	require.NoError(err)
-
+	require.NoError(t, os.WriteFile(filepath.Join(dir, fileName), []byte(filepath.Base(pattern)), filesu.FileMode_DefaultForFile))
 	return dir, fileName
 }
 

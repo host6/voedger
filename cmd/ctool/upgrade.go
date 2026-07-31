@@ -18,12 +18,11 @@ func newUpgradeCmd() *cobra.Command {
 	}
 
 	c := newCluster()
-	if c.Edition != clusterEditionN1 && !addSshKeyFlag(upgradeCmd) {
+	if c.Edition != clusterEditionN1 && !addSSHKeyFlag(upgradeCmd) {
 		return nil
 	}
 
 	return upgradeCmd
-
 }
 
 // versions compare (version format: 0.0.1 or 0.0.1-alfa)
@@ -35,7 +34,6 @@ func compareVersions(version1 string, version2 string) int {
 }
 
 func upgrade(cmd *cobra.Command, args []string) error {
-
 	currentCmd = cmd
 	cluster := newCluster()
 	var err error
@@ -55,15 +53,11 @@ func upgrade(cmd *cobra.Command, args []string) error {
 	}
 
 	c := newCmd(ckUpgrade, args)
-	defer saveClusterToJson(cluster)
+	defer saveClusterToJSON(cluster)
 
-	if err = cluster.applyCmd(c); err != nil {
+	if err := cluster.applyCmd(c); err != nil {
 		return err
 	}
 
-	if err = cluster.Cmd.apply(cluster); err != nil {
-		return err
-	}
-
-	return nil
+	return cluster.Cmd.apply(cluster)
 }

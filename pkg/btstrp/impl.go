@@ -30,7 +30,6 @@ func Bootstrap(federation federation.IFederation, asp istructs.IAppStructsProvid
 	clusterApp ClusterBuiltInApp, otherApps []appparts.BuiltInApp, sidecarApps []appparts.SidecarApp, itokens itokens.ITokens, storageProvider istorage.IAppStorageProvider,
 	postWiredInterfacePtrs PostWireInterfacePtrs, blobHandler blobprocessor.IRequestHandler,
 	requestSender bus.IRequestSender) (err error) {
-
 	logCtx := logger.WithContextAttrs(context.Background(), map[string]any{
 		logger.LogAttr_VApp:      sys.VApp_SysVoedger,
 		logger.LogAttr_Extension: "sys._Bootstrap",
@@ -101,7 +100,7 @@ func deployAppPartitions(ctx context.Context, stage string, appparts appparts.IA
 
 func callDeployApp(federation federation.IFederation, sysToken string, app appparts.BuiltInApp) {
 	// Use Admin Endpoint to send requests
-	body := fmt.Sprintf(`{"args":{"AppQName":"%s","NumPartitions":%d,"NumAppWorkspaces":%d}}`, app.Name, app.NumParts, app.NumAppWorkspaces)
+	body := fmt.Sprintf(`{"args":{"AppQName":%q,"NumPartitions":%d,"NumAppWorkspaces":%d}}`, app.Name, app.NumParts, app.NumAppWorkspaces)
 	_, err := federation.AdminFunc(fmt.Sprintf("api/%s/%d/c.cluster.DeployApp", istructs.AppQName_sys_cluster, clusterapp.ClusterAppPseudoWSID), body,
 		httpu.WithDiscardResponse(),
 		httpu.WithAuthorizeBy(sysToken),

@@ -36,6 +36,8 @@ func newRequest(ctx context.Context, method, url, body string, bodyReader io.Rea
 		req.Header.Add(k, v)
 	}
 	for k, v := range cookies {
+		// outgoing client cookie: Secure/HttpOnly/SameSite are server-side response directives, ignored by req.AddCookie serialization
+		// nolint G124
 		req.AddCookie(&http.Cookie{
 			Name:  k,
 			Value: v,
@@ -110,6 +112,17 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 
 	startTime := time.Now()
 
+	var bodyReaderBytes []byte
+	if opts.bodyReader != nil {
+		bodyReaderBytes, err = io.ReadAll(opts.bodyReader)
+		if closer, ok := opts.bodyReader.(io.Closer); ok {
+			closer.Close()
+		}
+		if err != nil {
+			return nil, fmt.Errorf("failed to read request body: %w", err)
+		}
+	}
+
 	reqCtx, cancel := context.WithTimeout(ctx, maxHTTPRequestTimeout)
 	defer cancel()
 
@@ -122,7 +135,7 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 	}
 
 	retrierCfg := retrier.NewConfig(httpBaseRetryDelay, httpMaxRetryDelay)
-	retrierCfg.OnError = func(attempt int, delay time.Duration, opErr error) (retry bool, abortErr error) {
+	retrierCfg.OnError = func(_ int, _ time.Duration, opErr error) (retry bool, abortErr error) {
 		for _, matcher := range opts.retryOnErr {
 			if matcher(opErr) {
 				return true, nil
@@ -132,7 +145,11 @@ func (c *implIHTTPClient) req(ctx context.Context, urlStr string, body string, o
 	}
 
 	resp, err := retrier.Retry(reqCtx, retrierCfg, func() (*http.Response, error) {
-		req, err := newRequest(httpCtx, opts.method, opts.urlStr, body, opts.bodyReader, opts.headers, opts.cookies)
+		var bodyReader io.Reader
+		if bodyReaderBytes != nil {
+			bodyReader = bytes.NewReader(bodyReaderBytes)
+		}
+		req, err := newRequest(httpCtx, opts.method, opts.urlStr, body, bodyReader, opts.headers, opts.cookies)
 		if err != nil {
 			return nil, err
 		}
@@ -207,11 +224,12 @@ func (resp *HTTPResponse) PrintJSON() {
 	obj := make(map[string]interface{})
 	err := json.Unmarshal([]byte(resp.Body), &obj)
 	if err != nil {
-		log.Fatalln(err)
+		panic(err)
 	}
 	bb, err := json.MarshalIndent(obj, "", "	")
 	if err != nil {
-		log.Fatalln(err)
+		// notest
+		panic(err)
 	}
 	log.Println("\n", string(bb))
 }

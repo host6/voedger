@@ -176,7 +176,7 @@ func TestAuthenticate(t *testing.T) {
 	userToken, err := appTokens.IssueToken(time.Minute, &pp)
 	require.NoError(err)
 
-	testRole := appdef.NewQName(appdef.SysPackage, "test")
+	testRole := appdef.NewQName("test", "role")
 	apiKeyToken, err := IssueAPIToken(appTokens, time.Hour, []appdef.QName{
 		testRole,
 	}, 2, pp)
@@ -191,7 +191,7 @@ func TestAuthenticate(t *testing.T) {
 	deviceToken, err := appTokens.IssueToken(time.Minute, &pp)
 	require.NoError(err)
 
-	notIncludedRole := appdef.NewQName(appdef.SysPackage, "non-inluded")
+	notIncludedRole := appdef.NewQName("test", "non-included")
 	pp = payloads.PrincipalPayload{
 		Login:       login,
 		SubjectKind: istructs.SubjectKind_User,
@@ -445,9 +445,68 @@ func TestErrors(t *testing.T) {
 	})
 
 	t.Run("personal access token for NullWSID", func(t *testing.T) {
-		token, err := IssueAPIToken(appTokens, time.Hour, []appdef.QName{appdef.NewQName(appdef.SysPackage, "test")}, istructs.NullWSID, payloads.PrincipalPayload{})
+		token, err := IssueAPIToken(appTokens, time.Hour, []appdef.QName{appdef.NewQName("test", "role")}, istructs.NullWSID, payloads.PrincipalPayload{})
 		require.ErrorIs(err, ErrPersonalAccessTokenOnNullWSID)
 		require.Empty(token)
+	})
+}
+
+func TestSubjectRolesResolveAgainstLoginAndAlias(t *testing.T) {
+	require := require.New(t)
+
+	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, timeu.NewITime())
+	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(istructs.AppQName_test1_app1)
+
+	const canonicalLogin = "jsmith"
+	const aliasLogin = "j.smith"
+	subjectRole := appdef.NewQName("test", "subjectrole")
+
+	// grants subjectRole only to the subject login string it is configured to match
+	rolesGetterFor := func(matchLogin string) SubjectGetterFunc {
+		return func(_ context.Context, login string, _ istructs.IAppStructs, _ istructs.WSID) ([]appdef.QName, error) {
+			if login == matchLogin {
+				return []appdef.QName{subjectRole}, nil
+			}
+			return nil, nil
+		}
+	}
+
+	appStructs := AppStructsWithTestStorage(istructs.AppQName_test1_app1, map[istructs.WSID]map[appdef.QName]map[istructs.RecordID]map[string]interface{}{})
+
+	authenticateWith := func(getterMatch string) []iauthnz.Principal {
+		pp := payloads.PrincipalPayload{
+			Login:       canonicalLogin,
+			Alias:       aliasLogin,
+			SubjectKind: istructs.SubjectKind_User,
+			ProfileWSID: 1,
+		}
+		token, err := appTokens.IssueToken(time.Minute, &pp)
+		require.NoError(err)
+		authn := NewDefaultAuthenticator(rolesGetterFor(getterMatch), TestIsDeviceAllowedFuncs)
+		principals, _, err := authn.Authenticate(context.Background(), appStructs, appTokens, iauthnz.AuthnRequest{
+			Host:        "127.0.0.1",
+			RequestWSID: 1,
+			Token:       token,
+		})
+		require.NoError(err)
+		return principals
+	}
+
+	hasSubjectRole := func(principals []iauthnz.Principal) bool {
+		for _, prn := range principals {
+			if prn.Kind == iauthnz.PrincipalKind_Role && prn.QName == subjectRole {
+				return true
+			}
+		}
+		return false
+	}
+
+	t.Run("subject registered under the canonical login resolves", func(t *testing.T) {
+		require.True(hasSubjectRole(authenticateWith(canonicalLogin)))
+	})
+
+	t.Run("subject registered under the active alias resolves", func(t *testing.T) {
+		require.True(hasSubjectRole(authenticateWith(aliasLogin)))
 	})
 }
 
@@ -487,9 +546,9 @@ type implIRecords struct {
 	data map[istructs.WSID]map[appdef.QName]map[istructs.RecordID]map[string]interface{}
 }
 
-func (implIRecords) Apply(istructs.IPLogEvent) error                          { panic("") }
-func (implIRecords) Apply2(istructs.IPLogEvent, func(istructs.IRecord)) error { panic("") }
-func (implIRecords) PutJSON(istructs.WSID, map[appdef.FieldName]any) error    { panic("") }
+func (*implIRecords) Apply(istructs.IPLogEvent) error                          { panic("") }
+func (*implIRecords) Apply2(istructs.IPLogEvent, func(istructs.IRecord)) error { panic("") }
+func (*implIRecords) PutJSON(istructs.WSID, map[appdef.FieldName]any) error    { panic("") }
 func (r *implIRecords) Get(wsid istructs.WSID, _ bool, id istructs.RecordID) (istructs.IRecord, error) {
 	if wsData, ok := r.data[wsid]; ok {
 		for qName, qNameRecs := range wsData {
@@ -502,7 +561,7 @@ func (r *implIRecords) Get(wsid istructs.WSID, _ bool, id istructs.RecordID) (is
 	}
 	return istructsmem.NewNullRecord(id), nil
 }
-func (implIRecords) GetBatch(istructs.WSID, bool, []istructs.RecordGetBatchItem) error { panic("") }
+func (*implIRecords) GetBatch(istructs.WSID, bool, []istructs.RecordGetBatchItem) error { panic("") }
 func (r *implIRecords) GetSingleton(wsid istructs.WSID, qName appdef.QName) (record istructs.IRecord, err error) {
 	if wsData, ok := r.data[wsid]; ok {
 		if qNameRecs, ok := wsData[qName]; ok {
@@ -516,7 +575,9 @@ func (r *implIRecords) GetSingleton(wsid istructs.WSID, qName appdef.QName) (rec
 	}
 	return istructsmem.NewNullRecord(istructs.NullRecordID), nil
 }
-func (implIRecords) Read(istructs.WSID, bool, istructs.RecordID) (istructs.IRecord, error) { panic("") }
+func (*implIRecords) Read(istructs.WSID, bool, istructs.RecordID) (istructs.IRecord, error) {
+	panic("")
+}
 
 func (r *implIRecords) GetSingletonID(qName appdef.QName) (istructs.RecordID, error) {
 	for _, wsData := range r.data {
@@ -539,30 +600,30 @@ type implIRecord struct {
 	qName appdef.QName
 }
 
-func (r *implIRecord) QName() appdef.QName                                    { return r.qName }
-func (r *implIRecord) ID() istructs.RecordID                                  { return r.AsRecordID(appdef.SystemField_ID) }
-func (implIRecord) Parent() istructs.RecordID                                 { panic("") }
-func (implIRecord) Container() string                                         { panic("") }
-func (implIRecord) RecordIDs(bool) func(func(string, istructs.RecordID) bool) { panic("") }
-func (r *implIRecord) Fields(cb func(iField appdef.IField) bool)              { r.TestObject.Fields(cb) }
+func (r *implIRecord) QName() appdef.QName                                     { return r.qName }
+func (r *implIRecord) ID() istructs.RecordID                                   { return r.AsRecordID(appdef.SystemField_ID) }
+func (*implIRecord) Parent() istructs.RecordID                                 { panic("") }
+func (*implIRecord) Container() string                                         { panic("") }
+func (*implIRecord) RecordIDs(bool) func(func(string, istructs.RecordID) bool) { panic("") }
+func (r *implIRecord) Fields(cb func(iField appdef.IField) bool)               { r.TestObject.Fields(cb) }
 
 type implIViewRecords struct {
 	records *implIRecords
 }
 
-func (implIViewRecords) KeyBuilder(view appdef.QName) istructs.IKeyBuilder {
+func (*implIViewRecords) KeyBuilder(view appdef.QName) istructs.IKeyBuilder {
 	return &implIKeyBuilder{qName: view, TestObject: coreutils.TestObject{Data: map[string]interface{}{}}}
 }
-func (implIViewRecords) NewValueBuilder(appdef.QName) istructs.IValueBuilder { panic("") }
-func (implIViewRecords) UpdateValueBuilder(appdef.QName, istructs.IValue) istructs.IValueBuilder {
+func (*implIViewRecords) NewValueBuilder(appdef.QName) istructs.IValueBuilder { panic("") }
+func (*implIViewRecords) UpdateValueBuilder(appdef.QName, istructs.IValue) istructs.IValueBuilder {
 	panic("")
 }
-func (implIViewRecords) Put(istructs.WSID, istructs.IKeyBuilder, istructs.IValueBuilder) error {
+func (*implIViewRecords) Put(istructs.WSID, istructs.IKeyBuilder, istructs.IValueBuilder) error {
 	panic("")
 }
-func (implIViewRecords) PutBatch(istructs.WSID, []istructs.ViewKV) error                  { panic("") }
-func (implIViewRecords) PutJSON(istructs.WSID, map[appdef.FieldName]any) error            { panic("") }
-func (implIViewRecords) Get(istructs.WSID, istructs.IKeyBuilder) (istructs.IValue, error) { panic("") }
+func (*implIViewRecords) PutBatch(istructs.WSID, []istructs.ViewKV) error                  { panic("") }
+func (*implIViewRecords) PutJSON(istructs.WSID, map[appdef.FieldName]any) error            { panic("") }
+func (*implIViewRecords) Get(istructs.WSID, istructs.IKeyBuilder) (istructs.IValue, error) { panic("") }
 func (vr *implIViewRecords) GetBatch(workspace istructs.WSID, kv []istructs.ViewRecordGetBatchItem) error {
 	if wsData, ok := vr.records.data[workspace]; ok {
 		for biIdx, bi := range kv {
@@ -588,7 +649,7 @@ func (vr *implIViewRecords) GetBatch(workspace istructs.WSID, kv []istructs.View
 	}
 	return nil
 }
-func (implIViewRecords) Read(context.Context, istructs.WSID, istructs.IKeyBuilder, istructs.ValuesCallback) error {
+func (*implIViewRecords) Read(context.Context, istructs.WSID, istructs.IKeyBuilder, istructs.ValuesCallback) error {
 	panic("")
 }
 
@@ -597,10 +658,12 @@ type implIKeyBuilder struct {
 	qName appdef.QName
 }
 
-func (kb *implIKeyBuilder) PartitionKey() istructs.IRowWriter             { return &kb.TestObject }
-func (kb *implIKeyBuilder) ClusteringColumns() istructs.IRowWriter        { return &kb.TestObject }
-func (kb *implIKeyBuilder) Equals(istructs.IKeyBuilder) bool              { panic("implement me") }
-func (kb *implIKeyBuilder) ToBytes(istructs.WSID) ([]byte, []byte, error) { return nil, nil, nil }
+func (kb *implIKeyBuilder) PartitionKey() istructs.IRowWriter      { return &kb.TestObject }
+func (kb *implIKeyBuilder) ClusteringColumns() istructs.IRowWriter { return &kb.TestObject }
+func (kb *implIKeyBuilder) Equals(istructs.IKeyBuilder) bool       { panic("implement me") }
+func (kb *implIKeyBuilder) ToBytes(istructs.WSID) (pk []byte, cc []byte, err error) {
+	return nil, nil, nil
+}
 
 type implIValue struct {
 	coreutils.TestObject

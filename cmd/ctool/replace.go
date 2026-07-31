@@ -17,16 +17,14 @@ func newReplaceCmd() *cobra.Command {
 		RunE:  replace,
 	}
 
-	if !addSshKeyFlag(replaceCmd) {
+	if !addSSHKeyFlag(replaceCmd) {
 		return nil
 	}
 
 	return replaceCmd
-
 }
 
 func replace(cmd *cobra.Command, args []string) error {
-
 	currentCmd = cmd
 	cluster := newCluster()
 	var err error
@@ -45,10 +43,10 @@ func replace(cmd *cobra.Command, args []string) error {
 	replacedAddress := args[0]
 
 	// nolint
-	defer saveClusterToJson(cluster)
+	defer saveClusterToJSON(cluster)
 
 	c := newCmd(ckReplace, args)
-	if err = cluster.applyCmd(c); err != nil {
+	if err := cluster.applyCmd(c); err != nil {
 		return err
 	}
 
@@ -58,7 +56,7 @@ func replace(cmd *cobra.Command, args []string) error {
 	}
 
 	if err = cluster.validate(); err == nil {
-		if err = cluster.Cmd.apply(cluster); err != nil {
+		if err := cluster.Cmd.apply(cluster); err != nil {
 			return err
 		}
 	}

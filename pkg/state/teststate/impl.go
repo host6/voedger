@@ -77,7 +77,9 @@ func NewTestState(processorKind int, packagePath string, createWorkspaces ...Tes
 	ts.ctx = context.Background()
 	ts.processorKind = processorKind
 	ts.secretReader = &secretReader{secrets: make(map[string][]byte)}
-	ts.httpClient, _ = httpu.NewIHTTPClientWithTransport(&testRoundTripper{ts: ts})
+
+	// no retries in tests
+	ts.httpClient, _ = httpu.NewIHTTPClientWithTransport(&testRoundTripper{ts: ts}, httpu.WithNoRetryPolicy())
 	ts.buildAppDef(packagePath, "..", createWorkspaces...)
 	ts.buildState(processorKind)
 	return ts
@@ -341,13 +343,13 @@ func (ts *testState) buildState(processorKind int) {
 			UniquesHandler:           ts.emulateUniquesHandler,
 			FederationBlobHandler:    ts.emulateFederationBlob,
 		}
-		ts.IState = stateprovide.ProvideAsyncActualizerStateFactory()(ts.ctx, appFunc, partitionIDFunc, wsidFunc, nil, ts.secretReader, eventFunc, nil, nil,
+		ts.IState = stateprovide.ProvideAsyncActualizerStateFactory()(ts.ctx, appFunc, wsidFunc, nil, ts.secretReader, eventFunc, nil, nil,
 			IntentsLimit, BundlesLimit, stateOpts, ts.emailSender, ts.httpClient)
 	case ProcKind_CommandProcessor:
 		stateOpts := state.StateOpts{
 			UniquesHandler: ts.emulateUniquesHandler,
 		}
-		ts.IState = stateprovide.ProvideCommandProcessorStateFactory()(ts.ctx, appFunc, partitionIDFunc, wsidFunc, ts.secretReader, cudFunc, principalsFunc, tokenFunc,
+		ts.IState = stateprovide.ProvideCommandProcessorStateFactory()(ts.ctx, appFunc, wsidFunc, ts.secretReader, cudFunc, principalsFunc, tokenFunc,
 			IntentsLimit, resultBuilderFunc, commandPrepareArgs, argFunc, unloggedArgFunc, wlogOffsetFunc, stateOpts, originFunc)
 	case ProcKind_QueryProcessor:
 		stateOpts := state.StateOpts{

@@ -5,9 +5,7 @@
 package main
 
 import (
-	"bytes"
 	"fmt"
-	"io"
 	"math/rand"
 	"os"
 	"path/filepath"
@@ -109,11 +107,12 @@ func mkCommandDirAndLogFile(cmd *cobra.Command, cluster *clusterType) error {
 
 	err := os.MkdirAll(commandDirName, filesu.FileMode_DefaultForDir)
 	if err == nil {
-		fName := filepath.Join(commandDirName, s+".log")
-		logFile, err = os.Create(fName)
-		if err == nil {
-			logFile, err = os.OpenFile(fName, os.O_RDWR, filesu.FileMode_DefaultForFile)
+		if logFile != nil {
+			_ = logFile.Close()
+			logFile = nil
 		}
+		fName := filepath.Join(commandDirName, s+".log")
+		logFile, err = os.OpenFile(fName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, filesu.FileMode_DefaultForFile)
 	}
 	return err
 }
@@ -133,11 +132,8 @@ func createScriptsTempDir() error {
 		return err
 	}
 	scriptsTempDir = dir
-	if err = os.Chmod(scriptsTempDir, filesu.FileMode_DefaultForDir); err != nil {
-		return err
-	}
 
-	return nil
+	return os.Chmod(scriptsTempDir, filesu.FileMode_DefaultForDir)
 }
 
 func scriptTempDirExists() (bool, error) {
@@ -157,55 +153,6 @@ func deleteScriptsTempDir() error {
 	return os.RemoveAll(scriptsTempDir)
 }
 
-// nolint
-func captureStdoutStderr(f func() error) (stdout string, stderr string, err error) {
-
-	stdoutReader, stdoutWriter, err := os.Pipe()
-	if err != nil {
-		return
-	}
-	stderrReader, stderrWriter, err := os.Pipe()
-	if err != nil {
-		return
-	}
-
-	{
-		origStdout := os.Stdout
-		os.Stdout = stdoutWriter
-		defer func() { os.Stdout = origStdout }()
-	}
-	{
-		origStderr := os.Stderr
-		os.Stderr = stderrWriter
-		defer func() { os.Stderr = origStderr }()
-	}
-
-	wg := sync.WaitGroup{}
-
-	wg.Add(1)
-	go func() {
-		var b bytes.Buffer
-		defer wg.Done()
-		_, _ = io.Copy(&b, stdoutReader)
-		stdout = b.String()
-	}()
-	wg.Add(1)
-	go func() {
-		var b bytes.Buffer
-		defer wg.Done()
-		_, _ = io.Copy(&b, stderrReader)
-		stderr = b.String()
-	}()
-
-	err = f()
-	stderrWriter.Close()
-	stdoutWriter.Close()
-	wg.Wait()
-	return
-
-}
-
-// nolint
 func randomPassword(length int) string {
 	letterBytes := "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
 
