@@ -227,7 +227,7 @@ func (s *hostState) MustNotExist(key istructs.IStateKeyBuilder) (err error) {
 	if ok {
 		return s.err(key, ErrExists)
 	}
-	return err
+	return nil
 }
 func (s *hostState) MustNotExistAll(keys []istructs.IStateKeyBuilder) (err error) {
 	batches := make(map[appdef.QName][]state.GetBatchItem)
