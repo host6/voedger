@@ -306,7 +306,7 @@ func (a *aggregator) order() (err error) {
 		}
 		return 0
 	})
-	return nil
+	return err
 }
 func (a *aggregator) subList() {
 	if a.params.Constraints.Limit == 0 && a.params.Constraints.Skip == 0 {

@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	vsqlUpdateFieldLogOffs = "LogWLogOffset" //nolint:stylecheck // ST1003: name intentiaonally kept to match wire field
-	vsqlUpdateFieldCUDOffs = "CUDWLogOffset" //nolint:stylecheck // ST1003: name intentiaonally kept to match wire field
-	vsqlUpdateFieldNewID   = "NewID"         //nolint:stylecheck // ST1003: name intentiaonally kept to match wire field
+	vsqlUpdateFieldLogOffs = "LogWLogOffset" //nolint:stylecheck // ST1003: name intentionally kept to match wire field
+	vsqlUpdateFieldCUDOffs = "CUDWLogOffset" //nolint:stylecheck // ST1003: name intentionally kept to match wire field
+	vsqlUpdateFieldNewID   = "NewID"         //nolint:stylecheck // ST1003: name intentionally kept to match wire field
 	vsqlUpdateStage        = "routing.vsqlupdate"
 	vsqlUpdateErrorStage   = "routing.vsqlupdate.error"
 )
