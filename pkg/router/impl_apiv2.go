@@ -479,7 +479,6 @@ func requestHandlerV2_table(reqSender bus.IRequestSender, apiPath processors.API
 				panic(err)
 			}
 			busRequest.DocID = istructs.IDType(docID)
-
 		}
 		busRequest.IsAPIV2 = true
 		busRequest.APIPath = int(apiPath)
@@ -538,9 +537,10 @@ func sendRequestAndReadResponse(req *http.Request, busRequest bus.Request, reqSe
 	reply_v2(requestCtx, rw, respCh, respErr, cancel, respMeta)
 }
 
+//nolint:dupl
 func parseChangePasswordArgs(body string) (login, oldPassword, newPassword string, err error) {
 	args := coreutils.MapObject{}
-	if err = json.Unmarshal([]byte(body), &args); err != nil {
+	if err := json.Unmarshal([]byte(body), &args); err != nil {
 		return "", "", "", fmt.Errorf("failed to unmarshal body: %w", err)
 	}
 	ok := false
@@ -568,9 +568,10 @@ func parseChangePasswordArgs(body string) (login, oldPassword, newPassword strin
 	return login, oldPassword, newPassword, nil
 }
 
+//nolint:dupl
 func parseCreateLoginArgs(body string) (verifiedEmailToken, displayName, pwd string, err error) {
 	args := coreutils.MapObject{}
-	if err = json.Unmarshal([]byte(body), &args); err != nil {
+	if err := json.Unmarshal([]byte(body), &args); err != nil {
 		return "", "", "", fmt.Errorf("failed to unmarshal body: %w", err)
 	}
 	ok := false
@@ -595,5 +596,5 @@ func parseCreateLoginArgs(body string) (verifiedEmailToken, displayName, pwd str
 	if !ok {
 		return "", "", "", errors.New("password field missing")
 	}
-	return
+	return verifiedEmailToken, displayName, pwd, nil
 }
