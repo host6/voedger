@@ -327,7 +327,6 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			qw.state = stateprovide.ProvideQueryProcessorStateFactory()(
 				qw.msg.RequestCtx(),
 				func() istructs.IAppStructs { return qw.appStructs },
-				state.SimplePartitionIDFunc(qw.msg.Partition()),
 				state.SimpleWSIDFunc(qw.msg.WSID()),
 				qw.secretReader,
 				func() []iauthnz.Principal { return qw.principals },

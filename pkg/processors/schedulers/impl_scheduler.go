@@ -32,7 +32,7 @@ type scheduler struct {
 	schedule     cron.Schedule
 	// run:
 	vvmCtx       context.Context
-	projErrState int32 // 0 - no error, 1 - error
+	projErrState atomic.Int32 // 0 - no error, 1 - error
 	appParts     appparts.IAppPartitions
 	retrierCfg   retrier.Config
 }
@@ -101,7 +101,7 @@ func (a *scheduler) runJob() error {
 	}
 	logger.VerboseCtx(a.logCtx, "job.success")
 	if a.jobInErrAddr != nil {
-		if atomic.CompareAndSwapInt32(&a.projErrState, 1, 0) {
+		if a.projErrState.CompareAndSwap(1, 0) {
 			a.jobInErrAddr.Increase(-1)
 		}
 	}
@@ -109,7 +109,6 @@ func (a *scheduler) runJob() error {
 }
 
 func (a *scheduler) init() (err error) {
-
 	appDef, err := a.appParts.AppDef(a.conf.AppQName)
 	if err != nil {
 		return err
@@ -144,7 +143,7 @@ func (a *scheduler) keepRunning() {
 			logger.VerboseCtx(a.logCtx, "job.wake-up", now)
 			if err := a.runJob(); err != nil {
 				logger.ErrorCtx(a.logCtx, "job.error", err)
-				if atomic.CompareAndSwapInt32(&a.projErrState, 0, 1) {
+				if a.projErrState.CompareAndSwap(0, 1) {
 					if a.jobInErrAddr != nil {
 						a.jobInErrAddr.Increase(1)
 					}
@@ -157,7 +156,7 @@ func (a *scheduler) keepRunning() {
 
 func (a *scheduler) finit() {
 	if a.jobInErrAddr != nil {
-		if atomic.CompareAndSwapInt32(&a.projErrState, 1, 0) {
+		if a.projErrState.CompareAndSwap(1, 0) {
 			a.jobInErrAddr.Increase(-1)
 		}
 	}
