@@ -180,19 +180,12 @@ func TestBasicUsage(t *testing.T) {
 }
 
 func sendCUD(t *testing.T, wsid istructs.WSID, app testApp, expectedCode ...int) map[string]interface{} {
+	return sendCUDWithSender(t, wsid, app, app.requestSender, expectedCode...)
+}
+
+func sendCUDWithSender(t *testing.T, wsid istructs.WSID, app testApp, sender bus.IRequestSender, expectedCode ...int) map[string]interface{} {
 	require := require.New(t)
-	req := bus.Request{
-		WSID:     wsid,
-		AppQName: istructs.AppQName_untill_airs_bp,
-		Resource: "c.sys.CUD",
-		Body: []byte(`{"cuds":[
-			{"fields":{"sys.ID":1,"sys.QName":"test.TestCDoc"}},
-			{"fields":{"sys.ID":2,"sys.QName":"test.TestWDoc"}},
-			{"fields":{"sys.ID":3,"sys.QName":"test.TestCRecord","sys.ParentID":1,"sys.Container":"TestCRecord"}}
-		]}`),
-		Header: app.sysAuthHeader,
-	}
-	respCh, respMeta, respErr, err := app.requestSender.SendRequest(app.ctx, req)
+	respCh, respMeta, respErr, err := sender.SendRequest(app.ctx, newCUDRequest(wsid, app))
 	require.NoError(err)
 	respDataStr := ""
 	for elem := range respCh {
@@ -216,6 +209,43 @@ func sendCUD(t *testing.T, wsid istructs.WSID, app testApp, expectedCode ...int)
 	}
 	require.NoError(*respErr)
 	return respData
+}
+
+func newCUDRequest(wsid istructs.WSID, app testApp) bus.Request {
+	return bus.Request{
+		WSID:     wsid,
+		AppQName: istructs.AppQName_untill_airs_bp,
+		Resource: "c.sys.CUD",
+		Body: []byte(`{"cuds":[
+			{"fields":{"sys.ID":1,"sys.QName":"test.TestCDoc"}},
+			{"fields":{"sys.ID":2,"sys.QName":"test.TestWDoc"}},
+			{"fields":{"sys.ID":3,"sys.QName":"test.TestCRecord","sys.ParentID":1,"sys.Container":"TestCRecord"}}
+		]}`),
+		Header: app.sysAuthHeader,
+	}
+}
+
+func requestStatus(ctx context.Context, sender bus.IRequestSender, request bus.Request) (int, error) {
+	responseCh, responseMeta, responseErr, err := sender.SendRequest(ctx, request)
+	if err != nil {
+		return 0, err
+	}
+	for range responseCh {
+	}
+	return responseMeta.StatusCode, *responseErr
+}
+
+func recoveryKeyForWSID(wsid istructs.WSID) partitionKey {
+	return partitionKey{
+		appQName:    testAppName,
+		partitionID: coreutils.AppPartitionID(wsid, testAppPartCount),
+	}
+}
+
+func triggerAndWaitForRecovery(t *testing.T, app testApp, wsid istructs.WSID) error {
+	t.Helper()
+	sendCUDWithSender(t, wsid, app, app.rawRequestSender, http.StatusServiceUnavailable)
+	return app.recovery.wait(app.ctx, recoveryKeyForWSID(wsid))
 }
 
 func TestRecoveryOnSyncProjectorError(t *testing.T) {
@@ -278,6 +308,7 @@ func TestRecoveryOnSyncProjectorError(t *testing.T) {
 	// partition is scheduled to be recovered
 
 	// 3rd c.sys.CUD - > recovery procedure must re-apply 2nd event (PLog, records and WLog), then 3rd event is processed ok (sync projectors are ok)
+	require.NoError(triggerAndWaitForRecovery(t, app, 1))
 	respData = sendCUD(t, 1, app)
 	require.Equal(4, int(respData["CurrentWLogOffset"].(float64)))
 	require.Equal(istructs.FirstUserRecordID+6, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
@@ -314,6 +345,7 @@ func TestRecovery(t *testing.T) {
 
 	logCap.Reset()
 	restartCmdProc(&app)
+	require.NoError(triggerAndWaitForRecovery(t, app, 1))
 	respData = sendCUD(t, 1, app)
 	require.Equal(3, int(respData["CurrentWLogOffset"].(float64)))
 	require.Equal(istructs.FirstUserRecordID+3, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
@@ -333,6 +365,7 @@ func TestRecovery(t *testing.T) {
 	)
 
 	restartCmdProc(&app)
+	require.NoError(triggerAndWaitForRecovery(t, app, 2))
 	respData = sendCUD(t, 2, app)
 	require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
 	require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
@@ -340,6 +373,7 @@ func TestRecovery(t *testing.T) {
 	require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
 
 	restartCmdProc(&app)
+	require.NoError(triggerAndWaitForRecovery(t, app, 1))
 	respData = sendCUD(t, 1, app)
 	require.Equal(4, int(respData["CurrentWLogOffset"].(float64)))
 	require.Equal(istructs.FirstUserRecordID+6, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
@@ -348,6 +382,114 @@ func TestRecovery(t *testing.T) {
 
 	app.cancel()
 	<-app.done
+}
+
+func TestAsynchronousRecovery(t *testing.T) {
+	t.Run("another partition remains available", func(t *testing.T) {
+		require := require.New(t)
+		app := setUpRecoveryTestApp(t)
+		defer tearDown(app)
+
+		recoveringKey := recoveryKeyForWSID(1)
+		gate := app.recovery.blockNext(recoveringKey)
+		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
+
+		// WSID 2 maps to another partition and must recover and execute without waiting for WSID 1.
+		sendCUD(t, 2, app)
+		require.Equal(1, app.recovery.startCount(recoveringKey))
+
+		close(gate)
+		require.NoError(app.recovery.wait(app.ctx, recoveringKey))
+		sendCUD(t, 1, app)
+	})
+
+	t.Run("one worker per recovering partition", func(t *testing.T) {
+		require := require.New(t)
+		app := setUpRecoveryTestApp(t)
+		defer tearDown(app)
+
+		key := recoveryKeyForWSID(1)
+		gate := app.recovery.blockNext(key)
+		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
+
+		const concurrentRequests = 5
+		type result struct {
+			status int
+			err    error
+		}
+		results := make(chan result, concurrentRequests)
+		for range concurrentRequests {
+			go func() {
+				status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(1, app))
+				results <- result{status: status, err: err}
+			}()
+		}
+		for range concurrentRequests {
+			result := <-results
+			require.NoError(result.err)
+			require.Equal(http.StatusServiceUnavailable, result.status)
+		}
+		require.Equal(1, app.recovery.startCount(key))
+
+		close(gate)
+		require.NoError(app.recovery.wait(app.ctx, key))
+		sendCUD(t, 1, app)
+	})
+
+	t.Run("failed recovery is reported while retry is started", func(t *testing.T) {
+		require := require.New(t)
+		app := setUpRecoveryTestApp(t)
+		defer tearDown(app)
+
+		key := recoveryKeyForWSID(1)
+		recoveryErr := errors.New("injected recovery failure")
+		app.recovery.failNext(key, recoveryErr)
+		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
+		require.ErrorIs(app.recovery.wait(app.ctx, key), recoveryErr)
+		require.Equal(1, app.recovery.startCount(key))
+
+		gate := app.recovery.blockNext(key)
+		respData := sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusInternalServerError)
+		sysError := respData["sys.Error"].(map[string]interface{})
+		require.Equal("partition 1 recovery failed: injected recovery failure", sysError["Message"])
+		require.Equal(2, app.recovery.startCount(key))
+
+		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
+		require.Equal(2, app.recovery.startCount(key))
+		close(gate)
+		require.NoError(app.recovery.wait(app.ctx, key))
+		sendCUD(t, 1, app)
+	})
+
+	t.Run("service waits for recovery cancellation", func(t *testing.T) {
+		require := require.New(t)
+		app := setUpRecoveryTestApp(t)
+
+		key := recoveryKeyForWSID(1)
+		app.recovery.blockNext(key)
+		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
+
+		app.n10nBrokerCleanup()
+		app.cancel()
+		<-app.done
+		require.ErrorIs(app.recovery.wait(context.Background(), key), context.Canceled)
+		require.Equal(1, app.recovery.startCount(key))
+	})
+}
+
+func setUpRecoveryTestApp(t *testing.T) testApp {
+	t.Helper()
+	cudQName := appdef.NewQName(appdef.SysPackage, "CUD")
+	return setUp(t, func(wsb appdef.IWorkspaceBuilder, cfg *istructsmem.AppConfigType) {
+		wsb.AddCRecord(testCRecord)
+		wsb.AddCDoc(testCDoc).AddContainer("TestCRecord", testCRecord, 0, 1)
+		wsb.AddWDoc(testWDoc)
+		wsb.AddCommand(cudQName)
+		wsb.AddRole(iauthnz.QNameRoleAuthenticatedUser)
+		wsb.AddRole(iauthnz.QNameRoleEveryone)
+		wsb.AddRole(iauthnz.QNameRoleSystem)
+		cfg.Resources.Add(istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec))
+	})
 }
 
 func restartCmdProc(app *testApp) {
@@ -734,6 +876,8 @@ type testApp struct {
 	n10nBroker        in10n.IN10nBroker
 	n10nBrokerCleanup func()
 	requestSender     bus.IRequestSender
+	rawRequestSender  bus.IRequestSender
+	recovery          *recoveryTestControl
 
 	appTokens     istructs.IAppTokens
 	sysAuthHeader map[string]string
@@ -750,8 +894,7 @@ func tearDown(app testApp) {
 var (
 	testAppName                                = istructs.AppQName_untill_airs_bp
 	testAppEngines                             = [appparts.ProcessorKind_Count]uint{10, 10, 10, 0}
-	testAppPartID    istructs.PartitionID      = 1
-	testAppPartCount istructs.NumAppPartitions = 1
+	testAppPartCount istructs.NumAppPartitions = 2
 )
 
 func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istructsmem.AppConfigType)) testApp {
@@ -815,11 +958,11 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	require.NoError(err)
 
 	appParts.DeployApp(testAppName, nil, appDef, testAppPartCount, testAppEngines, cfg.NumAppWorkspaces())
-	appParts.DeployAppPartitions(testAppName, []istructs.PartitionID{testAppPartID})
+	appParts.DeployAppPartitions(testAppName, []istructs.PartitionID{0, 1})
 
 	// command processor works through ibus.SendResponse -> we need ibus implementation
 
-	requestSender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
+	rawRequestSender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, request bus.Request, responder bus.IResponder) {
 		// simulate handling the command request be a real application
 		cmdQName, err := appdef.ParseQName(request.Resource[2:])
 		require.NoError(err)
@@ -832,7 +975,8 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 		if authHeader, ok := request.Header[httpu.Authorization]; ok {
 			token = strings.TrimPrefix(authHeader, "Bearer ")
 		}
-		icm := NewCommandMessage(requestCtx, request.Body, request.AppQName, request.WSID, responder, testAppPartID, cmdQName, token, "", 0, 0, "", "")
+		partitionID := coreutils.AppPartitionID(request.WSID, testAppPartCount)
+		icm := NewCommandMessage(requestCtx, request.Body, request.AppQName, request.WSID, responder, partitionID, cmdQName, token, "", 0, 0, "", "")
 		serviceChannel <- icm
 	})
 
@@ -840,9 +984,18 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(testAppName)
 	systemToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
-	cmdProcessorFactory := ProvideServiceFactory(appParts, timeu.NewITime(), n10nBroker, imetrics.Provide(), "vvm",
-		iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs), secretReader)
+	recoveryControl := newRecoveryTestControl()
+	cmdProcessorFactory := provideServiceFactory(appParts, timeu.NewITime(), n10nBroker, imetrics.Provide(), "vvm",
+		iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs), secretReader,
+		recoveryControl.testHooks())
 	cmdProcService := cmdProcessorFactory(serviceChannel)
+	requestSender := &recoveryRetrySender{
+		raw:     rawRequestSender,
+		control: recoveryControl,
+		keyForRequest: func(req bus.Request) (partitionKey, bool) {
+			return recoveryKeyForWSID(req.WSID), req.AppQName == testAppName
+		},
+	}
 
 	go func() {
 		cmdProcService.Run(vvmCtx)
@@ -851,14 +1004,17 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 
 	as, err := appStructsProvider.BuiltIn(istructs.AppQName_untill_airs_bp)
 	require.NoError(err)
-	err = wsdescutil.CreateCDocWorkspaceDescriptorStub(as, testAppPartID, 1, qNameTestWSKind, 1, 1)
-	require.NoError(err)
-	err = wsdescutil.CreateCDocWorkspaceDescriptorStub(as, testAppPartID, 2, qNameTestWSKind, 2, 1)
-	require.NoError(err)
+	for _, wsid := range []istructs.WSID{1, 2} {
+		partitionID := coreutils.AppPartitionID(wsid, testAppPartCount)
+		err = wsdescutil.CreateCDocWorkspaceDescriptorStub(as, partitionID, wsid, qNameTestWSKind, istructs.Offset(wsid), 1)
+		require.NoError(err)
+	}
 
 	return testApp{
 		cfg:               cfg,
 		requestSender:     requestSender,
+		rawRequestSender:  rawRequestSender,
+		recovery:          recoveryControl,
 		cancel:            func() { cancel(); appPartsClean() },
 		ctx:               vvmCtx,
 		done:              done,

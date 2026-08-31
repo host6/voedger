@@ -159,7 +159,9 @@ func (c *cmdWorkpiece) Release() {
 		c.appPart = nil
 		ap.Release()
 	}
-	c.hostState.wp = nil
+	if c.hostState != nil {
+		c.hostState.wp = nil
+	}
 }
 
 func borrowAppPart(_ context.Context, cmd *cmdWorkpiece) error {
@@ -179,20 +181,122 @@ func (ap *appPartition) getWorkspace(wsid istructs.WSID) *workspace {
 }
 
 func (cmdProc *cmdProc) getAppPartition(ctx context.Context, cmd *cmdWorkpiece) (err error) {
-	appPartitions, ok := cmdProc.appsPartitions[cmd.cmdMes.AppQName()]
-	if !ok {
-		appPartitions = map[istructs.PartitionID]*appPartition{}
-		cmdProc.appsPartitions[cmd.cmdMes.AppQName()] = appPartitions
+	key := partitionKey{
+		appQName:    cmd.cmdMes.AppQName(),
+		partitionID: cmd.cmdMes.PartitionID(),
 	}
-	appPartition, ok := appPartitions[cmd.cmdMes.PartitionID()]
-	if !ok {
-		if appPartition, err = cmdProc.recovery(ctx, cmd); err != nil {
-			return fmt.Errorf("partition %d recovery failed: %w", cmd.cmdMes.PartitionID(), err)
+	appPartition, previousRecoveryErr := cmdProc.partitionManager.getOrStart(ctx, key, cmd, cmdProc.recovery)
+	if appPartition != nil {
+		cmd.appPartition = appPartition
+		return nil
+	}
+	if previousRecoveryErr != nil {
+		return partitionRecoveryFailedError(key.partitionID, previousRecoveryErr)
+	}
+	return partitionRecoveringError(key.partitionID)
+}
+
+func partitionRecoveringError(partitionID istructs.PartitionID) error {
+	return coreutils.NewHTTPError(http.StatusServiceUnavailable, fmt.Errorf("partition %d is recovering", partitionID))
+}
+
+func partitionRecoveryFailedError(partitionID istructs.PartitionID, err error) error {
+	return coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("partition %d recovery failed: %w", partitionID, err))
+}
+
+func detachRecoveryWorkpiece(ctx context.Context, cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
+	recoveryCmd := &cmdWorkpiece{
+		appParts:   cmd.appParts,
+		appPart:    cmd.appPart,
+		appStructs: cmd.appStructs,
+		cmdMes: &implICommandMessage{
+			appQName:    key.appQName,
+			partitionID: key.partitionID,
+			requestCtx:  ctx,
+		},
+		metrics: cmd.metrics,
+	}
+	cmd.appPart = nil
+	cmd.appStructs = nil
+	return recoveryCmd
+}
+
+func (m *partitionManager) getOrStart(ctx context.Context, key partitionKey, cmd *cmdWorkpiece, recoverPartitionFunc recoverPartitionFunc) (*appPartition, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	state := m.partitions[key]
+	if state == nil {
+		state = &partitionState{}
+		m.partitions[key] = state
+	} else {
+		if state.appPartition != nil {
+			return state.appPartition, nil
 		}
-		appPartitions[cmd.cmdMes.PartitionID()] = appPartition
+		if state.recovering {
+			return nil, nil
+		}
 	}
-	cmd.appPartition = appPartition
-	return nil
+
+	previousRecoveryErr := state.err
+	state.err = nil
+	state.recovering = true
+	recoveryCmdWorkpiece := detachRecoveryWorkpiece(ctx, cmd, key)
+	m.workers.Add(1)
+
+	if m.testHooks != nil {
+		m.testHooks.started(key)
+	}
+	go m.recover(ctx, key, recoveryCmdWorkpiece, recoverPartitionFunc)
+	return nil, previousRecoveryErr
+}
+
+func (m *partitionManager) recover(ctx context.Context, key partitionKey, cmd *cmdWorkpiece, recoverPartition recoverPartitionFunc) {
+	defer m.workers.Done()
+	var (
+		recoveredPartition *appPartition
+		err                error
+	)
+	if m.testHooks != nil {
+		err = m.testHooks.before(ctx, key)
+	}
+	if err == nil {
+		recoveredPartition, err = recoverPartition(ctx, cmd)
+	}
+	cmd.Release()
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err == nil {
+		err = ctx.Err()
+	}
+	state := m.partitions[key]
+	if state == nil {
+		state = &partitionState{}
+		m.partitions[key] = state
+	}
+	state.appPartition = recoveredPartition
+	state.recovering = false
+	state.err = err
+	if err != nil {
+		state.appPartition = nil
+	}
+
+	if m.testHooks != nil {
+		m.testHooks.finished(key, err)
+	}
+}
+
+func (m *partitionManager) invalidate(key partitionKey) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	delete(m.partitions, key)
+}
+
+func (m *partitionManager) shutdown() {
+	m.workers.Wait()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.partitions = map[partitionKey]*partitionState{}
 }
 
 func getIWorkspace(_ context.Context, cmd *cmdWorkpiece) (err error) {
@@ -294,6 +398,12 @@ func (cmdProc *cmdProc) recovery(ctx context.Context, cmd *cmdWorkpiece) (ap *ap
 	}
 	var lastPLogEvent istructs.IPLogEvent
 	var lastPLogOffset istructs.Offset
+	releaseLastPLogEvent := true
+	defer func() {
+		if releaseLastPLogEvent && lastPLogEvent != nil {
+			lastPLogEvent.Release()
+		}
+	}()
 	cb := func(plogOffset istructs.Offset, event istructs.IPLogEvent) (err error) {
 		ws := ap.getWorkspace(event.Workspace())
 
@@ -332,6 +442,7 @@ func (cmdProc *cmdProc) recovery(ctx context.Context, cmd *cmdWorkpiece) (ap *ap
 			return nil, err
 		}
 		cmd.pLogEvent = lastPLogEvent
+		releaseLastPLogEvent = false
 		cmd.workspace = ap.getWorkspace(lastPLogEvent.Workspace())
 		cmd.workspace.NextWLogOffset-- // cmdProc.storeOp will bump it
 		cmd.reapplier = cmd.appStructs.GetEventReapplier(cmd.pLogEvent)
@@ -346,6 +457,7 @@ func (cmdProc *cmdProc) recovery(ctx context.Context, cmd *cmdWorkpiece) (ap *ap
 		cmd.pLogEvent = nil
 		cmd.logCtx = nil
 		lastPLogEvent.Release() // TODO: eliminate if there will be a better solution, see https://github.com/voedger/voedger/issues/1348
+		lastPLogEvent = nil
 	}
 
 	worskapcesJSON, err := json.Marshal(ap.workspaces)
