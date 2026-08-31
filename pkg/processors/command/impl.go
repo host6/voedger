@@ -246,11 +246,11 @@ func (m *partitionManager) getOrStart(vvmCtx context.Context, key partitionKey, 
 	if m.testHooks != nil {
 		m.testHooks.started(key)
 	}
-	go m.recover(vvmCtx, key, recoveryCmdWorkpiece, recoverPartitionFunc)
+	go m.recover(vvmCtx, key, state, recoveryCmdWorkpiece, recoverPartitionFunc)
 	return nil, previousRecoveryErr
 }
 
-func (m *partitionManager) recover(vvmCtx context.Context, key partitionKey, cmd *cmdWorkpiece, recoverPartition recoverPartitionFunc) {
+func (m *partitionManager) recover(vvmCtx context.Context, key partitionKey, state *partitionState, cmd *cmdWorkpiece, recoverPartition recoverPartitionFunc) {
 	defer m.workers.Done()
 	var (
 		recoveredPartition *appPartition
@@ -269,10 +269,11 @@ func (m *partitionManager) recover(vvmCtx context.Context, key partitionKey, cmd
 	if err == nil {
 		err = vvmCtx.Err()
 	}
-	state := m.partitions[key]
-	if state == nil {
-		state = &partitionState{}
-		m.partitions[key] = state
+	if m.partitions[key] != state {
+		if m.testHooks != nil {
+			m.testHooks.finished(key, err)
+		}
+		return
 	}
 	state.appPartition = recoveredPartition
 	state.recovering = false
@@ -286,7 +287,8 @@ func (m *partitionManager) recover(vvmCtx context.Context, key partitionKey, cmd
 	}
 }
 
-func (m *partitionManager) invalidate(key partitionKey) {
+// resetPartitionState removes the current state so the next request starts a fresh recovery.
+func (m *partitionManager) resetPartitionState(key partitionKey) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.partitions, key)

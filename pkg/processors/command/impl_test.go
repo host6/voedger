@@ -12,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -385,6 +386,108 @@ func TestRecovery(t *testing.T) {
 }
 
 func TestAsynchronousRecovery(t *testing.T) {
+	t.Run("stale recovery does not overwrite reset partition state", func(t *testing.T) {
+		// A recovery worker keeps running after its partition state is reset. A subsequent request
+		// may install a replacement state before that old worker completes. The old worker must
+		// recognize that it no longer owns the current state and discard its stale result.
+		require := require.New(t)
+		finished := make(chan struct{}, 2)
+		manager := newPartitionManager(&partitionRecoveryTestHooks{
+			started: func(partitionKey) {},
+			before: func(context.Context, partitionKey) error {
+				return nil
+			},
+			finished: func(partitionKey, error) {
+				finished <- struct{}{}
+			},
+		})
+		oldGate := make(chan struct{})
+		newGate := make(chan struct{})
+		var oldGateOnce sync.Once
+		var newGateOnce sync.Once
+		defer func() {
+			oldGateOnce.Do(func() { close(oldGate) })
+			newGateOnce.Do(func() { close(newGate) })
+			manager.shutdown()
+		}()
+
+		key := recoveryKeyForWSID(1)
+		newCmd := func() *cmdWorkpiece {
+			return &cmdWorkpiece{cmdMes: &implICommandMessage{
+				appQName:    key.appQName,
+				partitionID: key.partitionID,
+				requestCtx:  context.Background(),
+			}}
+		}
+
+		// Start the original recovery and keep it blocked before it can publish its result.
+		oldStarted := make(chan struct{})
+		oldPartition := &appPartition{}
+		gotPartition, previousErr := manager.getOrStart(context.Background(), key, newCmd(), func(context.Context, *cmdWorkpiece) (*appPartition, error) {
+			close(oldStarted)
+			<-oldGate
+			return oldPartition, nil
+		})
+		require.Nil(gotPartition)
+		require.NoError(previousErr)
+		<-oldStarted
+
+		// Reset the original state and start a new recovery for the same partition. This recreates
+		// the map entry with a different state instance while the old worker is alive.
+		manager.resetPartitionState(key)
+		newStarted := make(chan struct{})
+		newPartition := &appPartition{}
+		gotPartition, previousErr = manager.getOrStart(context.Background(), key, newCmd(), func(context.Context, *cmdWorkpiece) (*appPartition, error) {
+			close(newStarted)
+			<-newGate
+			return newPartition, nil
+		})
+		require.Nil(gotPartition)
+		require.NoError(previousErr)
+		<-newStarted
+
+		manager.mu.Lock()
+		replacementState := manager.partitions[key]
+		manager.mu.Unlock()
+
+		// Complete the old worker first. Its result must not overwrite the replacement state or
+		// mark the replacement recovery as finished.
+		oldGateOnce.Do(func() { close(oldGate) })
+		<-finished
+
+		manager.mu.Lock()
+		currentState := manager.partitions[key]
+		var currentPartition *appPartition
+		currentRecovering := false
+		if currentState != nil {
+			currentRecovering = currentState.recovering
+			currentPartition = currentState.appPartition
+		}
+		manager.mu.Unlock()
+		require.Same(replacementState, currentState)
+		require.True(currentRecovering)
+		require.Nil(currentPartition)
+
+		// Complete the replacement worker and verify that only its result becomes ready.
+		newGateOnce.Do(func() { close(newGate) })
+		<-finished
+		manager.mu.Lock()
+		currentState = manager.partitions[key]
+		currentRecovering = false
+		currentPartition = nil
+		var currentErr error
+		if currentState != nil {
+			currentRecovering = currentState.recovering
+			currentPartition = currentState.appPartition
+			currentErr = currentState.err
+		}
+		manager.mu.Unlock()
+		require.Same(replacementState, currentState)
+		require.False(currentRecovering)
+		require.Same(newPartition, currentPartition)
+		require.NoError(currentErr)
+	})
+
 	t.Run("authentication precedes recovery", func(t *testing.T) {
 		require := require.New(t)
 		app := setUpRecoveryTestApp(t)

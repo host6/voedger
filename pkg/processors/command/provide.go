@@ -186,7 +186,7 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 						}
 						if cmd.appPartitionRestartScheduled {
 							logger.WarningCtx(newRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID()), "cp.partition_recovery", "partition will be restarted due of an error on writing to Log: ", cmdHandlingErr)
-							cmdProc.partitionManager.invalidate(partitionKey{
+							cmdProc.partitionManager.resetPartitionState(partitionKey{
 								appQName:    cmd.cmdMes.AppQName(),
 								partitionID: cmd.cmdMes.PartitionID(),
 							})
