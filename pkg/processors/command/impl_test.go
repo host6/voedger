@@ -449,6 +449,24 @@ func TestAsynchronousRecovery(t *testing.T) {
 		sendCUD(t, 1, app)
 	})
 
+	t.Run("request cancellation does not cancel recovery", func(t *testing.T) {
+		require := require.New(t)
+		app := setUpRecoveryTestApp(t)
+		defer tearDown(app)
+
+		key := recoveryKeyForWSID(1)
+		gate := app.recovery.blockNext(key)
+		requestCtx, cancelRequest := context.WithCancel(app.ctx)
+		status, err := requestStatus(requestCtx, app.rawRequestSender, newCUDRequest(1, app))
+		require.NoError(err)
+		require.Equal(http.StatusServiceUnavailable, status)
+
+		cancelRequest()
+		close(gate)
+		require.NoError(app.recovery.wait(app.ctx, key))
+		sendCUD(t, 1, app)
+	})
+
 	t.Run("failed recovery is reported while retry is started", func(t *testing.T) {
 		require := require.New(t)
 		app := setUpRecoveryTestApp(t)

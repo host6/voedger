@@ -180,12 +180,12 @@ func (ap *appPartition) getWorkspace(wsid istructs.WSID) *workspace {
 	return ws
 }
 
-func (cmdProc *cmdProc) getAppPartition(ctx context.Context, cmd *cmdWorkpiece) (err error) {
+func (cmdProc *cmdProc) getAppPartition(vvmCtx context.Context, cmd *cmdWorkpiece) (err error) {
 	key := partitionKey{
 		appQName:    cmd.cmdMes.AppQName(),
 		partitionID: cmd.cmdMes.PartitionID(),
 	}
-	appPartition, previousRecoveryErr := cmdProc.partitionManager.getOrStart(ctx, key, cmd, cmdProc.recovery)
+	appPartition, previousRecoveryErr := cmdProc.partitionManager.getOrStart(vvmCtx, key, cmd, cmdProc.recovery)
 	if appPartition != nil {
 		cmd.appPartition = appPartition
 		return nil
@@ -204,7 +204,7 @@ func partitionRecoveryFailedError(partitionID istructs.PartitionID, err error) e
 	return coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("partition %d recovery failed: %w", partitionID, err))
 }
 
-func detachRecoveryWorkpiece(ctx context.Context, cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
+func detachRecoveryWorkpiece(cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
 	recoveryCmd := &cmdWorkpiece{
 		appParts:   cmd.appParts,
 		appPart:    cmd.appPart,
@@ -212,7 +212,7 @@ func detachRecoveryWorkpiece(ctx context.Context, cmd *cmdWorkpiece, key partiti
 		cmdMes: &implICommandMessage{
 			appQName:    key.appQName,
 			partitionID: key.partitionID,
-			requestCtx:  ctx,
+			requestCtx:  cmd.cmdMes.RequestCtx(),
 		},
 		metrics: cmd.metrics,
 	}
@@ -221,7 +221,7 @@ func detachRecoveryWorkpiece(ctx context.Context, cmd *cmdWorkpiece, key partiti
 	return recoveryCmd
 }
 
-func (m *partitionManager) getOrStart(ctx context.Context, key partitionKey, cmd *cmdWorkpiece, recoverPartitionFunc recoverPartitionFunc) (*appPartition, error) {
+func (m *partitionManager) getOrStart(vvmCtx context.Context, key partitionKey, cmd *cmdWorkpiece, recoverPartitionFunc recoverPartitionFunc) (*appPartition, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	state := m.partitions[key]
@@ -240,34 +240,34 @@ func (m *partitionManager) getOrStart(ctx context.Context, key partitionKey, cmd
 	previousRecoveryErr := state.err
 	state.err = nil
 	state.recovering = true
-	recoveryCmdWorkpiece := detachRecoveryWorkpiece(ctx, cmd, key)
+	recoveryCmdWorkpiece := detachRecoveryWorkpiece(cmd, key)
 	m.workers.Add(1)
 
 	if m.testHooks != nil {
 		m.testHooks.started(key)
 	}
-	go m.recover(ctx, key, recoveryCmdWorkpiece, recoverPartitionFunc)
+	go m.recover(vvmCtx, key, recoveryCmdWorkpiece, recoverPartitionFunc)
 	return nil, previousRecoveryErr
 }
 
-func (m *partitionManager) recover(ctx context.Context, key partitionKey, cmd *cmdWorkpiece, recoverPartition recoverPartitionFunc) {
+func (m *partitionManager) recover(vvmCtx context.Context, key partitionKey, cmd *cmdWorkpiece, recoverPartition recoverPartitionFunc) {
 	defer m.workers.Done()
 	var (
 		recoveredPartition *appPartition
 		err                error
 	)
 	if m.testHooks != nil {
-		err = m.testHooks.before(ctx, key)
+		err = m.testHooks.before(vvmCtx, key)
 	}
 	if err == nil {
-		recoveredPartition, err = recoverPartition(ctx, cmd)
+		recoveredPartition, err = recoverPartition(vvmCtx, cmd)
 	}
 	cmd.Release()
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if err == nil {
-		err = ctx.Err()
+		err = vvmCtx.Err()
 	}
 	state := m.partitions[key]
 	if state == nil {
@@ -389,7 +389,7 @@ func newRecoveryCtx(ctx context.Context, partID istructs.PartitionID) context.Co
 	})
 }
 
-func (cmdProc *cmdProc) recovery(ctx context.Context, cmd *cmdWorkpiece) (ap *appPartition, err error) {
+func (cmdProc *cmdProc) recovery(vvmCtx context.Context, cmd *cmdWorkpiece) (ap *appPartition, err error) {
 	recoveryCtx := newRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID())
 	logger.InfoCtx(recoveryCtx, "cp.partition_recovery.start", "")
 	ap = &appPartition{
@@ -428,7 +428,7 @@ func (cmdProc *cmdProc) recovery(ctx context.Context, cmd *cmdWorkpiece) (ap *ap
 		return nil
 	}
 
-	if err := cmd.appStructs.Events().ReadPLog(ctx, cmd.cmdMes.PartitionID(), istructs.FirstOffset, istructs.ReadToTheEnd, cb); err != nil {
+	if err := cmd.appStructs.Events().ReadPLog(vvmCtx, cmd.cmdMes.PartitionID(), istructs.FirstOffset, istructs.ReadToTheEnd, cb); err != nil {
 		logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.readplog.error", err)
 		return nil, err
 	}
@@ -447,7 +447,7 @@ func (cmdProc *cmdProc) recovery(ctx context.Context, cmd *cmdWorkpiece) (ap *ap
 		cmd.workspace.NextWLogOffset-- // cmdProc.storeOp will bump it
 		cmd.reapplier = cmd.appStructs.GetEventReapplier(cmd.pLogEvent)
 		cmd.pLogOffset = lastPLogOffset // need to get PLogOffset in sync projectors on logging
-		if err := cmdProc.storeOp.DoSync(ctx, cmd); err != nil {
+		if err := cmdProc.storeOp.DoSync(vvmCtx, cmd); err != nil {
 			logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.storeop.error", err)
 			return nil, err
 		}
