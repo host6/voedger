@@ -385,6 +385,19 @@ func TestRecovery(t *testing.T) {
 }
 
 func TestAsynchronousRecovery(t *testing.T) {
+	t.Run("authentication precedes recovery", func(t *testing.T) {
+		require := require.New(t)
+		app := setUpRecoveryTestApp(t)
+		defer tearDown(app)
+
+		request := newCUDRequest(1, app)
+		request.Header = map[string]string{httpu.Authorization: "Bearer invalid-token"}
+		status, err := requestStatus(app.ctx, app.rawRequestSender, request)
+		require.NoError(err)
+		require.Equal(http.StatusUnauthorized, status)
+		require.Equal(0, app.recovery.startCount(recoveryKeyForWSID(1)))
+	})
+
 	t.Run("another partition remains available", func(t *testing.T) {
 		require := require.New(t)
 		app := setUpRecoveryTestApp(t)
