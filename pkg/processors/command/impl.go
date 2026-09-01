@@ -204,7 +204,7 @@ func partitionRecoveryFailedError(partitionID istructs.PartitionID, err error) e
 	return coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("partition %d recovery failed: %w", partitionID, err))
 }
 
-func detachRecoveryWorkpiece(cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
+func toRecoveryWorkpiece(cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
 	recoveryCmd := &cmdWorkpiece{
 		appParts:   cmd.appParts,
 		appPart:    cmd.appPart,
@@ -240,7 +240,7 @@ func (m *partitionManager) getOrStart(vvmCtx context.Context, key partitionKey, 
 	previousRecoveryErr := state.err
 	state.err = nil
 	state.recovering = true
-	recoveryCmdWorkpiece := detachRecoveryWorkpiece(cmd, key)
+	recoveryCmdWorkpiece := toRecoveryWorkpiece(cmd, key)
 	m.workers.Add(1)
 
 	if m.testHooks != nil {
