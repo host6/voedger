@@ -29,18 +29,17 @@ type iFederationBase interface {
 	AdminFunc(relativeURL string, body string, optFuncs ...httpu.ReqOptFunc) (*FuncResponse, error)
 }
 
-// IFederation without automatic status retries by default.
-// default VVM policy for WithRetry retries HTTP 408, 429, 500, 502, 503, and 504 responses;
-// HTTP 429 honors Retry-After. Each status has a one-minute retry window, with
-// full-jitter backoff starting at 20 milliseconds and capped at one second.
-// Per-request retry options can replace this policy.
+// IFederation does not retry by default
 type IFederation interface {
 	iFederationBase
 	WithRetry() IFederationWithRetry
 }
 
-// IFederationWithRetry is the retry-enabled federation view used by workflows
-// such as workspace initialization.
+// IFederationWithRetry is the retry-enabled federation view used by workflows such as workspace initialization.
+//
+// default VVM retry policy:
+// retries HTTP 408, 429 (respecting Retry-After), 500, 502, 503, and 504 responses;
+// each status has a one-minute retry window, with// full-jitter backoff starting at 20 milliseconds and capped at one second.
 type IFederationWithRetry interface {
 	iFederationBase
 	dummy()
