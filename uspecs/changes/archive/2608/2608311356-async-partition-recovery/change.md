@@ -93,7 +93,7 @@ References:
 
 - [x] update: [command/impl.go](../../../../../pkg/processors/command/impl.go)
   - update: `getAppPartition` to atomically reuse ready state, deduplicate recovery startup, and return retryable `503 Service Unavailable` while the target partition is recovering
-  - update: recovery startup to create an independently owned borrow and workpiece tied to the service context rather than retaining request-scoped resources
+  - update: recovery startup to use `toRecoveryWorkpiece` to transfer the borrowed application-partition resources into an independently owned workpiece tied to the service context
   - update: recovery completion to publish fully reconstructed partition state atomically on success, or discard partial state and retain the failure until the next request starts a retry
   - update: recovery completion to discard results from workers whose original partition state was reset or replaced while they were running
   - update: recovery resource cleanup to release borrowed partition resources and the last PLog event on cancellation and error exits
