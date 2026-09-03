@@ -228,7 +228,7 @@ func signUpLoginWithAlias(t *testing.T, vit *it.VIT, appQName appdef.AppQName, p
 
 func initiateResetPasswordByEmailAndCapture(t *testing.T, vit *it.VIT, appQName appdef.AppQName, wsid istructs.WSID, email string) (token, code string, profileWSID, canonicalPseudoWSID istructs.WSID) {
 	t.Helper()
-	body := fmt.Sprintf(`{"args":{"AppName":"%s","Email":"%s"},"elements":[{"fields":["VerificationToken","ProfileWSID","CanonicalPseudoWSID"]}]}`, appQName, email)
+	body := fmt.Sprintf(`{"args":{"AppName":%q,"Email":%q},"elements":[{"fields":["VerificationToken","ProfileWSID","CanonicalPseudoWSID"]}]}`, appQName, email)
 	resp := vit.PostApp(istructs.AppQName_sys_registry, wsid, "q.registry.InitiateResetPasswordByEmail", body)
 
 	emailMessage := vit.CaptureEmail()
@@ -249,7 +249,7 @@ func initiateResetPasswordByEmailAndCapture(t *testing.T, vit *it.VIT, appQName 
 
 func issueVerifiedValueTokenForResetPassword(t *testing.T, vit *it.VIT, appQName appdef.AppQName, wsid istructs.WSID, token, code string, profileWSID istructs.WSID) string {
 	t.Helper()
-	body := fmt.Sprintf(`{"args":{"VerificationToken":"%s","VerificationCode":"%s","ProfileWSID":%d,"AppName":"%s"},"elements":[{"fields":["VerifiedValueToken"]}]}`,
+	body := fmt.Sprintf(`{"args":{"VerificationToken":%q,"VerificationCode":%q,"ProfileWSID":%d,"AppName":%q},"elements":[{"fields":["VerifiedValueToken"]}]}`,
 		token, code, profileWSID, appQName)
 	resp := vit.PostApp(istructs.AppQName_sys_registry, wsid, "q.registry.IssueVerifiedValueTokenForResetPassword", body)
 	return resp.SectionRow()[0].(string)
@@ -257,13 +257,13 @@ func issueVerifiedValueTokenForResetPassword(t *testing.T, vit *it.VIT, appQName
 
 func resetPasswordByEmail(t *testing.T, vit *it.VIT, appQName appdef.AppQName, wsid istructs.WSID, verifiedValueToken, newPwd string) {
 	t.Helper()
-	body := fmt.Sprintf(`{"args":{"AppName":"%s"},"unloggedArgs":{"Email":"%s","NewPwd":"%s"}}`, appQName, verifiedValueToken, newPwd)
+	body := fmt.Sprintf(`{"args":{"AppName":%q},"unloggedArgs":{"Email":%q,"NewPwd":%q}}`, appQName, verifiedValueToken, newPwd)
 	vit.PostApp(istructs.AppQName_sys_registry, wsid, "c.registry.ResetPasswordByEmail", body)
 }
 
 func assertResetPasswordInitiationRejected(t *testing.T, vit *it.VIT, appQName appdef.AppQName, email string) {
 	t.Helper()
 	pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, email, istructs.CurrentClusterID())
-	body := fmt.Sprintf(`{"args":{"AppName":"%s","Email":"%s"},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, appQName, email)
+	body := fmt.Sprintf(`{"args":{"AppName":%q,"Email":%q},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, appQName, email)
 	vit.PostApp(istructs.AppQName_sys_registry, pseudoWSID, "q.registry.InitiateResetPasswordByEmail", body, it.Expect400("login does not exist"))
 }

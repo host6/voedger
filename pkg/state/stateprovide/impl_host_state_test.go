@@ -44,8 +44,7 @@ func TestHostState_BasicUsage(t *testing.T) {
 }
 
 func TestHostState_RequestContext(t *testing.T) {
-	requestCtx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	requestCtx := t.Context()
 	hostState := newHostState(requestCtx, "ForTest", 10, nil)
 
 	require.Same(t, requestCtx, hostState.RequestContext())

@@ -137,7 +137,7 @@ func TestSchedulerLogging(t *testing.T) {
 		panicMessage := "extension " + fullJobQName.String() + " panic: scheduler extension boom"
 		logCap.EventuallyHasLine("level=ERROR", "stage=job.error", vapp, wsidStr, extension, panicMessage, "goroutine ", "[running]:", "panickingSchedulerExtension")
 
-		for _, line := range strings.Split(logCap.String(), "\n") {
+		for line := range strings.SplitSeq(logCap.String(), "\n") {
 			if strings.Contains(line, "stage=job.error") {
 				t.Logf("actual built-in extension panic log:\n%s", line)
 				break

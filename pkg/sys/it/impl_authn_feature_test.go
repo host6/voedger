@@ -91,7 +91,7 @@ func testAuthnLoginCreation(t *testing.T) {
 		// Given Client has a valid verified email token
 		login, verifiedEmailToken := newAuthnFeatureVerifiedEmailToken(t, vit)
 
-		body := fmt.Sprintf(`{"verifiedEmailToken":"%s","password":"123","displayName":"%s"}`, verifiedEmailToken, login)
+		body := fmt.Sprintf(`{"verifiedEmailToken":%q,"password":"123","displayName":%q}`, verifiedEmailToken, login)
 		// When Client creates a user login with display name and password
 		resp := vit.POST("api/v2/apps/test1/app1/users", body)
 		// Then the response status is "201 Created"
@@ -166,7 +166,7 @@ func testAuthnLoginCreation(t *testing.T) {
 		// Then the response status is "400 Bad Request"
 		// And the response indicates "<field>" is missing
 		// field = verifiedEmailToken
-		assertAuthnFeatureMalformedUserCreation(t, f.VIT(), fmt.Sprintf(`{"password":"123","displayName":"%s"}`, login), "verifiedEmailToken")
+		assertAuthnFeatureMalformedUserCreation(t, f.VIT(), fmt.Sprintf(`{"password":"123","displayName":%q}`, login), "verifiedEmailToken")
 	})
 
 	t.Run("authn: scn: User login creation rejects malformed request: displayName", func(t *testing.T) {
@@ -179,7 +179,7 @@ func testAuthnLoginCreation(t *testing.T) {
 		// Then the response status is "400 Bad Request"
 		// And the response indicates "<field>" is missing
 		// field = displayName
-		assertAuthnFeatureMalformedUserCreation(t, f.VIT(), fmt.Sprintf(`{"verifiedEmailToken":"%s","password":"123"}`, verifiedEmailToken), "displayName")
+		assertAuthnFeatureMalformedUserCreation(t, f.VIT(), fmt.Sprintf(`{"verifiedEmailToken":%q,"password":"123"}`, verifiedEmailToken), "displayName")
 	})
 
 	t.Run("authn: scn: User login creation rejects malformed request: password", func(t *testing.T) {
@@ -192,7 +192,7 @@ func testAuthnLoginCreation(t *testing.T) {
 		// Then the response status is "400 Bad Request"
 		// And the response indicates "<field>" is missing
 		// field = password
-		assertAuthnFeatureMalformedUserCreation(t, f.VIT(), fmt.Sprintf(`{"verifiedEmailToken":"%s","displayName":"%s"}`, verifiedEmailToken, login), "password")
+		assertAuthnFeatureMalformedUserCreation(t, f.VIT(), fmt.Sprintf(`{"verifiedEmailToken":%q,"displayName":%q}`, verifiedEmailToken, login), "password")
 	})
 
 	t.Run("authn: scn: Device login creation rejects request body", func(t *testing.T) {
@@ -903,7 +903,7 @@ func testAuthnSignInAndProfileReadiness(t *testing.T) {
 		login := f.newLogin("pwd-not-ready")
 		// And the profile workspace for the login is not ready
 		setLoginProfileState(t, f.VIT(), login, istructs.NullWSID, "")
-		body := fmt.Sprintf(`{"login":"%s","password":"%s"}`, login.Name, login.Pwd)
+		body := fmt.Sprintf(`{"login":%q,"password":%q}`, login.Name, login.Pwd)
 		// When Client signs in with login and password
 		resp := f.VIT().POST("api/v2/apps/test1/app1/auth/login", body, httpu.Expect409())
 		// Then the response status is "409 Conflict"
@@ -919,7 +919,7 @@ func testAuthnSignInAndProfileReadiness(t *testing.T) {
 		principal := f.VIT().SignIn(login)
 		// And profile workspace creation failed for the login
 		setLoginProfileState(t, f.VIT(), login, principal.ProfileWSID, "profile-create-failed")
-		body := fmt.Sprintf(`{"login":"%s","password":"%s"}`, login.Name, login.Pwd)
+		body := fmt.Sprintf(`{"login":%q,"password":%q}`, login.Name, login.Pwd)
 		// When Client signs in with login and password
 		resp := f.VIT().POST("api/v2/apps/test1/app1/auth/login", body, httpu.Expect500())
 		// Then the response indicates the profile workspace creation error
@@ -929,7 +929,7 @@ func testAuthnSignInAndProfileReadiness(t *testing.T) {
 
 func authnFeatureSignInResult(t *testing.T, vit *it.VIT, login it.Login) map[string]any {
 	t.Helper()
-	body := fmt.Sprintf(`{"login":"%s","password":"%s"}`, login.Name, login.Pwd)
+	body := fmt.Sprintf(`{"login":%q,"password":%q}`, login.Name, login.Pwd)
 	resp := vit.POST("api/v2/apps/test1/app1/auth/login", body)
 	require.Equal(t, http.StatusOK, resp.HTTPResp.StatusCode)
 	result := map[string]any{}
@@ -995,7 +995,7 @@ func testAuthnPrincipalTokenContract(t *testing.T) {
 		f := newAuthnFeatureFixture(t)
 		// Given a login exists
 		login := f.newLogin("pwd-max-ttl")
-		body := fmt.Sprintf(`{"args":{"Login":"%s","Password":"%s","AppName":"%s","TTLHours":1000},"elements":[{"fields":["PrincipalToken"]}]}`,
+		body := fmt.Sprintf(`{"args":{"Login":%q,"Password":%q,"AppName":%q,"TTLHours":1000},"elements":[{"fields":["PrincipalToken"]}]}`,
 			login.Name, login.Pwd, login.AppQName)
 		// When Client requests a principal token with TTL above the maximum
 		// Then the response status is "400 Bad Request"
@@ -1107,7 +1107,7 @@ func testAuthnPasswordLifecycle(t *testing.T) {
 		f := newAuthnFeatureFixture(t)
 		// Given a user login exists
 		login := f.newLogin("pwd-before-change")
-		body := fmt.Sprintf(`{"login":"%s","oldPassword":"%s","newPassword":"pwd-after-change"}`, login.Name, login.Pwd)
+		body := fmt.Sprintf(`{"login":%q,"oldPassword":%q,"newPassword":"pwd-after-change"}`, login.Name, login.Pwd)
 		// When Client changes the password with the current password
 		resp := f.VIT().POST("api/v2/apps/test1/app1/users/change-password", body)
 		// Then the response status is "200 OK"
@@ -1137,7 +1137,7 @@ func testAuthnPasswordLifecycle(t *testing.T) {
 
 	t.Run("authn: scn: Password change rejects unknown login or wrong current password: unknown login", func(t *testing.T) {
 		f := newAuthnFeatureFixture(t)
-		body := fmt.Sprintf(`{"login":"%s","oldPassword":"1","newPassword":"2"}`, f.VIT().NextName())
+		body := fmt.Sprintf(`{"login":%q,"oldPassword":"1","newPassword":"2"}`, f.VIT().NextName())
 		// When Client changes a password for an unknown login or with the wrong current password
 		// Then the response status is "401 Unauthorized"
 		f.VIT().POST("api/v2/apps/test1/app1/users/change-password", body, httpu.Expect401()).Println()
@@ -1146,7 +1146,7 @@ func testAuthnPasswordLifecycle(t *testing.T) {
 	t.Run("authn: scn: Password change rejects unknown login or wrong current password: wrong current password", func(t *testing.T) {
 		f := newAuthnFeatureFixture(t)
 		login := f.newLogin("pwd-current")
-		body := fmt.Sprintf(`{"login":"%s","oldPassword":"wrong-password","newPassword":"new-password"}`, login.Name)
+		body := fmt.Sprintf(`{"login":%q,"oldPassword":"wrong-password","newPassword":"new-password"}`, login.Name)
 		// When Client changes a password for an unknown login or with the wrong current password
 		// Then the response status is "401 Unauthorized"
 		f.VIT().POST("api/v2/apps/test1/app1/users/change-password", body, httpu.Expect401()).Println()
@@ -1223,7 +1223,7 @@ func testAuthnPasswordLifecycle(t *testing.T) {
 	t.Run("authn: scn: Password reset initiation rejects unknown login", func(t *testing.T) {
 		f := newAuthnFeatureFixture(t)
 		unknown := f.VIT().NextName() + "@unknown.example.com"
-		body := fmt.Sprintf(`{"args":{"AppName":"%s","Email":"%s"},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, istructs.AppQName_test1_app1, unknown)
+		body := fmt.Sprintf(`{"args":{"AppName":%q,"Email":%q},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, istructs.AppQName_test1_app1, unknown)
 		// When Client initiates password reset for an unknown login
 		// Then the response status is "400 Bad Request"
 		f.VIT().PostApp(istructs.AppQName_sys_registry, coreutils.GetPseudoWSID(istructs.NullWSID, unknown, istructs.CurrentClusterID()), "q.registry.InitiateResetPasswordByEmail", body, httpu.Expect400()).Println()
@@ -1234,7 +1234,7 @@ func testAuthnPasswordLifecycle(t *testing.T) {
 		login := f.newEmailLogin("pwd-wrong-reset-code")
 		// Given Client initiated password reset by email
 		token, code, profileWSID, canonicalPseudoWSID := initiateResetPasswordByEmailAndCapture(t, f.VIT(), login.AppQName, login.PseudoProfileWSID, login.Name)
-		body := fmt.Sprintf(`{"args":{"VerificationToken":"%s","VerificationCode":"%s","ProfileWSID":%d,"AppName":"%s"},"elements":[{"fields":["VerifiedValueToken"]}]}`,
+		body := fmt.Sprintf(`{"args":{"VerificationToken":%q,"VerificationCode":%q,"ProfileWSID":%d,"AppName":%q},"elements":[{"fields":["VerifiedValueToken"]}]}`,
 			token, code+"1", profileWSID, login.AppQName)
 		// When Client verifies the reset code with a wrong code
 		// Then the response status is "400 Bad Request"
@@ -1246,7 +1246,7 @@ func testAuthnExceptionFlows(t *testing.T) {
 	t.Run("authn: scn: User login creation rejects an invalid verified email token", func(t *testing.T) {
 		f := newAuthnFeatureFixture(t)
 		// Given Client has an invalid verified email token
-		body := fmt.Sprintf(`{"verifiedEmailToken":"invalid-token","password":"123","displayName":"%s"}`, f.VIT().NextName())
+		body := fmt.Sprintf(`{"verifiedEmailToken":"invalid-token","password":"123","displayName":%q}`, f.VIT().NextName())
 		// When Client creates a user login with display name and password
 		resp := f.VIT().POST("api/v2/apps/test1/app1/users", body, httpu.Expect400())
 		// Then the response status is "400 Bad Request"
@@ -1264,7 +1264,7 @@ func testAuthnExceptionFlows(t *testing.T) {
 		}
 		for _, wrongLogin := range wrongLogins {
 			pseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, wrongLogin, istructs.CurrentClusterID())
-			body := fmt.Sprintf(`{"args":{"Login":"%s","AppName":"%s","SubjectKind":%d,"WSKindInitializationData":"{}","ProfileCluster":%d},"unloggedArgs":{"Password":"1"}}`,
+			body := fmt.Sprintf(`{"args":{"Login":%q,"AppName":%q,"SubjectKind":%d,"WSKindInitializationData":"{}","ProfileCluster":%d},"unloggedArgs":{"Password":"1"}}`,
 				wrongLogin, istructs.AppQName_test1_app1, istructs.SubjectKind_User, istructs.CurrentClusterID())
 			// When Client creates a login with an invalid login name
 			// Then the response status is "400 Bad Request"
@@ -1276,7 +1276,7 @@ func testAuthnExceptionFlows(t *testing.T) {
 	t.Run("authn: scn: Sign-in rejects unknown login or wrong password: unknown login", func(t *testing.T) {
 		f := newAuthnFeatureFixture(t)
 		unknownLogin := f.VIT().NextName()
-		body := fmt.Sprintf(`{"args":{"Login":"%s","Password":"1","AppName":"%s"},"elements":[{"fields":["PrincipalToken","WSID","WSError"]}]}`,
+		body := fmt.Sprintf(`{"args":{"Login":%q,"Password":"1","AppName":%q},"elements":[{"fields":["PrincipalToken","WSID","WSError"]}]}`,
 			unknownLogin, istructs.AppQName_test1_app1)
 		// When Client signs in with unknown login or wrong password
 		// Then the response status is "401 Unauthorized"
@@ -1287,7 +1287,7 @@ func testAuthnExceptionFlows(t *testing.T) {
 		f := newAuthnFeatureFixture(t)
 		login := f.newLogin("pwd-correct")
 		// When Client signs in with unknown login or wrong password
-		body := fmt.Sprintf(`{"login":"%s","password":"wrong-password"}`, login.Name)
+		body := fmt.Sprintf(`{"login":%q,"password":"wrong-password"}`, login.Name)
 		resp := f.VIT().POST("api/v2/apps/test1/app1/auth/login", body, httpu.Expect401())
 		// Then the response status is "401 Unauthorized"
 		require.JSONEq(t, `{"status":401,"message":"login or password is incorrect"}`, resp.Body)
@@ -1300,7 +1300,7 @@ func testAuthnExceptionFlows(t *testing.T) {
 		// Given a login exists but is deactivated
 		f.VIT().PostProfile(principal, "c.sys.InitiateDeactivateWorkspace", "{}")
 		waitForDeactivate(f.VIT(), principal.AppQName, principal.ProfileWSID, login.Name)
-		body := fmt.Sprintf(`{"args":{"Login":"%s","Password":"%s","AppName":"%s"},"elements":[{"fields":["PrincipalToken"]}]}`,
+		body := fmt.Sprintf(`{"args":{"Login":%q,"Password":%q,"AppName":%q},"elements":[{"fields":["PrincipalToken"]}]}`,
 			login.Name, login.Pwd, login.AppQName)
 		// When Client signs in with that login and password
 		// Then the response status is "401 Unauthorized"

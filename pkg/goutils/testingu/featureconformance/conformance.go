@@ -8,10 +8,12 @@ package featureconformance
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"maps"
 	"os"
 	"regexp"
 	"strconv"
@@ -140,16 +142,16 @@ func validate(cfg Config) []error {
 func validateConfig(cfg Config) []error {
 	var diagnostics []error
 	if strings.TrimSpace(cfg.FeatureName) == "" {
-		diagnostics = append(diagnostics, fmt.Errorf("featureconformance: feature name is empty"))
+		diagnostics = append(diagnostics, errors.New("featureconformance: feature name is empty"))
 	}
 	if strings.TrimSpace(cfg.FeaturePath) == "" {
-		diagnostics = append(diagnostics, fmt.Errorf("featureconformance: feature path is empty"))
+		diagnostics = append(diagnostics, errors.New("featureconformance: feature path is empty"))
 	}
 	if strings.TrimSpace(cfg.TechnicalDesignPath) == "" {
-		diagnostics = append(diagnostics, fmt.Errorf("featureconformance: technical design path is empty"))
+		diagnostics = append(diagnostics, errors.New("featureconformance: technical design path is empty"))
 	}
 	if len(cfg.FeatureTestPaths) == 0 {
-		diagnostics = append(diagnostics, fmt.Errorf("featureconformance: feature test paths are empty"))
+		diagnostics = append(diagnostics, errors.New("featureconformance: feature test paths are empty"))
 	}
 	return diagnostics
 }
@@ -319,16 +321,16 @@ func parseTechnicalDesign(path string) (technicalDesignSpec, error) {
 		if strings.HasPrefix(trimmed, "## ") {
 			break
 		}
-		if strings.HasPrefix(trimmed, "#### ") {
+		if after, ok :=strings.CutPrefix(trimmed, "#### "); ok  {
 			spec.scenarios = append(spec.scenarios, scenarioIdentity{
 				rule: currentRule,
-				name: strings.TrimSpace(strings.TrimPrefix(trimmed, "#### ")),
+				name: strings.TrimSpace(after),
 				line: lineNumber,
 			})
 			continue
 		}
-		if strings.HasPrefix(trimmed, "### ") {
-			currentRule = strings.TrimSpace(strings.TrimPrefix(trimmed, "### "))
+		if after, ok :=strings.CutPrefix(trimmed, "### "); ok  {
+			currentRule = strings.TrimSpace(after)
 			spec.rules = append(spec.rules, ruleIdentity{name: currentRule, line: lineNumber})
 		}
 	}
@@ -602,7 +604,7 @@ func validateGoSources(cfg Config, feature featureSpec) []error {
 func ambiguousScenarioNameDiagnostics(path string, feature featureSpec) []error {
 	var diagnostics []error
 	for index, scenario := range feature.scenarios {
-		for previousIndex := 0; previousIndex < index; previousIndex++ {
+		for previousIndex := range index {
 			previous := feature.scenarios[previousIndex]
 			if scenario.name != previous.name && !strings.HasPrefix(scenario.name, previous.name+": ") && !strings.HasPrefix(previous.name, scenario.name+": ") {
 				continue
@@ -810,7 +812,7 @@ func isTestingCallback(callback *ast.FuncLit) bool {
 }
 
 func collectStringBindings(node ast.Node, initial map[string]string, skipFunctions bool) map[string]string {
-	bindings := cloneBindings(initial)
+	bindings := maps.Clone(initial)
 	if initial != nil {
 		visitNameAssignments(node, skipFunctions, func(name string, _ ast.Expr) {
 			delete(bindings, name)
@@ -832,7 +834,7 @@ func collectStringBindings(node ast.Node, initial map[string]string, skipFunctio
 }
 
 func collectScenarioBindings(node ast.Node, scenarioPrefix string, stringBindings map[string]string, initial map[string]bool, skipFunctions bool) map[string]bool {
-	bindings := cloneBindings(initial)
+	bindings := maps.Clone(initial)
 	if initial != nil {
 		visitNameAssignments(node, skipFunctions, func(name string, _ ast.Expr) {
 			delete(bindings, name)
@@ -849,7 +851,7 @@ func collectScenarioBindings(node ast.Node, scenarioPrefix string, stringBinding
 }
 
 func resolveNameBindings(node ast.Node, skipFunctions bool, resolve func(string, ast.Expr) bool) {
-	for pass := 0; pass < bindingResolutionPassLimit; pass++ {
+	for range bindingResolutionPassLimit {
 		changed := false
 		visitNameAssignments(node, skipFunctions, func(name string, expression ast.Expr) {
 			if resolve(name, expression) {
@@ -894,16 +896,8 @@ func visitNameAssignments(root ast.Node, skipFunctions bool, visit func(string, 
 	})
 }
 
-func cloneBindings[T any](source map[string]T) map[string]T {
-	clone := make(map[string]T, len(source))
-	for name, value := range source {
-		clone[name] = value
-	}
-	return clone
-}
-
 func withoutParameterBindings[T any](bindings map[string]T, functionType *ast.FuncType) map[string]T {
-	clone := cloneBindings(bindings)
+	clone := maps.Clone(bindings)
 	if functionType.Params == nil {
 		return clone
 	}
