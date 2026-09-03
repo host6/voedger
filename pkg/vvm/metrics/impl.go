@@ -18,7 +18,7 @@ import (
 )
 
 func (ms *metricsService) Prepare(interface{}) (err error) {
-	ms.listener, err = net.Listen("tcp", httpu.ListenAddr(ms.port)) //nolint:noctx // lefitime is controlled by IService engine
+	ms.listener, err = net.Listen("tcp", httpu.ListenAddr(ms.port)) //nolint:noctx // lifetime is controlled by IService engine
 	return err
 }
 

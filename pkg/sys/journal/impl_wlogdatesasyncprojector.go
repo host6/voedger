@@ -16,7 +16,7 @@ var wLogDatesProjector = func(event istructs.IPLogEvent, s istructs.IState, inte
 	kb, err := s.KeyBuilder(sys.Storage_View, QNameViewWLogDates)
 	if err != nil {
 		// notest
-		return nil
+		return err
 	}
 	kb.PutInt32(field_Year, int32(timestamp.Year()))
 	kb.PutInt32(field_DayOfYear, int32(timestamp.YearDay()))
