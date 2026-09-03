@@ -185,15 +185,12 @@ func (cmdProc *cmdProc) getAppPartition(vvmCtx context.Context, cmd *cmdWorkpiec
 		appQName:    cmd.cmdMes.AppQName(),
 		partitionID: cmd.cmdMes.PartitionID(),
 	}
-	appPartition, previousRecoveryErr := cmdProc.partitionManager.getOrStart(vvmCtx, key, cmd, cmdProc.recovery)
-	if appPartition != nil {
-		cmd.appPartition = appPartition
-		return nil
+	appPartition, err := cmdProc.partitionManager.getOrStart(vvmCtx, key, cmd, cmdProc.recovery)
+	if err != nil {
+		return err
 	}
-	if previousRecoveryErr != nil {
-		return partitionRecoveryFailedError(key.partitionID, previousRecoveryErr)
-	}
-	return partitionRecoveringError(key.partitionID)
+	cmd.appPartition = appPartition
+	return nil
 }
 
 func partitionRecoveringError(partitionID istructs.PartitionID) error {
@@ -216,8 +213,7 @@ func toRecoveryWorkpiece(cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
 		},
 		metrics: cmd.metrics,
 	}
-	cmd.appPart = nil
-	cmd.appStructs = nil
+	cmd.appPart = nil // needed because cmd.Release() would release cmd.appPart while it is used as recoveryCmd.appPart
 	return recoveryCmd
 }
 
@@ -225,29 +221,38 @@ func (m *partitionManager) getOrStart(vvmCtx context.Context, key partitionKey, 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	state := m.partitions[key]
+
 	if state == nil {
 		state = &partitionState{}
 		m.partitions[key] = state
-	} else {
-		if state.appPartition != nil {
-			return state.appPartition, nil
-		}
-		if state.recovering {
-			return nil, nil
-		}
+		m.startRecover(vvmCtx, key, cmd, state, recoverPartitionFunc)
+		return nil, partitionRecoveringError(key.partitionID)
 	}
 
-	previousRecoveryErr := state.err
-	state.err = nil
-	state.recovering = true
+	if state.appPartition != nil {
+		return state.appPartition, nil
+	}
+
+	if state.recoveryErr == nil {
+		return nil, partitionRecoveringError(key.partitionID)
+	}
+
+	// handle the last recovery error
+	lastErr := state.recoveryErr
+
+	// should be here instead of recover(), otherwise the next request to the partition
+	// will return 500 instead of 503 and will start duplicating recover
+	state.recoveryErr = nil
+
+	m.startRecover(vvmCtx, key, cmd, state, recoverPartitionFunc)
+	return nil, partitionRecoveryFailedError(key.partitionID, lastErr)
+}
+
+func (m *partitionManager) startRecover(vvmCtx context.Context, key partitionKey, cmd *cmdWorkpiece, state *partitionState, recoverPartitionFunc recoverPartitionFunc) {
 	recoveryCmdWorkpiece := toRecoveryWorkpiece(cmd, key)
 	m.workers.Add(1)
-
-	if m.testHooks != nil {
-		m.testHooks.started(key)
-	}
+	m.recoveryHooks.scheduled(key)
 	go m.recover(vvmCtx, key, state, recoveryCmdWorkpiece, recoverPartitionFunc)
-	return nil, previousRecoveryErr
 }
 
 func (m *partitionManager) recover(vvmCtx context.Context, key partitionKey, state *partitionState, cmd *cmdWorkpiece, recoverPartition recoverPartitionFunc) {
@@ -256,35 +261,23 @@ func (m *partitionManager) recover(vvmCtx context.Context, key partitionKey, sta
 		recoveredPartition *appPartition
 		err                error
 	)
-	if m.testHooks != nil {
-		err = m.testHooks.before(vvmCtx, key)
-	}
+	err = m.recoveryHooks.beforeAttempt(vvmCtx, key)
 	if err == nil {
 		recoveredPartition, err = recoverPartition(vvmCtx, cmd)
 	}
 	cmd.Release()
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
 	if err == nil {
 		err = vvmCtx.Err()
 	}
-	if m.partitions[key] != state {
-		if m.testHooks != nil {
-			m.testHooks.finished(key, err)
-		}
+	defer m.recoveryHooks.attemptCompleted(key, err)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if err != nil {
+		state.recoveryErr = err
 		return
 	}
 	state.appPartition = recoveredPartition
-	state.recovering = false
-	state.err = err
-	if err != nil {
-		state.appPartition = nil
-	}
-
-	if m.testHooks != nil {
-		m.testHooks.finished(key, err)
-	}
 }
 
 // resetPartitionState removes the current state so the next request starts a fresh recovery.
@@ -1111,4 +1104,12 @@ func (idGen *implIDGeneratorReporter) NextID(rawID istructs.RecordID) (storageID
 		idGen.generatedIDs[rawID] = storageID
 	}
 	return storageID, err
+}
+
+func nopHooks() *partitionRecoveryHooks {
+	return &partitionRecoveryHooks{
+		scheduled:        func(pk partitionKey) {},
+		beforeAttempt:    func(ctx context.Context, pk partitionKey) error { return nil },
+		attemptCompleted: func(pk partitionKey, err error) {},
+	}
 }

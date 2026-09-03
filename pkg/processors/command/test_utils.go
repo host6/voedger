@@ -14,12 +14,12 @@ import (
 	"github.com/voedger/voedger/pkg/bus"
 )
 
-// partitionRecoveryTestHooks provides deterministic synchronization points for package tests.
+// partitionRecoveryHooks provides deterministic synchronization points for package tests.
 // Production command processors leave it nil.
-type partitionRecoveryTestHooks struct {
-	started  func(partitionKey)
-	before   func(context.Context, partitionKey) error
-	finished func(partitionKey, error)
+type partitionRecoveryHooks struct {
+	scheduled        func(partitionKey)
+	beforeAttempt    func(context.Context, partitionKey) error
+	attemptCompleted func(partitionKey, error)
 }
 
 type recoveryAttempt struct {
@@ -45,11 +45,11 @@ func newRecoveryTestControl() *recoveryTestControl {
 	}
 }
 
-func (c *recoveryTestControl) testHooks() *partitionRecoveryTestHooks {
-	return &partitionRecoveryTestHooks{
-		started:  c.recoveryStarted,
-		before:   c.beforeRecovery,
-		finished: c.recoveryFinished,
+func (c *recoveryTestControl) testHooks() *partitionRecoveryHooks {
+	return &partitionRecoveryHooks{
+		scheduled:        c.recoveryStarted,
+		beforeAttempt:    c.beforeRecovery,
+		attemptCompleted: c.recoveryFinished,
 	}
 }
 

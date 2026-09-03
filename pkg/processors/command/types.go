@@ -169,16 +169,15 @@ type partitionKey struct {
 }
 
 type partitionManager struct {
-	mu         sync.Mutex
-	partitions map[partitionKey]*partitionState
-	workers    sync.WaitGroup
-	testHooks  *partitionRecoveryTestHooks
+	mu            sync.Mutex
+	partitions    map[partitionKey]*partitionState
+	workers       sync.WaitGroup
+	recoveryHooks *partitionRecoveryHooks
 }
 
 type partitionState struct {
-	*appPartition
-	recovering bool
-	err        error
+	*appPartition // not nil -> the partition is successfully recovered
+	recoveryErr   error
 }
 
 type recoverPartitionFunc func(context.Context, *cmdWorkpiece) (*appPartition, error)

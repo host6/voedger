@@ -37,10 +37,10 @@ type cmdProc struct {
 	storeOp          pipeline.ISyncOperator
 }
 
-func newPartitionManager(testHooks *partitionRecoveryTestHooks) *partitionManager {
+func newPartitionManager(recoveryHooks *partitionRecoveryHooks) *partitionManager {
 	return &partitionManager{
-		partitions: map[partitionKey]*partitionState{},
-		testHooks:  testHooks,
+		partitions:    map[partitionKey]*partitionState{},
+		recoveryHooks: recoveryHooks,
 	}
 }
 
@@ -53,15 +53,15 @@ type appPartition struct {
 func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
 	secretReader isecrets.ISecretReader) ServiceFactory {
-	return provideServiceFactory(appParts, tm, n10nBroker, metrics, vvm, authenticator, secretReader, nil)
+	return provideServiceFactory(appParts, tm, n10nBroker, metrics, vvm, authenticator, secretReader, nopHooks())
 }
 
 func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
-	secretReader isecrets.ISecretReader, recoveryTestHooks *partitionRecoveryTestHooks) ServiceFactory {
+	secretReader isecrets.ISecretReader, recoveryHooks *partitionRecoveryHooks) ServiceFactory {
 	return func(commandsChannel CommandChannel) pipeline.IService {
 		cmdProc := &cmdProc{
-			partitionManager: newPartitionManager(recoveryTestHooks),
+			partitionManager: newPartitionManager(recoveryHooks),
 			n10nBroker:       n10nBroker,
 			time:             tm,
 			authenticator:    authenticator,

@@ -392,12 +392,12 @@ func TestAsynchronousRecovery(t *testing.T) {
 		// recognize that it no longer owns the current state and discard its stale result.
 		require := require.New(t)
 		finished := make(chan struct{}, 2)
-		manager := newPartitionManager(&partitionRecoveryTestHooks{
-			started: func(partitionKey) {},
-			before: func(context.Context, partitionKey) error {
+		manager := newPartitionManager(&partitionRecoveryHooks{
+			scheduled: func(partitionKey) {},
+			beforeAttempt: func(context.Context, partitionKey) error {
 				return nil
 			},
-			finished: func(partitionKey, error) {
+			attemptCompleted: func(partitionKey, error) {
 				finished <- struct{}{}
 			},
 		})
@@ -423,13 +423,13 @@ func TestAsynchronousRecovery(t *testing.T) {
 		// Start the original recovery and keep it blocked before it can publish its result.
 		oldStarted := make(chan struct{})
 		oldPartition := &appPartition{}
-		gotPartition, previousErr := manager.getOrStart(context.Background(), key, newCmd(), func(context.Context, *cmdWorkpiece) (*appPartition, error) {
+		gotPartition, err := manager.getOrStart(context.Background(), key, newCmd(), func(context.Context, *cmdWorkpiece) (*appPartition, error) {
 			close(oldStarted)
 			<-oldGate
 			return oldPartition, nil
 		})
 		require.Nil(gotPartition)
-		require.NoError(previousErr)
+		require.ErrorIs(err, partitionRecoveringError(key.partitionID))
 		<-oldStarted
 
 		// Reset the original state and start a new recovery for the same partition. This recreates
@@ -437,13 +437,13 @@ func TestAsynchronousRecovery(t *testing.T) {
 		manager.resetPartitionState(key)
 		newStarted := make(chan struct{})
 		newPartition := &appPartition{}
-		gotPartition, previousErr = manager.getOrStart(context.Background(), key, newCmd(), func(context.Context, *cmdWorkpiece) (*appPartition, error) {
+		gotPartition, err = manager.getOrStart(context.Background(), key, newCmd(), func(context.Context, *cmdWorkpiece) (*appPartition, error) {
 			close(newStarted)
 			<-newGate
 			return newPartition, nil
 		})
 		require.Nil(gotPartition)
-		require.NoError(previousErr)
+		require.ErrorIs(err, partitionRecoveringError(key.partitionID))
 		<-newStarted
 
 		manager.mu.Lock()
@@ -458,14 +458,11 @@ func TestAsynchronousRecovery(t *testing.T) {
 		manager.mu.Lock()
 		currentState := manager.partitions[key]
 		var currentPartition *appPartition
-		currentRecovering := false
 		if currentState != nil {
-			currentRecovering = currentState.recovering
 			currentPartition = currentState.appPartition
 		}
 		manager.mu.Unlock()
 		require.Same(replacementState, currentState)
-		require.True(currentRecovering)
 		require.Nil(currentPartition)
 
 		// Complete the replacement worker and verify that only its result becomes ready.
@@ -473,17 +470,14 @@ func TestAsynchronousRecovery(t *testing.T) {
 		<-finished
 		manager.mu.Lock()
 		currentState = manager.partitions[key]
-		currentRecovering = false
 		currentPartition = nil
 		var currentErr error
 		if currentState != nil {
-			currentRecovering = currentState.recovering
 			currentPartition = currentState.appPartition
-			currentErr = currentState.err
+			currentErr = currentState.recoveryErr
 		}
 		manager.mu.Unlock()
 		require.Same(replacementState, currentState)
-		require.False(currentRecovering)
 		require.Same(newPartition, currentPartition)
 		require.NoError(currentErr)
 	})
