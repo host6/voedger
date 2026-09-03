@@ -321,7 +321,7 @@ func parseTechnicalDesign(path string) (technicalDesignSpec, error) {
 		if strings.HasPrefix(trimmed, "## ") {
 			break
 		}
-		if after, ok :=strings.CutPrefix(trimmed, "#### "); ok  {
+		if after, ok := strings.CutPrefix(trimmed, "#### "); ok {
 			spec.scenarios = append(spec.scenarios, scenarioIdentity{
 				rule: currentRule,
 				name: strings.TrimSpace(after),
@@ -329,7 +329,7 @@ func parseTechnicalDesign(path string) (technicalDesignSpec, error) {
 			})
 			continue
 		}
-		if after, ok :=strings.CutPrefix(trimmed, "### "); ok  {
+		if after, ok := strings.CutPrefix(trimmed, "### "); ok {
 			currentRule = strings.TrimSpace(after)
 			spec.rules = append(spec.rules, ruleIdentity{name: currentRule, line: lineNumber})
 		}
@@ -812,7 +812,7 @@ func isTestingCallback(callback *ast.FuncLit) bool {
 }
 
 func collectStringBindings(node ast.Node, initial map[string]string, skipFunctions bool) map[string]string {
-	bindings := maps.Clone(initial)
+	bindings := cloneBindings(initial)
 	if initial != nil {
 		visitNameAssignments(node, skipFunctions, func(name string, _ ast.Expr) {
 			delete(bindings, name)
@@ -834,7 +834,7 @@ func collectStringBindings(node ast.Node, initial map[string]string, skipFunctio
 }
 
 func collectScenarioBindings(node ast.Node, scenarioPrefix string, stringBindings map[string]string, initial map[string]bool, skipFunctions bool) map[string]bool {
-	bindings := maps.Clone(initial)
+	bindings := cloneBindings(initial)
 	if initial != nil {
 		visitNameAssignments(node, skipFunctions, func(name string, _ ast.Expr) {
 			delete(bindings, name)
@@ -896,8 +896,14 @@ func visitNameAssignments(root ast.Node, skipFunctions bool, visit func(string, 
 	})
 }
 
+func cloneBindings[T any](source map[string]T) map[string]T {
+	clone := make(map[string]T, len(source))
+	maps.Copy(clone, source)
+	return clone
+}
+
 func withoutParameterBindings[T any](bindings map[string]T, functionType *ast.FuncType) map[string]T {
-	clone := maps.Clone(bindings)
+	clone := cloneBindings(bindings)
 	if functionType.Params == nil {
 		return clone
 	}
