@@ -169,7 +169,7 @@ func newVit(tb testing.TB, vitCfg *VITConfig, useCas bool, vvmLaunchOnly bool) *
 	vit.cleanups = append(vit.cleanups, vitPreConfig.cleanups...)
 	vit.cleanups = append(vit.cleanups, func(*VIT) { httpClientCleanup() })
 
-	// get rid of huge amount of logs reporting about  init process
+	// get rid of huge amount of logs reporting about workspaces init process
 	defer logger.SetLogLevelWithRestore(logger.LogLevelWarning)()
 
 	// launch the server
