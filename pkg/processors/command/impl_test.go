@@ -387,9 +387,9 @@ func TestRecovery(t *testing.T) {
 
 func TestAsynchronousRecovery(t *testing.T) {
 	t.Run("stale recovery does not overwrite reset partition state", func(t *testing.T) {
-		// A recovery worker keeps running after its partition state is reset. A subsequent request
-		// may install a replacement state before that old worker completes. The old worker must
-		// recognize that it no longer owns the current state and discard its stale result.
+		// Keep two recoveries for the same partition alive across a state reset. The old worker owns
+		// the removed state object, while the replacement worker owns the new map entry. Completing
+		// them out of order proves that the old result cannot become the partition's current state.
 		require := require.New(t)
 		finished := make(chan struct{}, 2)
 		manager := newPartitionManager(&partitionRecoveryHooks{
@@ -483,6 +483,9 @@ func TestAsynchronousRecovery(t *testing.T) {
 	})
 
 	t.Run("authentication precedes recovery", func(t *testing.T) {
+		// Send an invalid token to a partition that has not been recovered yet. A 401 response and
+		// zero scheduled recoveries prove that authentication rejects the request before recovery
+		// state is inspected or a recovery worker is started.
 		require := require.New(t)
 		app := setUpRecoveryTestApp(t)
 		defer tearDown(app)
@@ -496,6 +499,9 @@ func TestAsynchronousRecovery(t *testing.T) {
 	})
 
 	t.Run("another partition remains available", func(t *testing.T) {
+		// Block recovery of WSID 1, then execute a command in WSID 2, which maps to another partition.
+		// Successful recovery and command execution for WSID 2 while WSID 1 remains blocked prove
+		// that recovery work is asynchronous and isolated by partition key.
 		require := require.New(t)
 		app := setUpRecoveryTestApp(t)
 		defer tearDown(app)
@@ -504,7 +510,6 @@ func TestAsynchronousRecovery(t *testing.T) {
 		gate := app.recovery.blockNext(recoveringKey)
 		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
 
-		// WSID 2 maps to another partition and must recover and execute without waiting for WSID 1.
 		sendCUD(t, 2, app)
 		require.Equal(1, app.recovery.startCount(recoveringKey))
 
@@ -514,6 +519,9 @@ func TestAsynchronousRecovery(t *testing.T) {
 	})
 
 	t.Run("one worker per recovering partition", func(t *testing.T) {
+		// Block the first recovery worker and issue several requests for the same partition while it
+		// is recovering. Every request must receive 503, and the unchanged start count proves that
+		// the manager deduplicates recovery work instead of starting one worker per request.
 		require := require.New(t)
 		app := setUpRecoveryTestApp(t)
 		defer tearDown(app)
@@ -547,6 +555,9 @@ func TestAsynchronousRecovery(t *testing.T) {
 	})
 
 	t.Run("request cancellation does not cancel recovery", func(t *testing.T) {
+		// Start recovery from a request-scoped context, cancel that context after receiving 503, and
+		// then unblock recovery. Waiting successfully and executing the next command prove that the
+		// detached worker uses the service lifetime rather than the initiating request lifetime.
 		require := require.New(t)
 		app := setUpRecoveryTestApp(t)
 		defer tearDown(app)
@@ -565,6 +576,10 @@ func TestAsynchronousRecovery(t *testing.T) {
 	})
 
 	t.Run("failed recovery is reported while retry is started", func(t *testing.T) {
+		// Inject a failure into the initial recovery and wait until the manager stores it. The next
+		// request must report that failure as 500 and simultaneously schedule exactly one retry.
+		// Keeping the retry blocked lets us prove that later requests receive 503 without scheduling
+		// additional workers; after unblocking it, the partition must become usable.
 		require := require.New(t)
 		app := setUpRecoveryTestApp(t)
 		defer tearDown(app)
@@ -590,6 +605,9 @@ func TestAsynchronousRecovery(t *testing.T) {
 	})
 
 	t.Run("service waits for recovery cancellation", func(t *testing.T) {
+		// Keep a recovery worker blocked, then cancel the service context. The service Run call must
+		// not return until shutdown cancellation reaches the worker and it records context.Canceled;
+		// the completed attempt and single start count verify both waiting and lack of duplication.
 		require := require.New(t)
 		app := setUpRecoveryTestApp(t)
 
