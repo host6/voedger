@@ -157,7 +157,7 @@ func TestInvites(t *testing.T) {
 
 		// When Workspace Owner invites "alice@example.com" to Workspace "Acme"
 		// Then the response status is "400 Bad Request"
-		body := fmt.Sprintf(`{"args":{"Email":"%s","Roles":"%s","ExpireDatetime":%d,"EmailTemplate":"%s","EmailSubject":"%s"}}`,
+		body := fmt.Sprintf(`{"args":{"Email":%q,"Roles":%q,"ExpireDatetime":%d,"EmailTemplate":%q,"EmailSubject":%q}}`,
 			f.email, initialRoles, f.vit.Now().Add(time.Hour).UnixMilli(), inviteEmailTemplate, inviteEmailSubject)
 		f.vit.PostWS(f.ws, "c.sys.InitiateInvitationByEMail", body, httpu.Expect400())
 	})
@@ -419,7 +419,7 @@ func TestInvites(t *testing.T) {
 
 		// When Workspace Owner <operation>
 		// operation = updates the retired invitation to Role "app1pkg.LimitedAccessRole"
-		body := fmt.Sprintf(`{"args":{"InviteID":%d,"Roles":"%s","EmailTemplate":"%s","EmailSubject":"%s"}}`,
+		body := fmt.Sprintf(`{"args":{"InviteID":%d,"Roles":%q,"EmailTemplate":%q,"EmailSubject":%q}}`,
 			retiredInviteID, initialRoles, "text:"+invite.EmailTemplatePlaceholder_Roles, "roles updated")
 		f.vit.PostWS(f.ws, "c.sys.InitiateUpdateInviteRoles", body, httpu.Expect400())
 
@@ -582,7 +582,7 @@ func TestInvites(t *testing.T) {
 		acceptInvitesFeatureInvitation(t, f, inviteID, f.principal, verificationCode)
 
 		// When Workspace Owner updates the membership to Role "app1pkg.SpecialAPITokenRole"
-		body := fmt.Sprintf(`{"args":{"InviteID":%d,"Roles":"%s","EmailTemplate":"%s","EmailSubject":"%s"}}`,
+		body := fmt.Sprintf(`{"args":{"InviteID":%d,"Roles":%q,"EmailTemplate":%q,"EmailSubject":%q}}`,
 			inviteID, newRoles, "text:"+invite.EmailTemplatePlaceholder_Roles, "roles updated")
 		f.vit.PostWS(f.ws, "c.sys.InitiateUpdateInviteRoles", body)
 		message := f.vit.CaptureEmail()
@@ -843,23 +843,25 @@ func newInvitesFeatureFixture(t *testing.T, prefix string) *invitesFeatureFixtur
 	}
 }
 
-func sendInvitesFeatureInvitation(t *testing.T, f *invitesFeatureFixture, email, roles string, expireDatetime int64) (istructs.RecordID, state.EmailMessage, string) {
+func sendInvitesFeatureInvitation(t *testing.T, f *invitesFeatureFixture, email, roles string, expireDatetime int64) (inviteID istructs.RecordID, emailMessage state.EmailMessage, verificationCode string) {
 	t.Helper()
-	inviteID := InitiateInvitationByEMail(f.vit, f.ws, expireDatetime, email, roles, inviteEmailTemplate, inviteEmailSubject)
-	message := f.vit.CaptureEmail()
+	inviteID = InitiateInvitationByEMail(f.vit, f.ws, expireDatetime, email, roles, inviteEmailTemplate, inviteEmailSubject)
+	emailMessage = f.vit.CaptureEmail()
 	WaitForInviteState(f.vit, f.ws, inviteID, invite.State_ToBeInvited, invite.State_Invited)
-	require.GreaterOrEqual(t, len(message.Body), 6)
-	return inviteID, message, message.Body[:6]
+	require.GreaterOrEqual(t, len(emailMessage.Body), 6)
+	verificationCode = emailMessage.Body[:6]
+	return inviteID, emailMessage, verificationCode
 }
 
-func resendInvitesFeatureInvitation(t *testing.T, f *invitesFeatureFixture, inviteID istructs.RecordID, email, roles string) (state.EmailMessage, string) {
+func resendInvitesFeatureInvitation(t *testing.T, f *invitesFeatureFixture, inviteID istructs.RecordID, email, roles string) (emailMessage state.EmailMessage, verificationCode string) {
 	t.Helper()
 	newInviteID := InitiateInvitationByEMail(f.vit, f.ws, f.vit.Now().Add(time.Hour).UnixMilli(), email, roles, inviteEmailTemplate, inviteEmailSubject)
 	require.Equal(t, istructs.NullRecordID, newInviteID)
-	message := f.vit.CaptureEmail()
+	emailMessage = f.vit.CaptureEmail()
 	WaitForInviteState(f.vit, f.ws, inviteID, invite.State_ToBeInvited, invite.State_Invited)
-	require.GreaterOrEqual(t, len(message.Body), 6)
-	return message, message.Body[:6]
+	require.GreaterOrEqual(t, len(emailMessage.Body), 6)
+	verificationCode = emailMessage.Body[:6]
+	return emailMessage, verificationCode
 }
 
 func acceptInvitesFeatureInvitation(t *testing.T, f *invitesFeatureFixture, inviteID istructs.RecordID, principal *it.Principal, verificationCode string) {
@@ -888,9 +890,9 @@ func setInvitesFeatureInvitationState(t *testing.T, f *invitesFeatureFixture, in
 	f.vit.PostWS(f.ws, "c.sys.CUD", body)
 }
 
-func setInvitesFeatureAlias(t *testing.T, f *invitesFeatureFixture) (*it.Principal, string) {
+func setInvitesFeatureAlias(t *testing.T, f *invitesFeatureFixture) (principalWithAlias *it.Principal, alias string) {
 	t.Helper()
-	alias := fmt.Sprintf("alias_%d@example.com", f.vit.NextNumber())
+	alias = fmt.Sprintf("alias_%d@example.com", f.vit.NextNumber())
 	systemToken := f.vit.GetSystemPrincipal(istructs.AppQName_sys_registry).Token
 	initiateSetLoginAlias(t, f.vit, f.login, alias, systemToken)
 	waitForLoginAlias(t, f.vit, f.login, alias)
@@ -924,7 +926,7 @@ func getInvitesFeatureSubjects(t *testing.T, f *invitesFeatureFixture, login str
 	resp := f.vit.PostWS(f.ws, "q.sys.Collection", fmt.Sprintf(`
 		{"args":{"Schema":"sys.Subject"},
 		"elements":[{"fields":["sys.ID","Login","Roles","InviteEmail","sys.IsActive"]}],
-		"filters":[{"expr":"eq","args":{"field":"Login","value":"%s"}}]}`, login))
+		"filters":[{"expr":"eq","args":{"field":"Login","value":%q}}]}`, login))
 	if len(resp.Sections) == 0 {
 		return nil
 	}
@@ -952,7 +954,7 @@ func requireInvitesFeatureMembership(t *testing.T, f *invitesFeatureFixture, log
 
 func postInvitesFeatureInvitation(t *testing.T, f *invitesFeatureFixture, email, roles string, opts ...httpu.ReqOptFunc) {
 	t.Helper()
-	body := fmt.Sprintf(`{"args":{"Email":"%s","Roles":"%s","ExpireDatetime":%d,"EmailTemplate":"%s","EmailSubject":"%s"}}`,
+	body := fmt.Sprintf(`{"args":{"Email":%q,"Roles":%q,"ExpireDatetime":%d,"EmailTemplate":%q,"EmailSubject":%q}}`,
 		email, roles, f.vit.Now().Add(time.Hour).UnixMilli(), inviteEmailTemplate, inviteEmailSubject)
 	f.vit.PostWS(f.ws, "c.sys.InitiateInvitationByEMail", body, opts...)
 }
@@ -966,7 +968,7 @@ func testInvalidInvitesFeatureRoles(t *testing.T, roles string, update bool) {
 		return
 	}
 	inviteID, _, _ := sendInvitesFeatureInvitation(t, f, f.email, initialRoles, f.vit.Now().Add(time.Hour).UnixMilli())
-	body := fmt.Sprintf(`{"args":{"InviteID":%d,"Roles":"%s","EmailTemplate":"%s","EmailSubject":"%s"}}`,
+	body := fmt.Sprintf(`{"args":{"InviteID":%d,"Roles":%q,"EmailTemplate":%q,"EmailSubject":%q}}`,
 		inviteID, roles, "text:"+invite.EmailTemplatePlaceholder_Roles, "roles updated")
 	f.vit.PostWS(f.ws, "c.sys.InitiateUpdateInviteRoles", body, httpu.Expect400())
 }

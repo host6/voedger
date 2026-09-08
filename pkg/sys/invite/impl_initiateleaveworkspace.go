@@ -48,7 +48,7 @@ func execCmdInitiateLeaveWorkspace(_ timeu.ITime) func(args istructs.ExecCommand
 			return err
 		}
 		inviteID, svCDocInvite, err := resolveControllingInvite(subjectID, subject, canonicalLogin, principalPayload.Alias, istructs.NullRecordID, args.State)
-		if err = controllingInviteResolutionError(err, canonicalLogin); err != nil {
+		if err := controllingInviteResolutionError(err, canonicalLogin); err != nil {
 			return err
 		}
 

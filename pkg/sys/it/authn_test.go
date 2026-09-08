@@ -15,6 +15,7 @@ import (
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
+	"github.com/voedger/voedger/pkg/goutils/strconvu"
 	"github.com/voedger/voedger/pkg/istructs"
 	it "github.com/voedger/voedger/pkg/vit"
 )
@@ -35,13 +36,13 @@ func TestAuthnTechnical_LoginCreation(t *testing.T) {
 	loginPseudoWSID := coreutils.GetPseudoWSID(istructs.NullWSID, login, istructs.CurrentClusterID())
 
 	t.Run("unknown application", func(t *testing.T) {
-		body := fmt.Sprintf(`{"args":{"Login":"%s","AppName":"my/unknown","SubjectKind":%d,"WSKindInitializationData":"{}","ProfileCluster":%d},"unloggedArgs":{"Password":"password"}}`,
+		body := fmt.Sprintf(`{"args":{"Login":%q,"AppName":"my/unknown","SubjectKind":%d,"WSKindInitializationData":"{}","ProfileCluster":%d},"unloggedArgs":{"Password":"password"}}`,
 			login, istructs.SubjectKind_User, istructs.CurrentClusterID())
 		vit.PostApp(istructs.AppQName_sys_registry, loginPseudoWSID, "c.registry.CreateLogin", body, it.Expect400("my/unknown is not found"))
 	})
 
 	t.Run("wrong application name", func(t *testing.T) {
-		body := fmt.Sprintf(`{"args":{"Login":"%s","AppName":"wrong-AppName","SubjectKind":%d,"WSKindInitializationData":"{}","ProfileCluster":1},"unloggedArgs":{"Password":"different"}}`,
+		body := fmt.Sprintf(`{"args":{"Login":%q,"AppName":"wrong-AppName","SubjectKind":%d,"WSKindInitializationData":"{}","ProfileCluster":1},"unloggedArgs":{"Password":"different"}}`,
 			login, istructs.SubjectKind_User)
 		vit.PostApp(istructs.AppQName_sys_registry, loginPseudoWSID, "c.registry.CreateLogin", body,
 			it.Expect400("failed to parse app qualified name"))
@@ -95,13 +96,13 @@ func TestAuthnTechnical_PasswordAndLoginTransport(t *testing.T) {
 			{
 				bodies: []string{
 					`{"password":"pwd"}`,
-					fmt.Sprintf(`{"UnknownField":"%s","password":"pwd"}`, login.Name),
-					fmt.Sprintf(`{"UnknownField":"%s","password":"%s"}`, login.Name, "badpwd"),
+					fmt.Sprintf(`{"UnknownField":%q,"password":"pwd"}`, login.Name),
+					fmt.Sprintf(`{"UnknownField":%q,"password":%q}`, login.Name, "badpwd"),
 				},
 				expected: []string{`field is empty`, `Object «registry.IssuePrincipalTokenParams»`, `string-field «Login»`, `validate error code 4`},
 			},
 			{
-				bodies:   []string{`{"login":"pwd"}`, fmt.Sprintf(`{"login":"%s","UnknownField":"pwd"}`, login.Name)},
+				bodies:   []string{`{"login":"pwd"}`, fmt.Sprintf(`{"login":%q,"UnknownField":"pwd"}`, login.Name)},
 				expected: []string{`field is empty`, `Object «registry.IssuePrincipalTokenParams»`, `string-field «Password»`, `validate error code 4`},
 			},
 			{bodies: []string{`{"login":42}`}, expected: []string{`field \"login\" must be a string`, `field type mismatch`}},
@@ -133,7 +134,7 @@ func TestAuthnTechnical_ResetPasswordTransport(t *testing.T) {
 		vit := it.NewVIT(t, &it.SharedConfig_App1)
 		t.Cleanup(vit.TearDown)
 		principal := vit.GetPrincipal(istructs.AppQName_test1_app1, it.TestEmail)
-		body := fmt.Sprintf(`{"args":{"AppName":"wrong app","Email":"%s"},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, principal.Name)
+		body := fmt.Sprintf(`{"args":{"AppName":"wrong app","Email":%q},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, principal.Name)
 		vit.PostApp(istructs.AppQName_sys_registry, principal.PseudoProfileWSID, "q.registry.InitiateResetPasswordByEmail", body, httpu.Expect400()).Println()
 	})
 
@@ -143,12 +144,12 @@ func TestAuthnTechnical_ResetPasswordTransport(t *testing.T) {
 		principal := vit.GetPrincipal(istructs.AppQName_test1_app1, it.TestEmail)
 		profileWSID := istructs.WSID(0)
 		token, code := InitiateEmailVerificationFunc(vit, func() *federation.FuncResponse {
-			body := fmt.Sprintf(`{"args":{"AppName":"%s","Email":"%s"},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, istructs.AppQName_test1_app1, principal.Name)
+			body := fmt.Sprintf(`{"args":{"AppName":%q,"Email":%q},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, istructs.AppQName_test1_app1, principal.Name)
 			resp := vit.PostApp(istructs.AppQName_sys_registry, principal.PseudoProfileWSID, "q.registry.InitiateResetPasswordByEmail", body)
 			profileWSID = istructs.WSID(resp.SectionRow()[1].(float64))
 			return resp
 		})
-		body := fmt.Sprintf(`{"args":{"VerificationToken":"%s","VerificationCode":"%s","ProfileWSID":%d,"AppName":"wrong app"},"elements":[{"fields":["VerifiedValueToken"]}]}`,
+		body := fmt.Sprintf(`{"args":{"VerificationToken":%q,"VerificationCode":%q,"ProfileWSID":%d,"AppName":"wrong app"},"elements":[{"fields":["VerifiedValueToken"]}]}`,
 			token, code, profileWSID)
 		vit.PostApp(istructs.AppQName_sys_registry, principal.PseudoProfileWSID, "q.registry.IssueVerifiedValueTokenForResetPassword", body, httpu.Expect400()).Println()
 	})
@@ -170,7 +171,7 @@ func TestAuthnTechnical_PrincipalToken(t *testing.T) {
 		t.Cleanup(vit.TearDown)
 		login := vit.SignUp(vit.NextName(), "pwd-direct-query", istructs.AppQName_test1_app1)
 		vit.SignIn(login)
-		body := fmt.Sprintf(`{"args":{"Login":"%s","Password":"wrongPass","AppName":"%s"},"elements":[{"fields":[]}]}`,
+		body := fmt.Sprintf(`{"args":{"Login":%q,"Password":"wrongPass","AppName":%q},"elements":[{"fields":[]}]}`,
 			login.Name, login.AppQName)
 		vit.PostApp(istructs.AppQName_sys_registry, login.PseudoProfileWSID, "q.registry.IssuePrincipalToken", body, httpu.Expect401()).Println()
 	})
@@ -186,19 +187,19 @@ func TestAuthnTechnical_DeactivatedLoginCommands(t *testing.T) {
 
 	profileWSID := istructs.WSID(0)
 	verifyToken, verifyCode := InitiateEmailVerificationFunc(vit, func() *federation.FuncResponse {
-		body := fmt.Sprintf(`{"args":{"AppName":"%s","Email":"%s"},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, login.AppQName, login.Name)
+		body := fmt.Sprintf(`{"args":{"AppName":%q,"Email":%q},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, login.AppQName, login.Name)
 		resp := vit.PostApp(istructs.AppQName_sys_registry, login.PseudoProfileWSID, "q.registry.InitiateResetPasswordByEmail", body)
 		profileWSID = istructs.WSID(resp.SectionRow()[1].(float64))
 		return resp
 	})
-	body := fmt.Sprintf(`{"args":{"VerificationToken":"%s","VerificationCode":"%s","ProfileWSID":%d,"AppName":"%s"},"elements":[{"fields":["VerifiedValueToken"]}]}`,
+	body := fmt.Sprintf(`{"args":{"VerificationToken":%q,"VerificationCode":%q,"ProfileWSID":%d,"AppName":%q},"elements":[{"fields":["VerifiedValueToken"]}]}`,
 		verifyToken, verifyCode, profileWSID, login.AppQName)
 	verifiedValueToken := vit.PostApp(istructs.AppQName_sys_registry, login.PseudoProfileWSID,
 		"q.registry.IssueVerifiedValueTokenForResetPassword", body).SectionRow()[0].(string)
 
 	vit.PostProfile(principal, "c.sys.InitiateDeactivateWorkspace", "{}")
 	waitForDeactivate(vit, principal.AppQName, principal.ProfileWSID, login.Name)
-	expectedCDocLoginID := fmt.Sprintf("%d", cdocLoginID)
+	expectedCDocLoginID := strconvu.IntToString(cdocLoginID)
 	expectMissingLoginLog := func() {
 		logCapture.EventuallyHasLine("cdoc.registry.Login", "is deactivated, treating as missing login", expectedCDocLoginID)
 	}
@@ -210,7 +211,7 @@ func TestAuthnTechnical_DeactivatedLoginCommands(t *testing.T) {
 
 	t.Run("ChangePassword treats deactivated login as missing", func(t *testing.T) {
 		logCapture.Reset()
-		body := fmt.Sprintf(`{"args":{"Login":"%s","AppName":"%s"},"unloggedArgs":{"OldPassword":"%s","NewPassword":"new"}}`, login.Name, login.AppQName, login.Pwd)
+		body := fmt.Sprintf(`{"args":{"Login":%q,"AppName":%q},"unloggedArgs":{"OldPassword":%q,"NewPassword":"new"}}`, login.Name, login.AppQName, login.Pwd)
 		vit.PostApp(istructs.AppQName_sys_registry, login.PseudoProfileWSID, "c.registry.ChangePassword", body,
 			it.Expect401(fmt.Sprintf("login %s does not exist", login.Name))).Println()
 		expectMissingLoginLog()
@@ -218,7 +219,7 @@ func TestAuthnTechnical_DeactivatedLoginCommands(t *testing.T) {
 
 	t.Run("InitiateResetPasswordByEmail treats deactivated login as missing", func(t *testing.T) {
 		logCapture.Reset()
-		body := fmt.Sprintf(`{"args":{"AppName":"%s","Email":"%s"},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, login.AppQName, login.Name)
+		body := fmt.Sprintf(`{"args":{"AppName":%q,"Email":%q},"elements":[{"fields":["VerificationToken","ProfileWSID"]}]}`, login.AppQName, login.Name)
 		vit.PostApp(istructs.AppQName_sys_registry, login.PseudoProfileWSID, "q.registry.InitiateResetPasswordByEmail", body,
 			it.Expect400("login does not exist")).Println()
 		expectMissingLoginLog()
@@ -226,7 +227,7 @@ func TestAuthnTechnical_DeactivatedLoginCommands(t *testing.T) {
 
 	t.Run("ResetPasswordByEmail treats deactivated login as missing", func(t *testing.T) {
 		logCapture.Reset()
-		body := fmt.Sprintf(`{"args":{"AppName":"%s"},"unloggedArgs":{"Email":"%s","NewPwd":"new"}}`, login.AppQName, verifiedValueToken)
+		body := fmt.Sprintf(`{"args":{"AppName":%q},"unloggedArgs":{"Email":%q,"NewPwd":"new"}}`, login.AppQName, verifiedValueToken)
 		vit.PostApp(istructs.AppQName_sys_registry, login.PseudoProfileWSID, "c.registry.ResetPasswordByEmail", body,
 			it.Expect401(fmt.Sprintf("login %s does not exist", login.Name))).Println()
 		expectMissingLoginLog()
@@ -234,7 +235,7 @@ func TestAuthnTechnical_DeactivatedLoginCommands(t *testing.T) {
 
 	t.Run("UpdateGlobalRoles treats deactivated login as missing", func(t *testing.T) {
 		logCapture.Reset()
-		body := fmt.Sprintf(`{"args":{"Login":"%s","AppName":"%s","GlobalRoles":""}}`, login.Name, login.AppQName)
+		body := fmt.Sprintf(`{"args":{"Login":%q,"AppName":%q,"GlobalRoles":""}}`, login.Name, login.AppQName)
 		vit.PostApp(istructs.AppQName_sys_registry, login.PseudoProfileWSID, "c.registry.UpdateGlobalRoles", body,
 			httpu.WithAuthorizeBy(vit.GetSystemPrincipal(istructs.AppQName_sys_registry).Token),
 			it.Expect401(fmt.Sprintf("login %s does not exist", login.Name))).Println()

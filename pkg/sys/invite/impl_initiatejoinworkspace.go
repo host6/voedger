@@ -65,7 +65,7 @@ func execCmdInitiateJoinWorkspace(tm timeu.ITime, tokens itokens.ITokens) func(a
 
 		principalPayload := payloads.PrincipalPayload{}
 		if _, err = payloads.GetPayloadRegistry(tokens, svPrincipal.AsString(sys.Storage_RequestSubject_Field_Token), &principalPayload); err != nil {
-			return
+			return err
 		}
 
 		loginFromToken := principalPayload.Login
@@ -80,7 +80,7 @@ func execCmdInitiateJoinWorkspace(tm timeu.ITime, tokens itokens.ITokens) func(a
 		}
 		if subjectExists && subject.AsBool(appdef.SystemField_IsActive) {
 			_, _, err = resolveControllingInvite(subjectID, subject, loginFromToken, principalPayload.Alias, inviteID, args.State)
-			if err = controllingInviteResolutionError(err, loginFromToken); err != nil {
+			if err := controllingInviteResolutionError(err, loginFromToken); err != nil {
 				return err
 			}
 		}
