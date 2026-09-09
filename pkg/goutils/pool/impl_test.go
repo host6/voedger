@@ -1,0 +1,259 @@
+/*
+ * Copyright (c) 2026-present unTill Software Development Group B.V.
+ * @author Denis Gribanov
+ */
+
+package pool_test
+
+import (
+	"io"
+	"os"
+	"sync/atomic"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+	"github.com/valyala/bytebufferpool"
+	"github.com/voedger/voedger/pkg/goutils/pool"
+)
+
+type myStruct struct {
+	// each pooled struct must include IReleaser field that provides Release() ability.
+	// this field will initialized in the instantiator
+	pool.IReleaser
+
+	// example nested field that requires personal handling (e.g. borrow\release)
+	bb   *bytebufferpool.ByteBuffer
+	fld1 int
+}
+
+// optional Clenaup() will be called automatically right before returning the myStruct instance to the pool
+func (ms *myStruct) Cleanup() {
+	bytebufferpool.Put(ms.bb)
+	ms.bb = nil
+}
+
+// optional Init() will be called automatically on each myStruct instance borrow. It should init the current instance
+func (ms *myStruct) Init() {
+	ms.bb = bytebufferpool.Get()
+}
+
+func TestBasicUsage_Simple(t *testing.T) {
+	require := require.New(t)
+	p := pool.NewPool[*myStruct](func(releaser pool.IReleaser) any {
+		// instantiator must manually initialize IReleaser field with the provided implementation
+		return &myStruct{IReleaser: releaser}
+	})
+
+	// borrow an instance of *myStruct
+	myStructInstance := p.Get()
+
+	// internal initialization is done in myStruct.Init()
+	require.NotNil(myStructInstance.bb)
+
+	// 1 object in use
+	require.Equal(uint64(1), pool.GetObjectsInUse())
+
+	// return the instance back to the pool
+	myStructInstance.Release()
+	// myStruct.bb is automatically returned back to `bytebufferpool` by myStruct.Cleanup()
+	// myStructInstance is returned to the pool
+	// myStructInstance as well as its any member must not be used (even touched) from now on
+
+	// unable to return the same object to the pool twice
+	require.Panics(func() { myStructInstance.Release() })
+
+	// no objects in use
+	require.Zero(pool.GetObjectsInUse())
+}
+
+func TestObjectsUsageTrackInDebugMode(t *testing.T) {
+	require := require.New(t)
+	pool.SetDebug(true)
+	defer pool.SetDebug(false)
+	p := pool.NewPool[*myStruct](func(releaser pool.IReleaser) any {
+		return &myStruct{IReleaser: releaser}
+	})
+
+	// borrow 10 instances
+	roots := []*myStruct{}
+	for i := 0; i < 10; i++ {
+		roots = append(roots, p.Get())
+	}
+
+	// one more as an example
+	roots = append(roots, p.Get())
+
+	// release one as an example
+	roots[5].Release()
+
+	// prints code points where objects were borrowed but not released
+	pool.PrintNonReleased(os.Stdout)
+
+	for i, root := range roots {
+		if i != 5 {
+			root.Release()
+		}
+	}
+
+	// prints nothing
+	pool.PrintNonReleased(os.Stdout)
+
+	require.Zero(pool.GetObjectsInUse())
+}
+
+func TestStub(t *testing.T) {
+	require := require.New(t)
+	poolOwner := pool.NewPoolStub[*owner](func(releaser pool.IReleaser) any {
+		return &owner{
+			IReleaser: releaser,
+		}
+	})
+	originalPoolNested := poolNested
+	// Restore the real pool for later tests and benchmarks, even if an
+	// assertion fails while this test is using the stub.
+	t.Cleanup(func() { poolNested = originalPoolNested })
+	poolNested = pool.NewPoolStub[*nested](func(releaser pool.IReleaser) any {
+		return &nested{
+			IReleaser: releaser,
+		}
+	})
+
+	// borrow a struct, initialize fields
+	owner := poolOwner.Get()
+	require.Equal(uint64(3), pool.GetObjectsInUse())
+
+	// owned struct can not be accidentally released before owner
+	require.Panics(func() { owner.nested.Release() })
+
+	// owner will release its internal fields and an owned struct using its special releaser
+	// after that `owner` struct itself will be returned to the pool engine
+	owner.Release()
+
+	// unable to release twice in stub mode as well to avoid cleanup() unexpected execution
+	require.Panics(func() { owner.Release() })
+
+	require.Zero(pool.GetObjectsInUse())
+}
+
+func TestStress(t *testing.T) {
+	p := pool.NewPool[*myStruct](func(releaser pool.IReleaser) any { return &myStruct{IReleaser: releaser} })
+	ch := make(chan *myStruct)
+	nch := make(chan int, 1000)
+	for i := 0; i < 1000; i++ {
+		go func(i int) {
+			ts1 := p.Get()
+			ts1.fld1 = i
+			ch <- ts1
+		}(i)
+		go func() {
+			obj := <-ch
+			n := obj.fld1
+			obj.Release()
+			nch <- n
+		}()
+	}
+
+	numbers := map[int]struct{}{}
+	for i := 0; i < 1000; i++ {
+		n := <-nch
+		require.Less(t, n, 1000, n)
+		if _, exists := numbers[n]; exists {
+			t.Fatal()
+		}
+		numbers[n] = struct{}{}
+	}
+	require.Zero(t, pool.GetObjectsInUse())
+}
+
+// TestCounterCallbackCanPrintLeaks registers a counter that prints leak
+// diagnostics before returning its count. GetObjectsInUse should call
+// that counter, receive its result, and finish without getting stuck.
+func TestCounterCallbackCanPrintLeaks(t *testing.T) {
+	pool.SetDebug(true)
+	defer pool.SetDebug(false)
+	// Pretend an external pool has one object in use. Use an atomic counter
+	// because registered callbacks must be safe to call concurrently.
+	var externalObjectsInUse atomic.Uint64
+	externalObjectsInUse.Store(1)
+	// The counter stays registered after this test, so return its count to
+	// zero during cleanup to avoid affecting later tests.
+	t.Cleanup(func() { externalObjectsInUse.Store(0) })
+
+	// Registration saves the callback; it does not call it yet.
+	pool.RegisterObjectsInUseCounter(func() uint64 {
+		// GetObjectsInUse is now calling our counter. Before returning
+		// the count, request a report of unreleased pooled objects.
+		// Discard the report text; we only need this call to finish.
+		pool.PrintNonReleased(io.Discard)
+		return externalObjectsInUse.Load()
+	})
+
+	// Before the fix, GetObjectsInUse held the lock while calling our external counter.
+	// The counter called PrintNonReleased, which tried to acquire the same lock -> stuck.
+	// GetObjectsInUse must release the lock before calling counters so this check can finish.
+	require.Equal(t, uint64(1), pool.GetObjectsInUse())
+}
+
+// An application object gets Release from IReleaser and supplies its own
+// Cleanup hook, just as it would when using the pool outside this test.
+type concurrentReleaseItem struct {
+	pool.IReleaser
+	cleanup func()
+}
+
+func (i *concurrentReleaseItem) Cleanup() {
+	i.cleanup()
+}
+
+// TestConcurrentRelease pauses the first Release during cleanup, then
+// calls Release again on the same object. The second call must panic,
+// preventing duplicate cleanup and an incorrect usage count.
+func TestConcurrentRelease(t *testing.T) {
+	cleanupStarted := make(chan struct{})
+	continueCleanup := make(chan struct{})
+	// Cleanup can be entered by both callers, so count calls atomically.
+	var cleanupCalls atomic.Int32
+	p := pool.NewPool[*concurrentReleaseItem](func(releaser pool.IReleaser) any {
+		return &concurrentReleaseItem{
+			IReleaser: releaser,
+			cleanup: func() {
+				// Pause only the first cleanup. If the duplicate release
+				// reaches this hook, let it finish so we can observe the bug.
+				if cleanupCalls.Add(1) == 1 {
+					close(cleanupStarted)
+					<-continueCleanup
+				}
+			},
+		}
+	})
+	obj := p.Get()
+
+	// Recover in the releasing goroutine and send its result back for
+	// assertions in the test goroutine. A nil result means no panic.
+	firstReleaseDone := make(chan any, 1)
+	go func() {
+		defer func() { firstReleaseDone <- recover() }()
+		obj.Release()
+	}()
+
+	// The channel guarantees that the first Release is paused inside
+	// Cleanup before we attempt the second Release on the same object.
+	<-cleanupStarted
+	var secondPanic any
+	func() {
+		defer func() { secondPanic = recover() }()
+		obj.Release()
+	}()
+	// Resume the first release and collect its result before using require:
+	// a failed assertion must not leave that goroutine blocked in Cleanup.
+	close(continueCleanup)
+	firstPanic := <-firstReleaseDone
+
+	require.Nil(t, firstPanic, "the first release must succeed")
+	// The duplicate must be rejected even while the first call is in progress.
+	require.Equal(t, "already released", secondPanic, "an overlapping release must be rejected")
+	require.Equal(t, int32(1), cleanupCalls.Load(), "cleanup must run once per borrow")
+	// One successful release balances the single Get. If both releases
+	// decrement the counter, it underflows instead of returning to zero.
+	require.Zero(t, pool.GetObjectsInUse(), "one borrow must be counted as released exactly once")
+}
