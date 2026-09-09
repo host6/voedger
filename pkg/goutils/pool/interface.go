@@ -5,8 +5,7 @@
 
 package pool
 
-// IPool s.e.
-// use NewPool() and NewPoolStub()
+// IPool manages standalone and owned object lifetimes.
 type IPool[T any] interface {
 	Get() T
 
