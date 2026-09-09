@@ -20,6 +20,7 @@ type IPool[T any] interface {
 type IReleaser interface {
 	// Release returns the owner instance to the pool
 	// panics if released already avoiding returning the same object to the pool twice
+	// panics if the instance is owned, i.e. was borrowed by GetOwned()
 	// calls owner's Cleanup() if exists before returning to pool
 	Release()
 	IsOwned() bool
