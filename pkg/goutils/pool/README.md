@@ -133,7 +133,7 @@ func main() {
 ## Features
 
 - **Object lifecycle** - Initialize, clean up, and guard release
-  - [Pool construction: impl.go#L163](impl.go#L163)
+  - [Pool construction: impl.go#L164](impl.go#L164)
   - [Release contract: interface.go#L20](interface.go#L20)
 - **Owned lifetimes** - Release children with their owner
   - [Owned borrowing: interface.go#L14](interface.go#L14)
@@ -144,7 +144,7 @@ func main() {
 - **Leak diagnostics** - Locate outstanding borrows by call site
   - [Debug configuration: utils.go#L60](utils.go#L60)
   - [Leak report: utils.go#L43](utils.go#L43)
-- **[Pool stub](impl.go#L156)** - Create fresh objects for debugging
+- **[Pool stub](impl.go#L157)** - Create fresh objects for debugging
 
 ## Use
 
@@ -156,6 +156,10 @@ releaser passed to the factory. Return a pointer to that struct.
 Optional `Init()` runs on every `Get()` and `GetOwned()`; `Cleanup()`
 runs during release, before owned children are released. Reset
 application fields in these hooks as needed.
+
+If `Init()` panics, the panic propagates and the borrow remains counted.
+For `Get()` with debug mode enabled, the borrow trace also remains
+visible. The pool does not automatically clean up partial initialization.
 
 Use `GetOwned(owner)` for children whose lifetime follows their owner.
 Calling `Release()` on an owned object panics; releasing the owner

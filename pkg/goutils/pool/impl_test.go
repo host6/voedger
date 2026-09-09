@@ -306,3 +306,86 @@ func TestReleaseClearsLeakReportAfterDebugDisabled(t *testing.T) {
 		})
 	}
 }
+
+type initPanicItem struct {
+	pool.IReleaser
+	initialize func(*initPanicItem)
+}
+
+func (i *initPanicItem) Init() {
+	if i.initialize != nil {
+		i.initialize(i)
+	}
+}
+
+// TestGetTracksInitPanic checks that an object taken from its pool remains
+// counted and reported when Init panics before Get can return it. An owned
+// child borrowed by Init must be counted in addition to the failed owner.
+func TestGetTracksInitPanic(t *testing.T) {
+	for _, mode := range []struct {
+		name    string
+		newPool func(func(pool.IReleaser) any) pool.IPool[*initPanicItem]
+	}{
+		{name: "normal", newPool: pool.NewPool[*initPanicItem]},
+		{name: "stub", newPool: pool.NewPoolStub[*initPanicItem]},
+	} {
+		for _, withChild := range []bool{false, true} {
+			scenario := "standalone"
+			if withChild {
+				scenario = "with_owned_child"
+			}
+			t.Run(mode.name+"/"+scenario, func(t *testing.T) {
+				// Record the global count to check this borrow and its cleanup.
+				beforeCount := pool.GetObjectsInUse()
+				pool.SetDebug(true)
+				t.Cleanup(func() { pool.SetDebug(false) })
+
+				var children pool.IPool[*initPanicItem]
+				wantCount := uint64(1)
+				if withChild {
+					children = mode.newPool(func(releaser pool.IReleaser) any {
+						return &initPanicItem{IReleaser: releaser, initialize: nil}
+					})
+					wantCount++
+				}
+
+				// Keep the factory-created object only for test cleanup.
+				// A normal caller cannot obtain it from Get after the panic.
+				var created *initPanicItem
+				items := mode.newPool(func(releaser pool.IReleaser) any {
+					created = &initPanicItem{
+						IReleaser: releaser,
+						initialize: func(item *initPanicItem) {
+							if children != nil {
+								// This child is now tied to the owner's lifetime.
+								children.GetOwned(item)
+							}
+							panic("init failed")
+						},
+					}
+					return created
+				})
+
+				// Recover the expected panic, as an application might at a
+				// request boundary, then inspect diagnostics through the API.
+				require.PanicsWithValue(t, "init failed", func() { items.Get() })
+				var report bytes.Buffer
+				pool.PrintNonReleased(&report)
+				borrowedCount := pool.GetObjectsInUse() - beforeCount
+
+				// A failed Init leaves the borrow tracked until explicitly released.
+				// Release the captured object and its children before checking the
+				// saved diagnostics, so a failed assertion cannot leave them borrowed.
+				created.Release()
+				var afterRelease bytes.Buffer
+				pool.PrintNonReleased(&afterRelease)
+
+				require.Equal(t, wantCount, borrowedCount, "the failed owner must also be counted")
+				require.Equal(t, beforeCount, pool.GetObjectsInUse())
+				require.Contains(t, report.String(), "TestGetTracksInitPanic")
+				require.Contains(t, report.String(), "1 not released borrowed at:")
+				require.Empty(t, afterRelease.String(), "release must remove the failed borrow's trace")
+			})
+		}
+	}
+}

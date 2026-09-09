@@ -32,7 +32,7 @@ func (p *implPool[T]) Get() T {
 	obj := p.get()
 	releaseable := obj.(IReleaser)
 	releaseable.reset()
-	releaseable.init(obj)
+	// Account for the borrow before Init, which may panic.
 	p.objectsInUse.Add(1)
 	if isDebug.Load() {
 		st := getStackTrace().string()
@@ -43,6 +43,7 @@ func (p *implPool[T]) Get() T {
 		objAmounts[st] = count
 		m.Unlock()
 	}
+	releaseable.init(obj)
 	return obj.(T)
 }
 
