@@ -3,6 +3,7 @@
  * @author Denis Gribanov
  */
 
+//nolint:testableexamples // This example documents nondeterministic sync.Pool reuse.
 package pool
 
 import (
@@ -41,7 +42,7 @@ func GetPooledStruct() *pooled_wrong {
 
 // Example_doubleRelease illustrates a missing release guard in a manual pool.
 // It has no Output assertion because sync.Pool reuse is not guaranteed.
-// Note: `go test` still runs this example; without an Output section its output is not checked.
+// Go compiles this example but does not run it without an Output section.
 func Example_doubleRelease() {
 	wrong := GetPooledStruct()
 	wrong.Release()

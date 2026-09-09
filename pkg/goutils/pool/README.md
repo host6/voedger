@@ -162,7 +162,7 @@ Calling `Release()` on an owned object panics; releasing the owner
 automatically releases its children and their owned descendants.
 Do not release owned children in `Cleanup()`. After release, do not
 access the object or any of its fields. For manual-pool pitfalls, see
-the [double-release example](pool_wrong_test.go#L45).
+the [double-release example](pool_wrong_test.go#L46).
 
 Add `require.Zero(t, pool.GetObjectsInUse())` after releasing all
 objects in tests. The total includes standalone and owned objects,

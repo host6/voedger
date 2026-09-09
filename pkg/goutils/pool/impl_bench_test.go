@@ -20,7 +20,7 @@ func BenchmarkBasic(b *testing.B) {
 	})
 
 	b.Run("basic", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			myStructInstance := p.Get()
 			myStructInstance.Release()
 		}
@@ -38,7 +38,7 @@ func BenchmarkExample(b *testing.B) {
 	p := pool.NewPool[*simpleStruct](func(releaser pool.IReleaser) any { return &simpleStruct{IReleaser: releaser} })
 
 	b.Run("pool", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			ps := p.Get()
 			ps.Release()
 		}
@@ -54,7 +54,7 @@ func BenchmarkExample(b *testing.B) {
 
 		b.ResetTimer()
 
-		for i := 0; i < b.N; i++ {
+		for range b.N {
 			obj := syncPool.Get().(*simpleStruct)
 			atomic.AddUint64(&objectsInUse, uint64(1))
 			obj.isReleased = false
