@@ -41,7 +41,7 @@ func GetPooledStruct() *pooled_wrong {
 
 // Example_doubleRelease illustrates a missing release guard in a manual pool.
 // It has no Output assertion because sync.Pool reuse is not guaranteed.
-// Go compiles this example but does not run its deliberately incorrect code.
+// Note: `go test` still runs this example; without an Output section its output is not checked.
 func Example_doubleRelease() {
 	wrong := GetPooledStruct()
 	wrong.Release()

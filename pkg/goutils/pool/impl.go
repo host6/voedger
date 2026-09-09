@@ -150,7 +150,7 @@ func (r *implIReleaser[T]) getOwnedTail() interface{} {
 }
 
 // NewPoolStub creates pool which does not act as a pool. I.e. just creates a new instance on each Get()
-// Release() does nothing more but Cleaunp() call if it exists
+// Release() does nothing more but Cleanup() call if it exists
 // does not track borrow source code points in debug mode
 // useful for investigations
 func NewPoolStub[T any](instantiator func(releaser IReleaser) any) IPool[T] {

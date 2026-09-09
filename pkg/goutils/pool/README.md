@@ -101,7 +101,7 @@ type owner struct {
 }
 
 func (o *owner) Init()    { o.item = items.GetOwned(o) } // owner himself borrows owned items
-func (o *owner) Cleanup() { o.item = nil }               // owned o.item is released antomatically
+func (o *owner) Cleanup() { o.item = nil }               // owned o.item is released automatically
 
 var items = pool.NewPool[*item](func(r pool.IReleaser) any {
 	return &item{IReleaser: r}
