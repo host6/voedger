@@ -115,17 +115,16 @@ func (r *implIReleaser[T]) releaseOwned() {
 		r.ownedTail = nil
 	}
 	r.ownerPool.objectsInUse.Add(^uint64(0))
-	if isDebug.Load() {
-		// Only remove a trace recorded for this borrow.
-		if st := r.borrowStackTrace; st != "" {
-			m.Lock()
-			objAmounts[st]--
-			if objAmounts[st] == 0 {
-				delete(objAmounts, st)
-			}
-			m.Unlock()
-			r.borrowStackTrace = ""
+	// Remove the trace recorded for this borrow even if debug mode was
+	// disabled after Get.
+	if st := r.borrowStackTrace; st != "" {
+		m.Lock()
+		objAmounts[st]--
+		if objAmounts[st] == 0 {
+			delete(objAmounts, st)
 		}
+		m.Unlock()
+		r.borrowStackTrace = ""
 	}
 	if !r.ownerPool.isStub {
 		r.ownerPool.Put(r.obj)

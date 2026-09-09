@@ -6,6 +6,7 @@
 package pool_test
 
 import (
+	"bytes"
 	"io"
 	"os"
 	"sync/atomic"
@@ -256,4 +257,52 @@ func TestConcurrentRelease(t *testing.T) {
 	// One successful release balances the single Get. If both releases
 	// decrement the counter, it underflows instead of returning to zero.
 	require.Zero(t, pool.GetObjectsInUse(), "one borrow must be counted as released exactly once")
+}
+
+// TestReleaseClearsLeakReportAfterDebugDisabled borrows with debug mode
+// enabled, then disables it before releasing. The released object must
+// disappear from the report, including after debug mode is enabled again.
+func TestReleaseClearsLeakReportAfterDebugDisabled(t *testing.T) {
+	type debugModeItem struct {
+		pool.IReleaser
+	}
+	for _, tc := range []struct {
+		name    string
+		newPool func(func(pool.IReleaser) any) pool.IPool[*debugModeItem]
+	}{
+		{name: "normal", newPool: pool.NewPool[*debugModeItem]},
+		{name: "stub", newPool: pool.NewPoolStub[*debugModeItem]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pool.SetDebug(true)
+			t.Cleanup(func() { pool.SetDebug(false) })
+			items := tc.newPool(func(releaser pool.IReleaser) any {
+				return &debugModeItem{IReleaser: releaser}
+			})
+
+			// Get records this borrow because debugging is enabled.
+			item := items.Get()
+			var before bytes.Buffer
+			pool.PrintNonReleased(&before)
+
+			// Stop recording new borrows, then release the tracked object.
+			// Its recorded trace must still be removed during release.
+			pool.SetDebug(false)
+			item.Release()
+			var whileDisabled bytes.Buffer
+			pool.PrintNonReleased(&whileDisabled)
+
+			// Enabling diagnostics again must not reveal a phantom leak.
+			pool.SetDebug(true)
+			var after bytes.Buffer
+			pool.PrintNonReleased(&after)
+
+			// Assert after release so a failure cannot leave the object borrowed.
+			require.Contains(t, before.String(), "TestReleaseClearsLeakReportAfterDebugDisabled")
+			require.Contains(t, before.String(), "1 not released borrowed at:")
+			require.Zero(t, pool.GetObjectsInUse(), "the object was released")
+			require.Empty(t, after.String(), "enabling debug again must not report a released object")
+			require.Empty(t, whileDisabled.String(), "release must remove the trace even with debug disabled")
+		})
+	}
 }

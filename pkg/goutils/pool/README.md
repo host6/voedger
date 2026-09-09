@@ -133,10 +133,10 @@ func main() {
 ## Features
 
 - **Object lifecycle** - Initialize, clean up, and guard release
-  - [Pool construction: impl.go#L164](impl.go#L164)
-  - [Release contract: interface.go#L21](interface.go#L21)
+  - [Pool construction: impl.go#L163](impl.go#L163)
+  - [Release contract: interface.go#L20](interface.go#L20)
 - **Owned lifetimes** - Release children with their owner
-  - [Owned borrowing: interface.go#L15](interface.go#L15)
+  - [Owned borrowing: interface.go#L14](interface.go#L14)
   - [Owner release: interface.go#L25](interface.go#L25)
 - **Usage tracking** - Count outstanding borrows across pools
   - [Global count: utils.go#L16](utils.go#L16)
@@ -144,11 +144,11 @@ func main() {
 - **Leak diagnostics** - Locate outstanding borrows by call site
   - [Debug configuration: utils.go#L60](utils.go#L60)
   - [Leak report: utils.go#L43](utils.go#L43)
-- **[Pool stub](impl.go#L157)** - Create fresh objects for debugging
+- **[Pool stub](impl.go#L156)** - Create fresh objects for debugging
 
 ## Use
 
-See the [basic usage test](impl_test.go#L40) and
+See the [basic usage test](impl_test.go#L41) and
 [owned objects test](owned_test.go#L66) for complete examples.
 
 Embed `pool.IReleaser` in each pooled struct and initialize it with the
@@ -171,15 +171,17 @@ to include other pools. Callbacks must be thread-safe and may call
 `pool.PrintNonReleased`. Counters remain registered so discarding a pool
 does not hide its unreleased objects.
 
-For leak investigations, enable `pool.SetDebug(true)` before borrowing
-and keep it enabled through release. Print outstanding borrow sites with
-`pool.PrintNonReleased(os.Stdout)`, then disable debugging with
-`pool.SetDebug(false)`. Stack traces are captured for `Get()` calls;
-owned borrows contribute to the total count without separate traces.
+For leak investigations, enable `pool.SetDebug(true)` before borrowing.
+Disabling it with `pool.SetDebug(false)` stops recording new borrows;
+already recorded traces remain visible until their objects are released.
+Release removes those traces even while debugging is disabled. Print
+outstanding borrow sites with `pool.PrintNonReleased(os.Stdout)`.
+Stack traces are captured for `Get()` calls; owned borrows contribute
+to the total count without separate traces.
 `SetDebug()` supports concurrent calls during borrowing and release.
-Debugging adds overhead; see the [debugging test](impl_test.go#L69).
+Debugging adds overhead; see the [debugging test](impl_test.go#L70).
 
 Replace `NewPool()` with `NewPoolStub()` to create a fresh object on
 every borrow when investigating reuse issues. Initialization, cleanup,
 release guards, ownership, and usage counts still apply. See the
-[stub test](impl_test.go#L104).
+[stub test](impl_test.go#L105).
