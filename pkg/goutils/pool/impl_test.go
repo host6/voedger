@@ -77,7 +77,7 @@ func TestObjectsUsageTrackInDebugMode(t *testing.T) {
 
 	// borrow 10 instances
 	roots := []*myStruct{}
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		roots = append(roots, p.Get())
 	}
 
@@ -140,7 +140,7 @@ func TestStress(t *testing.T) {
 	p := pool.NewPool[*myStruct](func(releaser pool.IReleaser) any { return &myStruct{IReleaser: releaser} })
 	ch := make(chan *myStruct)
 	nch := make(chan int, 1000)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		go func(i int) {
 			ts1 := p.Get()
 			ts1.fld1 = i
@@ -155,7 +155,7 @@ func TestStress(t *testing.T) {
 	}
 
 	numbers := map[int]struct{}{}
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		n := <-nch
 		require.Less(t, n, 1000, n)
 		if _, exists := numbers[n]; exists {
