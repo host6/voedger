@@ -96,12 +96,3 @@ func TestBasicUsage_Owned(t *testing.T) {
 
 	require.Equal(uint64(0), pool.GetObjectsInUse())
 }
-
-func BenchmarkOwned(b *testing.B) {
-	b.Run("basic", func(b *testing.B) {
-		for i := 0; i < b.N; i++ {
-			owner := poolOwner.Get()
-			owner.Release()
-		}
-	})
-}

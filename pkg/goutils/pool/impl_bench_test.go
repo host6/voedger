@@ -69,3 +69,12 @@ func BenchmarkExample(b *testing.B) {
 
 	require.Zero(b, pool.GetObjectsInUse())
 }
+
+func BenchmarkOwned(b *testing.B) {
+	b.Run("basic", func(b *testing.B) {
+		for range b.N {
+			owner := poolOwner.Get()
+			owner.Release()
+		}
+	})
+}
