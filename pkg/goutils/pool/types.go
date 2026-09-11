@@ -14,7 +14,7 @@ type implPool[T any] struct {
 	sync.Pool
 	isStub       bool
 	objectsInUse atomic.Uint64
-	instantiator func(releaser IReleaser) any
+	instantiator func(releaser IReleaser) T
 }
 
 type implIReleaser[T any] struct {

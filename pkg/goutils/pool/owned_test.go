@@ -52,13 +52,13 @@ func (o *owner) Cleanup() {
 }
 
 var (
-	poolOwner = pool.NewPool[*owner](func(releaser pool.IReleaser) any {
+	poolOwner = pool.NewPool(func(releaser pool.IReleaser) *owner {
 		return &owner{IReleaser: releaser}
 	})
-	poolNested = pool.NewPool[*nested](func(releaser pool.IReleaser) any {
+	poolNested = pool.NewPool(func(releaser pool.IReleaser) *nested {
 		return &nested{IReleaser: releaser}
 	})
-	poolInternal = pool.NewPool[*internal](func(releaser pool.IReleaser) any {
+	poolInternal = pool.NewPool(func(releaser pool.IReleaser) *internal {
 		return &internal{IReleaser: releaser}
 	})
 )

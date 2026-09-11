@@ -40,7 +40,7 @@ func (ms *myStruct) Init() {
 
 func TestBasicUsage_Simple(t *testing.T) {
 	require := require.New(t)
-	p := pool.NewPool[*myStruct](func(releaser pool.IReleaser) any {
+	p := pool.NewPool(func(releaser pool.IReleaser) *myStruct {
 		// instantiator must manually initialize IReleaser field with the provided implementation
 		return &myStruct{IReleaser: releaser}
 	})
@@ -71,7 +71,7 @@ func TestObjectsUsageTrackInDebugMode(t *testing.T) {
 	require := require.New(t)
 	pool.SetDebug(true)
 	defer pool.SetDebug(false)
-	p := pool.NewPool[*myStruct](func(releaser pool.IReleaser) any {
+	p := pool.NewPool(func(releaser pool.IReleaser) *myStruct {
 		return &myStruct{IReleaser: releaser}
 	})
 
@@ -104,7 +104,7 @@ func TestObjectsUsageTrackInDebugMode(t *testing.T) {
 
 func TestStub(t *testing.T) {
 	require := require.New(t)
-	poolOwner := pool.NewPoolStub[*owner](func(releaser pool.IReleaser) any {
+	poolOwner := pool.NewPoolStub(func(releaser pool.IReleaser) *owner {
 		return &owner{
 			IReleaser: releaser,
 		}
@@ -113,7 +113,7 @@ func TestStub(t *testing.T) {
 	// Restore the real pool for later tests and benchmarks, even if an
 	// assertion fails while this test is using the stub.
 	t.Cleanup(func() { poolNested = originalPoolNested })
-	poolNested = pool.NewPoolStub[*nested](func(releaser pool.IReleaser) any {
+	poolNested = pool.NewPoolStub(func(releaser pool.IReleaser) *nested {
 		return &nested{
 			IReleaser: releaser,
 		}
@@ -137,7 +137,7 @@ func TestStub(t *testing.T) {
 }
 
 func TestStress(t *testing.T) {
-	p := pool.NewPool[*myStruct](func(releaser pool.IReleaser) any { return &myStruct{IReleaser: releaser} })
+	p := pool.NewPool(func(releaser pool.IReleaser) *myStruct { return &myStruct{IReleaser: releaser} })
 	ch := make(chan *myStruct)
 	nch := make(chan int, 1000)
 	for i := range 1000 {
@@ -214,7 +214,7 @@ func TestConcurrentRelease(t *testing.T) {
 	continueCleanup := make(chan struct{})
 	// Cleanup can be entered by both callers, so count calls atomically.
 	var cleanupCalls atomic.Int32
-	p := pool.NewPool[*concurrentReleaseItem](func(releaser pool.IReleaser) any {
+	p := pool.NewPool(func(releaser pool.IReleaser) *concurrentReleaseItem {
 		return &concurrentReleaseItem{
 			IReleaser: releaser,
 			cleanup: func() {
@@ -268,7 +268,7 @@ func TestReleaseClearsLeakReportAfterDebugDisabled(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name    string
-		newPool func(func(pool.IReleaser) any) pool.IPool[*debugModeItem]
+		newPool func(func(pool.IReleaser) *debugModeItem) pool.IPool[*debugModeItem]
 	}{
 		{name: "normal", newPool: pool.NewPool[*debugModeItem]},
 		{name: "stub", newPool: pool.NewPoolStub[*debugModeItem]},
@@ -276,7 +276,7 @@ func TestReleaseClearsLeakReportAfterDebugDisabled(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pool.SetDebug(true)
 			t.Cleanup(func() { pool.SetDebug(false) })
-			items := tc.newPool(func(releaser pool.IReleaser) any {
+			items := tc.newPool(func(releaser pool.IReleaser) *debugModeItem {
 				return &debugModeItem{IReleaser: releaser}
 			})
 
@@ -324,7 +324,7 @@ func (i *initPanicItem) Init() {
 func TestGetTracksInitPanic(t *testing.T) {
 	for _, mode := range []struct {
 		name    string
-		newPool func(func(pool.IReleaser) any) pool.IPool[*initPanicItem]
+		newPool func(func(pool.IReleaser) *initPanicItem) pool.IPool[*initPanicItem]
 	}{
 		{name: "normal", newPool: pool.NewPool[*initPanicItem]},
 		{name: "stub", newPool: pool.NewPoolStub[*initPanicItem]},
@@ -343,7 +343,7 @@ func TestGetTracksInitPanic(t *testing.T) {
 				var children pool.IPool[*initPanicItem]
 				wantCount := uint64(1)
 				if withChild {
-					children = mode.newPool(func(releaser pool.IReleaser) any {
+					children = mode.newPool(func(releaser pool.IReleaser) *initPanicItem {
 						return &initPanicItem{IReleaser: releaser, initialize: nil}
 					})
 					wantCount++
@@ -352,7 +352,7 @@ func TestGetTracksInitPanic(t *testing.T) {
 				// Keep the factory-created object only for test cleanup.
 				// A normal caller cannot obtain it from Get after the panic.
 				var created *initPanicItem
-				items := mode.newPool(func(releaser pool.IReleaser) any {
+				items := mode.newPool(func(releaser pool.IReleaser) *initPanicItem {
 					created = &initPanicItem{
 						IReleaser: releaser,
 						initialize: func(item *initPanicItem) {

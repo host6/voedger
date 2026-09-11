@@ -15,7 +15,7 @@ import (
 )
 
 func BenchmarkBasic(b *testing.B) {
-	p := pool.NewPool[*myStruct](func(releaser pool.IReleaser) any {
+	p := pool.NewPool(func(releaser pool.IReleaser) *myStruct {
 		return &myStruct{IReleaser: releaser}
 	})
 
@@ -35,7 +35,7 @@ type simpleStruct struct {
 // BenchmarkExample/pool-4        20090349	        71.98 ns/op	       0 B/op	       0 allocs/op
 // BenchmarkExample/sync.Pool-4   39997732	        27.70 ns/op	       0 B/op	       0 allocs/op
 func BenchmarkExample(b *testing.B) {
-	p := pool.NewPool[*simpleStruct](func(releaser pool.IReleaser) any { return &simpleStruct{IReleaser: releaser} })
+	p := pool.NewPool(func(releaser pool.IReleaser) *simpleStruct { return &simpleStruct{IReleaser: releaser} })
 
 	b.Run("pool", func(b *testing.B) {
 		for range b.N {

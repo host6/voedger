@@ -27,16 +27,16 @@ func TestOwnedReusePreservesLeakReport(t *testing.T) {
 	// until the borrowed item's cleanup registered below has run.
 	t.Cleanup(func() { pool.SetDebug(false) })
 
-	newItem := func(releaser pool.IReleaser) any {
+	newItem := func(releaser pool.IReleaser) *leakReportItem {
 		return &leakReportItem{IReleaser: releaser}
 	}
-	owners := pool.NewPool[*leakReportItem](newItem)
+	owners := pool.NewPool(newItem)
 
 	// sync.Pool may discard returned objects, including under -race.
 	// Retry with a fresh pool until we observe the reuse being tested.
 	const maxAttempts = 32
 	for range maxAttempts {
-		items := pool.NewPool[*leakReportItem](newItem)
+		items := pool.NewPool(newItem)
 		var borrowedItems [2]*leakReportItem
 		for i := range borrowedItems {
 			// Both borrows must have the same stack trace so the report

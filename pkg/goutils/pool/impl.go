@@ -30,7 +30,7 @@ func (st stackTrace) string() string {
 
 func (p *implPool[T]) Get() T {
 	obj := p.get()
-	releaseable := obj.(IReleaser)
+	releaseable := any(obj).(IReleaser)
 	releaseable.reset()
 	// Account for the borrow before Init, which may panic.
 	p.objectsInUse.Add(1)
@@ -44,20 +44,20 @@ func (p *implPool[T]) Get() T {
 		m.Unlock()
 	}
 	releaseable.init(obj)
-	return obj.(T)
+	return obj
 }
 
-func (p *implPool[T]) get() any {
-	var obj any
+func (p *implPool[T]) get() T {
+	var obj T
 	if p.isStub {
 		releaser := &implIReleaser[T]{
 			ownerPool: p,
 		}
 		obj = p.instantiator(releaser)
-		releaser.cleanupIntf, _ = obj.(interface{ Cleanup() })
-		releaser.obj = obj.(T)
+		releaser.cleanupIntf, _ = any(obj).(interface{ Cleanup() })
+		releaser.obj = obj
 	} else {
-		obj = p.Pool.Get()
+		obj = p.Pool.Get().(T)
 	}
 	return obj
 }
@@ -65,13 +65,13 @@ func (p *implPool[T]) get() any {
 func (p *implPool[T]) GetOwned(owner IReleaser) T {
 	obj := p.get()
 	p.objectsInUse.Add(1)
-	releaseable := obj.(IReleaser)
+	releaseable := any(obj).(IReleaser)
 	releaseable.reset()
 	releaseable.setIsOwned()
 	releaseable.setOwnedTail(owner.getOwnedTail())
 	owner.setOwnedTail(releaseable)
 	releaseable.init(obj)
-	return obj.(T)
+	return obj
 }
 
 func (p *implPool[T]) GetObjectsInUse() uint64 {
@@ -154,14 +154,14 @@ func (r *implIReleaser[T]) getOwnedTail() interface{} {
 // Release() does nothing more but Cleanup() call if it exists
 // does not track borrow source code points in debug mode
 // useful for investigations
-func NewPoolStub[T any](instantiator func(releaser IReleaser) any) IPool[T] {
-	res := newPool[T](instantiator)
+func NewPoolStub[T any](instantiator func(releaser IReleaser) T) IPool[T] {
+	res := newPool(instantiator)
 	res.instantiator = instantiator
 	res.isStub = true
 	return res
 }
 
-func NewPool[T any](instantiator func(releaser IReleaser) any) IPool[T] {
+func NewPool[T any](instantiator func(releaser IReleaser) T) IPool[T] {
 	res := newPool[T](nil)
 	res.Pool = sync.Pool{
 		New: func() interface{} {
@@ -169,15 +169,15 @@ func NewPool[T any](instantiator func(releaser IReleaser) any) IPool[T] {
 				ownerPool: res,
 			}
 			newInstance := instantiator(releaser)
-			releaser.cleanupIntf, _ = newInstance.(interface{ Cleanup() })
-			releaser.obj = newInstance.(T)
+			releaser.cleanupIntf, _ = any(newInstance).(interface{ Cleanup() })
+			releaser.obj = newInstance
 			return newInstance
 		},
 	}
 	return res
 }
 
-func newPool[T any](instantiator func(releaser IReleaser) any) *implPool[T] {
+func newPool[T any](instantiator func(releaser IReleaser) T) *implPool[T] {
 	res := &implPool[T]{instantiator: instantiator}
 	RegisterObjectsInUseCounter(func() uint64 { return res.GetObjectsInUse() })
 	return res
