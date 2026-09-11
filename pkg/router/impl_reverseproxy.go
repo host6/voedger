@@ -40,9 +40,9 @@ func parseRoutes(routesURLs map[string]route, routes map[string]string, isRewrit
 // route domain : resellerportal.dev.untill.ru=http://resellerportal : https://resellerportal.dev.untill.ru/foo -> http://resellerportal/foo
 func (s *routerService) getRedirectMatcher() (redirectMatcher mux.MatcherFunc, err error) {
 	routes := map[string]route{}
-	// The matcher rewrites req.URL and req.Host before Rewrite runs.
-	// SetXForwarded would put the upstream host in X-Forwarded-Host;
-	// preserve incoming forwarding metadata through the shared helper.
+	// SetXForwarded would put the upstream host in X-Forwarded-Host because
+	// the matcher rewrites req.URL and req.Host before Rewrite runs.
+	// Assuming we do not need to forward X-Forwarded-* headers so use nop func
 	reverseProxy := &httputil.ReverseProxy{Rewrite: func(*httputil.ProxyRequest) {}}
 	if err := parseRoutes(routes, s.routes, false); err != nil {
 		return nil, err
