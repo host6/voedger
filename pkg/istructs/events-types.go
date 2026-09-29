@@ -82,6 +82,13 @@ type IIDGenerator interface {
 	UpdateOnSync(syncID RecordID)
 }
 
+// ICheckpointableIDGenerator extends IIDGenerator with non-mutating access to
+// the next record ID so callers can persist recovery state when they need it.
+type ICheckpointableIDGenerator interface {
+	IIDGenerator
+	NextRecordID() RecordID
+}
+
 type IRawEvent interface {
 	IAbstractEvent
 	ArgumentUnloggedObject() IObject

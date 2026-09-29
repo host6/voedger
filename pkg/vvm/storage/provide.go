@@ -8,6 +8,7 @@ import (
 	"github.com/voedger/voedger/pkg/ielections"
 	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
+	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
 )
 
 // [~server.design.orch/NewElectionsTTLStorage~impl]
@@ -27,5 +28,11 @@ func NewAppTTLStorage(sysVVMStorage ISysVvmStorage, clusterAppID istructs.Cluste
 	return &implAppTTLStorage{
 		sysVVMStorage: sysVVMStorage,
 		clusterAppID:  clusterAppID,
+	}
+}
+
+func NewRecoveryCheckpointStorage(sysVVMStorage ISysVvmStorage) commandprocessor.IRecoveryCheckpointStorage {
+	return &implRecoveryCheckpointStorage{
+		sysVVMStorage: sysVVMStorage,
 	}
 }

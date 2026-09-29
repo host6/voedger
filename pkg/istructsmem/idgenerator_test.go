@@ -64,6 +64,25 @@ func TestIDGenerator(t *testing.T) {
 	})
 }
 
+func TestCheckpointableIDGenerator(t *testing.T) {
+	require := require.New(t)
+
+	var idGen istructs.ICheckpointableIDGenerator = NewCheckpointableIDGenerator()
+	require.Equal(istructs.FirstUserRecordID, idGen.NextRecordID())
+
+	allocatedID, err := idGen.NextID(1)
+	require.NoError(err)
+	require.Equal(istructs.FirstUserRecordID, allocatedID)
+	require.Equal(allocatedID+1, idGen.NextRecordID())
+
+	idGen.UpdateOnSync(allocatedID + 100)
+	require.Equal(allocatedID+101, idGen.NextRecordID())
+
+	// A stale synchronization value must not move the checkpoint backwards.
+	idGen.UpdateOnSync(allocatedID)
+	require.Equal(allocatedID+101, idGen.NextRecordID())
+}
+
 // https://github.com/voedger/voedger/issues/688
 // 9999999999 ID causes next IDs collision
 func TestIDGenCollision(t *testing.T) {

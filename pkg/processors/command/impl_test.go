@@ -623,7 +623,7 @@ func TestAsynchronousRecovery(t *testing.T) {
 	})
 }
 
-func setUpRecoveryTestApp(t *testing.T) testApp {
+func setUpRecoveryTestApp(t *testing.T, options ...testAppOption) testApp {
 	t.Helper()
 	cudQName := appdef.NewQName(appdef.SysPackage, "CUD")
 	return setUp(t, func(wsb appdef.IWorkspaceBuilder, cfg *istructsmem.AppConfigType) {
@@ -635,7 +635,7 @@ func setUpRecoveryTestApp(t *testing.T) testApp {
 		wsb.AddRole(iauthnz.QNameRoleEveryone)
 		wsb.AddRole(iauthnz.QNameRoleSystem)
 		cfg.Resources.Add(istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec))
-	})
+	}, options...)
 }
 
 func restartCmdProc(app *testApp) {
@@ -647,6 +647,315 @@ func restartCmdProc(app *testApp) {
 		app.cmdProcService.Run(app.ctx)
 		close(app.done)
 	}()
+}
+
+func TestCheckpointBasedPartitionRecovery(t *testing.T) {
+	t.Run("missing and zero checkpoints perform a full bootstrap", func(t *testing.T) {
+		for _, checkpointState := range []string{"missing", "zero"} {
+			t.Run(checkpointState, func(t *testing.T) {
+				require := require.New(t)
+				storage := newMonotonicCheckpointStorage()
+				app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+				defer tearDown(app)
+
+				key := recoveryKeyForWSID(1)
+				if checkpointState == "zero" {
+					storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, PartitionCheckpoint{})
+				}
+				app.recovery.resetPLogReads(key)
+
+				response := sendCUD(t, 1, app)
+				reads := app.recovery.pLogReads(key)
+				require.Len(reads, 1)
+				require.Equal(istructs.FirstOffset, reads[0].offset)
+				require.Equal(istructs.ReadToTheEnd, reads[0].count)
+				require.Equal(2, int(response["CurrentWLogOffset"].(float64)))
+				require.Equal(istructs.FirstUserRecordID,
+					istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)))
+			})
+		}
+	})
+
+	t.Run("usable checkpoint scans only preceding event and uncovered tail", func(t *testing.T) {
+		require := require.New(t)
+		storage := newMonotonicCheckpointStorage()
+		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+		defer tearDown(app)
+
+		var previous map[string]interface{}
+		for range 3 {
+			previous = sendCUD(t, 1, app)
+		}
+		restartCmdProc(&app)
+		key := recoveryKeyForWSID(1)
+		persisted, ok, err := storage.GetPartitionCheckpoint(app.appStructs.ClusterAppID(), key.partitionID)
+		require.NoError(err)
+		require.True(ok)
+		require.Greater(persisted.NextPLogOffset, istructs.FirstOffset+1)
+
+		usableNextOffset := persisted.NextPLogOffset - 1
+		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID,
+			PartitionCheckpoint{NextPLogOffset: usableNextOffset})
+		app.recovery.resetPLogReads(key)
+		require.NoError(triggerAndWaitForRecovery(t, app, 1))
+
+		reads := app.recovery.pLogReads(key)
+		require.Len(reads, 2)
+		require.Equal(usableNextOffset-1, reads[0].offset)
+		require.Equal(1, reads[0].count)
+		require.Equal(usableNextOffset, reads[1].offset)
+		require.Equal(istructs.ReadToTheEnd, reads[1].count)
+
+		response := sendCUD(t, 1, app)
+		require.Equal(int(previous["CurrentWLogOffset"].(float64))+1, int(response["CurrentWLogOffset"].(float64)))
+		require.Equal(
+			istructs.RecordID(previous["NewIDs"].(map[string]interface{})["3"].(float64))+1,
+			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)),
+		)
+	})
+
+	t.Run("up-to-date checkpoint still reapplies preceding last event", func(t *testing.T) {
+		require := require.New(t)
+		storage := newMonotonicCheckpointStorage()
+		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+		defer tearDown(app)
+
+		previous := sendCUD(t, 1, app)
+		restartCmdProc(&app)
+		key := recoveryKeyForWSID(1)
+		persisted, ok, err := storage.GetPartitionCheckpoint(app.appStructs.ClusterAppID(), key.partitionID)
+		require.NoError(err)
+		require.True(ok)
+		app.recovery.resetPLogReads(key)
+
+		require.NoError(triggerAndWaitForRecovery(t, app, 1))
+		reads := app.recovery.pLogReads(key)
+		require.Len(reads, 2)
+		require.Equal(persisted.NextPLogOffset-1, reads[0].offset)
+		require.Equal(1, reads[0].count)
+		require.Equal(persisted.NextPLogOffset, reads[1].offset)
+		require.Equal(istructs.ReadToTheEnd, reads[1].count)
+
+		response := sendCUD(t, 1, app)
+		require.Equal(int(previous["CurrentWLogOffset"].(float64))+1, int(response["CurrentWLogOffset"].(float64)))
+		require.Equal(
+			istructs.RecordID(previous["NewIDs"].(map[string]interface{})["3"].(float64))+1,
+			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)),
+		)
+	})
+
+	t.Run("recovered workspaces are durable before partition progress is published", func(t *testing.T) {
+		require := require.New(t)
+		storage := newMonotonicCheckpointStorage()
+		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+		defer tearDown(app)
+		storage.resetWrites()
+
+		require.NoError(triggerAndWaitForRecovery(t, app, 1))
+		writes := storage.writtenKinds()
+		require.NotEmpty(writes)
+		require.Equal(checkpointStorageCallPartition, writes[len(writes)-1])
+		for _, write := range writes[:len(writes)-1] {
+			require.Equal(checkpointStorageCallWorkspace, write)
+		}
+	})
+}
+
+func TestLazyWorkspaceRecovery(t *testing.T) {
+	t.Run("first and in-progress requests return 503 and schedule one attempt", func(t *testing.T) {
+		require := require.New(t)
+		app, _ := setUpLazyWorkspaceRecoveryApp(t, 2, 1, 3, 5)
+		defer tearDown(app)
+		key := recoveryWorkspaceKey(1)
+		gate := app.recovery.blockNextWorkspace(key)
+
+		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(1, app))
+		require.NoError(err)
+		require.Equal(http.StatusServiceUnavailable, status)
+		app.recovery.waitWorkspaceStarted(app.ctx, key)
+		status, err = requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(1, app))
+		require.NoError(err)
+		require.Equal(http.StatusServiceUnavailable, status)
+		require.Equal(1, app.recovery.workspaceStartCount(key))
+
+		close(gate)
+		require.NoError(app.recovery.waitWorkspace(app.ctx, key))
+		response := sendCUD(t, 1, app)
+		require.Equal(2, int(response["CurrentWLogOffset"].(float64)))
+		require.Equal(istructs.FirstUserRecordID,
+			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)))
+	})
+
+	t.Run("failure is retained while the next request starts one retry", func(t *testing.T) {
+		require := require.New(t)
+		app, _ := setUpLazyWorkspaceRecoveryApp(t, 1, 1, 3, 5)
+		defer tearDown(app)
+		key := recoveryWorkspaceKey(3)
+		injectedErr := errors.New("injected workspace recovery failure")
+		app.recovery.failNextWorkspace(key, injectedErr)
+
+		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(3, app))
+		require.NoError(err)
+		require.Equal(http.StatusServiceUnavailable, status)
+		require.ErrorIs(app.recovery.waitWorkspace(app.ctx, key), injectedErr)
+
+		retryGate := app.recovery.blockNextWorkspace(key)
+		status, err = requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(3, app))
+		require.NoError(err)
+		require.Equal(http.StatusInternalServerError, status)
+		app.recovery.waitWorkspaceStarted(app.ctx, key)
+		status, err = requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(3, app))
+		require.NoError(err)
+		require.Equal(http.StatusServiceUnavailable, status)
+		require.Equal(2, app.recovery.workspaceStartCount(key))
+
+		close(retryGate)
+		require.NoError(app.recovery.waitWorkspace(app.ctx, key))
+		sendCUD(t, 3, app)
+	})
+
+	t.Run("worker pool bounds concurrency per partition", func(t *testing.T) {
+		assertWorkspaceRecoveryLimit(t, 2, []istructs.WSID{1, 3, 5}, 2)
+	})
+
+	t.Run("zero worker setting uses the default of four", func(t *testing.T) {
+		assertWorkspaceRecoveryLimit(t, 0, []istructs.WSID{1, 3, 5, 7, 9}, 4)
+	})
+
+	t.Run("service cancellation stops queued and active workspace attempts", func(t *testing.T) {
+		require := require.New(t)
+		app, _ := setUpLazyWorkspaceRecoveryApp(t, 1, 1, 3, 5)
+		key := recoveryWorkspaceKey(5)
+		queuedKey := recoveryWorkspaceKey(3)
+		app.recovery.blockNextWorkspace(key)
+		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(5, app))
+		require.NoError(err)
+		require.Equal(http.StatusServiceUnavailable, status)
+		app.recovery.waitWorkspaceStarted(app.ctx, key)
+		status, err = requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(3, app))
+		require.NoError(err)
+		require.Equal(http.StatusServiceUnavailable, status)
+		require.Equal(0, app.recovery.workspaceAttemptCount(queuedKey))
+
+		app.cancel()
+		<-app.done
+		require.ErrorIs(app.recovery.waitWorkspace(context.Background(), key), context.Canceled)
+		require.ErrorIs(app.recovery.waitWorkspace(context.Background(), queuedKey), context.Canceled)
+		app.n10nBrokerCleanup()
+	})
+}
+
+func TestFailedStoreStagesDoNotPublishCheckpoints(t *testing.T) {
+	for _, stage := range []commandStoreStage{
+		commandStoreStagePLog,
+		commandStoreStageApplyRecords,
+		commandStoreStageSyncProjectors,
+		commandStoreStageWLog,
+	} {
+		t.Run(string(stage), func(t *testing.T) {
+			require := require.New(t)
+			storage := newMonotonicCheckpointStorage()
+			app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+			defer tearDown(app)
+
+			response := sendCUD(t, 1, app)
+			app.recovery.waitWorkspaceCheckpoint(app.ctx, recoveryWorkspaceKey(1),
+				WorkspaceCheckpoint{
+					NextWLogOffset: istructs.Offset(response["CurrentWLogOffset"].(float64)) + 1,
+					NextRecordID:   istructs.RecordID(response["NewIDs"].(map[string]interface{})["3"].(float64)) + 1,
+				})
+			workspaceBefore, ok, err := storage.GetWorkspaceCheckpoint(app.appStructs.ClusterAppID(), 1)
+			require.NoError(err)
+			require.True(ok)
+			barrierBefore := app.recovery.partitionBarrier(recoveryKeyForWSID(1))
+			app.recovery.resetCheckpointEnqueues()
+			app.recovery.failNextCommandStoreStage(stage, errors.New("injected "+string(stage)+" failure"))
+
+			sendCUD(t, 1, app, http.StatusInternalServerError)
+			require.Zero(app.recovery.checkpointEnqueueCount())
+			require.Equal(barrierBefore, app.recovery.partitionBarrier(recoveryKeyForWSID(1)))
+			workspaceAfter, ok, err := storage.GetWorkspaceCheckpoint(app.appStructs.ClusterAppID(), 1)
+			require.NoError(err)
+			require.True(ok)
+			require.Equal(workspaceBefore, workspaceAfter)
+		})
+	}
+}
+
+func setUpLazyWorkspaceRecoveryApp(t *testing.T, workers uint, lazyWSIDs ...istructs.WSID) (testApp, *monotonicCheckpointStorage) {
+	t.Helper()
+	require := require.New(t)
+	storage := newMonotonicCheckpointStorage()
+	allWSIDs := append(append([]istructs.WSID(nil), lazyWSIDs...), 99)
+	app := setUpRecoveryTestApp(t,
+		withCheckpointStorage(storage),
+		withNumWSRecoverers(workers),
+		withTestWorkspaces(allWSIDs...),
+	)
+	partitionID := coreutils.AppPartitionID(99, testAppPartCount)
+	nextPLogOffset := nextPLogOffsetForTest(t, app.appStructs, partitionID)
+	storage.forcePartition(app.appStructs.ClusterAppID(), partitionID,
+		PartitionCheckpoint{NextPLogOffset: nextPLogOffset})
+	for _, wsid := range lazyWSIDs {
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), wsid, WorkspaceCheckpoint{
+			NextWLogOffset: 2,
+			NextRecordID:   istructs.FirstUserRecordID,
+		})
+	}
+
+	require.NoError(triggerAndWaitForRecovery(t, app, 99))
+	return app, storage
+}
+
+func assertWorkspaceRecoveryLimit(t *testing.T, configuredWorkers uint, wsids []istructs.WSID, expectedLimit int) {
+	t.Helper()
+	require := require.New(t)
+	app, _ := setUpLazyWorkspaceRecoveryApp(t, configuredWorkers, wsids...)
+	defer tearDown(app)
+
+	gates := make(map[workspaceKey]chan struct{}, len(wsids))
+	for _, wsid := range wsids {
+		key := recoveryWorkspaceKey(wsid)
+		gates[key] = app.recovery.blockNextWorkspace(key)
+		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(wsid, app))
+		require.NoError(err)
+		require.Equal(http.StatusServiceUnavailable, status)
+	}
+	app.recovery.waitWorkspaceActive(app.ctx, recoveryKeyForWSID(wsids[0]), expectedLimit)
+	require.Equal(expectedLimit, app.recovery.maxActiveWorkspaces(recoveryKeyForWSID(wsids[0])))
+
+	queuedKey := recoveryWorkspaceKey(wsids[expectedLimit])
+	require.Equal(0, app.recovery.workspaceAttemptCount(queuedKey))
+	close(gates[recoveryWorkspaceKey(wsids[0])])
+	app.recovery.waitWorkspaceStarted(app.ctx, queuedKey)
+	require.Equal(1, app.recovery.workspaceAttemptCount(queuedKey))
+	require.LessOrEqual(app.recovery.maxActiveWorkspaces(recoveryKeyForWSID(wsids[0])), expectedLimit)
+
+	for key, gate := range gates {
+		select {
+		case <-gate:
+		default:
+			close(gate)
+		}
+		_ = app.recovery.waitWorkspace(app.ctx, key)
+	}
+}
+
+func recoveryWorkspaceKey(wsid istructs.WSID) workspaceKey {
+	return workspaceKey{partitionKey: recoveryKeyForWSID(wsid), wsid: wsid}
+}
+
+func nextPLogOffsetForTest(t *testing.T, appStructs istructs.IAppStructs, partitionID istructs.PartitionID) istructs.Offset {
+	t.Helper()
+	next := istructs.FirstOffset
+	err := appStructs.Events().ReadPLog(t.Context(), partitionID, istructs.FirstOffset, istructs.ReadToTheEnd,
+		func(offset istructs.Offset, event istructs.IPLogEvent) error {
+			event.Release()
+			next = offset + 1
+			return nil
+		})
+	require.NoError(t, err)
+	return next
 }
 
 func TestCUDUpdate(t *testing.T) {
@@ -1024,9 +1333,30 @@ type testApp struct {
 	requestSender     bus.IRequestSender
 	rawRequestSender  bus.IRequestSender
 	recovery          *recoveryTestControl
+	appStructs        istructs.IAppStructs
 
 	appTokens     istructs.IAppTokens
 	sysAuthHeader map[string]string
+}
+
+type testAppOptions struct {
+	checkpointStorage IRecoveryCheckpointStorage
+	numWSRecoverers   uint
+	workspaceIDs      []istructs.WSID
+}
+
+type testAppOption func(*testAppOptions)
+
+func withCheckpointStorage(storage IRecoveryCheckpointStorage) testAppOption {
+	return func(options *testAppOptions) { options.checkpointStorage = storage }
+}
+
+func withNumWSRecoverers(num uint) testAppOption {
+	return func(options *testAppOptions) { options.numWSRecoverers = num }
+}
+
+func withTestWorkspaces(wsids ...istructs.WSID) testAppOption {
+	return func(options *testAppOptions) { options.workspaceIDs = wsids }
 }
 
 func tearDown(app testApp) {
@@ -1043,13 +1373,21 @@ var (
 	testAppPartCount istructs.NumAppPartitions = 2
 )
 
-func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istructsmem.AppConfigType)) testApp {
+func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istructsmem.AppConfigType), optionFuncs ...testAppOption) testApp {
 	require := require.New(t)
+	options := testAppOptions{
+		checkpointStorage: newMonotonicCheckpointStorage(),
+		workspaceIDs:      []istructs.WSID{1, 2},
+	}
+	for _, optionFunc := range optionFuncs {
+		optionFunc(&options)
+	}
 	// command processor is a IService working through CommandChannel(iprocbus.ServiceChannel). Let's prepare that channel
 	serviceChannel := make(CommandChannel)
 	done := make(chan struct{})
 
 	vvmCtx, cancel := context.WithCancel(context.Background())
+	tm := timeu.NewITime()
 
 	cfgs := istructsmem.AppConfigsType{}
 	asf := mem.Provide(testingu.MockTime)
@@ -1087,7 +1425,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 		ChannelsPerSubject:      10,
 		Subscriptions:           1000,
 		SubscriptionsPerSubject: 10,
-	}, timeu.NewITime())
+	}, tm)
 
 	// prepare the AppParts to borrow AppStructs
 	appParts, appPartsClean, err := appparts.New2(vvmCtx, appStructsProvider,
@@ -1131,9 +1469,9 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	systemToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
 	recoveryControl := newRecoveryTestControl()
-	cmdProcessorFactory := provideServiceFactory(appParts, timeu.NewITime(), n10nBroker, imetrics.Provide(), "vvm",
+	cmdProcessorFactory := provideServiceFactory(appParts, tm, n10nBroker, imetrics.Provide(), "vvm",
 		iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs), secretReader,
-		recoveryControl.testHooks())
+		options.checkpointStorage, options.numWSRecoverers, recoveryControl.testHooks())
 	cmdProcService := cmdProcessorFactory(serviceChannel)
 	requestSender := &recoveryRetrySender{
 		raw:     rawRequestSender,
@@ -1150,7 +1488,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 
 	as, err := appStructsProvider.BuiltIn(istructs.AppQName_untill_airs_bp)
 	require.NoError(err)
-	for _, wsid := range []istructs.WSID{1, 2} {
+	for _, wsid := range options.workspaceIDs {
 		partitionID := coreutils.AppPartitionID(wsid, testAppPartCount)
 		err = wsdescutil.CreateCDocWorkspaceDescriptorStub(as, partitionID, wsid, qNameTestWSKind, istructs.Offset(wsid), 1)
 		require.NoError(err)
@@ -1161,6 +1499,7 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 		requestSender:     requestSender,
 		rawRequestSender:  rawRequestSender,
 		recovery:          recoveryControl,
+		appStructs:        as,
 		cancel:            func() { cancel(); appPartsClean() },
 		ctx:               vvmCtx,
 		done:              done,

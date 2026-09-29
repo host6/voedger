@@ -1,0 +1,262 @@
+/*
+ * Copyright (c) 2026-present unTill Software Development Group B.V.
+ * @author Denis Gribanov
+ */
+
+package storage
+
+import (
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"fmt"
+
+	"github.com/voedger/voedger/pkg/istructs"
+	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
+)
+
+const (
+	partitionRecoveryCheckpointPKeySize = 4 + 4 + 2
+	workspaceRecoveryCheckpointPKeySize = 4 + 4 + 8
+)
+
+const (
+	jsonFieldNextPLogOffset = "nextPLogOffset"
+	jsonFieldNextWLogOffset = "nextWLogOffset"
+	jsonFieldNextRecordID   = "nextRecordID"
+)
+
+type implRecoveryCheckpointStorage struct {
+	sysVVMStorage ISysVvmStorage
+}
+
+func (s *implRecoveryCheckpointStorage) GetPartitionCheckpoint(appID istructs.ClusterAppID,
+	partitionID istructs.PartitionID) (commandprocessor.PartitionCheckpoint, bool, error) {
+	data, ok, err := s.get(partitionRecoveryCheckpointPKey(appID, partitionID))
+	if err != nil {
+		return commandprocessor.PartitionCheckpoint{}, false,
+			fmt.Errorf("get partition recovery checkpoint: %w", err)
+	}
+	if !ok {
+		return commandprocessor.PartitionCheckpoint{}, false, nil
+	}
+	checkpoint, _, err := decodePartitionCheckpoint(data)
+	if err != nil {
+		return commandprocessor.PartitionCheckpoint{}, false,
+			fmt.Errorf("decode partition recovery checkpoint: %w", err)
+	}
+	return checkpoint, true, nil
+}
+
+func (s *implRecoveryCheckpointStorage) PutPartitionCheckpoint(appID istructs.ClusterAppID,
+	partitionID istructs.PartitionID, checkpoint commandprocessor.PartitionCheckpoint) error {
+	pKey := partitionRecoveryCheckpointPKey(appID, partitionID)
+	incoming, err := encodePartitionCheckpoint(checkpoint, nil)
+	if err != nil {
+		return fmt.Errorf("encode partition recovery checkpoint: %w", err)
+	}
+	err = s.putMonotonic(pKey, incoming, func(current []byte) ([]byte, bool, error) {
+		stored, fields, err := decodePartitionCheckpoint(current)
+		if err != nil {
+			return nil, false, err
+		}
+		if stored.NextPLogOffset >= checkpoint.NextPLogOffset {
+			return nil, false, nil
+		}
+		stored.NextPLogOffset = checkpoint.NextPLogOffset
+		merged, err := encodePartitionCheckpoint(stored, fields)
+		return merged, true, err
+	})
+	if err != nil {
+		return fmt.Errorf("put partition recovery checkpoint: %w", err)
+	}
+	return nil
+}
+
+func (s *implRecoveryCheckpointStorage) GetWorkspaceCheckpoint(appID istructs.ClusterAppID,
+	wsid istructs.WSID) (commandprocessor.WorkspaceCheckpoint, bool, error) {
+	data, ok, err := s.get(workspaceRecoveryCheckpointPKey(appID, wsid))
+	if err != nil {
+		return commandprocessor.WorkspaceCheckpoint{}, false,
+			fmt.Errorf("get workspace recovery checkpoint: %w", err)
+	}
+	if !ok {
+		return commandprocessor.WorkspaceCheckpoint{}, false, nil
+	}
+	checkpoint, _, err := decodeWorkspaceCheckpoint(data)
+	if err != nil {
+		return commandprocessor.WorkspaceCheckpoint{}, false,
+			fmt.Errorf("decode workspace recovery checkpoint: %w", err)
+	}
+	return checkpoint, true, nil
+}
+
+func (s *implRecoveryCheckpointStorage) PutWorkspaceCheckpoint(appID istructs.ClusterAppID,
+	wsid istructs.WSID, checkpoint commandprocessor.WorkspaceCheckpoint) error {
+	pKey := workspaceRecoveryCheckpointPKey(appID, wsid)
+	incoming, err := encodeWorkspaceCheckpoint(checkpoint, nil)
+	if err != nil {
+		return fmt.Errorf("encode workspace recovery checkpoint: %w", err)
+	}
+	err = s.putMonotonic(pKey, incoming, func(current []byte) ([]byte, bool, error) {
+		stored, fields, err := decodeWorkspaceCheckpoint(current)
+		if err != nil {
+			return nil, false, err
+		}
+		merged := stored
+		if checkpoint.NextWLogOffset > merged.NextWLogOffset {
+			merged.NextWLogOffset = checkpoint.NextWLogOffset
+		}
+		if checkpoint.NextRecordID > merged.NextRecordID {
+			merged.NextRecordID = checkpoint.NextRecordID
+		}
+		if merged == stored {
+			return nil, false, nil
+		}
+		encoded, err := encodeWorkspaceCheckpoint(merged, fields)
+		return encoded, true, err
+	})
+	if err != nil {
+		return fmt.Errorf("put workspace recovery checkpoint: %w", err)
+	}
+	return nil
+}
+
+func (s *implRecoveryCheckpointStorage) get(pKey []byte) ([]byte, bool, error) {
+	var data []byte
+	ok, err := s.sysVVMStorage.Get(pKey, nil, &data)
+	return data, ok, err
+}
+
+type mergeCheckpointFunc func(current []byte) (merged []byte, changed bool, err error)
+
+func (s *implRecoveryCheckpointStorage) putMonotonic(pKey, incoming []byte, merge mergeCheckpointFunc) error {
+	for {
+		current, ok, err := s.get(pKey)
+		if err != nil {
+			return fmt.Errorf("read current recovery checkpoint: %w", err)
+		}
+		if !ok {
+			inserted, err := s.sysVVMStorage.InsertIfNotExists(pKey, nil, incoming, 0)
+			if err != nil {
+				return fmt.Errorf("insert recovery checkpoint: %w", err)
+			}
+			if inserted {
+				return nil
+			}
+			continue
+		}
+
+		merged, changed, err := merge(current)
+		if err != nil {
+			return fmt.Errorf("merge recovery checkpoint: %w", err)
+		}
+		if !changed {
+			return nil
+		}
+		swapped, err := s.sysVVMStorage.CompareAndSwap(pKey, nil, current, merged, 0)
+		if err != nil {
+			return fmt.Errorf("compare and swap recovery checkpoint: %w", err)
+		}
+		if swapped {
+			return nil
+		}
+	}
+}
+
+func partitionRecoveryCheckpointPKey(appID istructs.ClusterAppID, partitionID istructs.PartitionID) []byte {
+	pKey := make([]byte, 0, partitionRecoveryCheckpointPKeySize)
+	pKey = binary.BigEndian.AppendUint32(pKey, pKeyPrefix_SeqStorage_Part)
+	pKey = binary.BigEndian.AppendUint32(pKey, appID)
+	return binary.BigEndian.AppendUint16(pKey, uint16(partitionID))
+}
+
+func workspaceRecoveryCheckpointPKey(appID istructs.ClusterAppID, wsid istructs.WSID) []byte {
+	pKey := make([]byte, 0, workspaceRecoveryCheckpointPKeySize)
+	pKey = binary.BigEndian.AppendUint32(pKey, pKeyPrefix_SeqStorage_WS)
+	pKey = binary.BigEndian.AppendUint32(pKey, appID)
+	return binary.BigEndian.AppendUint64(pKey, uint64(wsid))
+}
+
+func decodePartitionCheckpoint(data []byte) (commandprocessor.PartitionCheckpoint, map[string]json.RawMessage, error) {
+	fields, err := decodeCheckpointObject(data)
+	if err != nil {
+		return commandprocessor.PartitionCheckpoint{}, nil, err
+	}
+	nextOffset, err := decodeRequiredJSONField[istructs.Offset](fields, jsonFieldNextPLogOffset)
+	if err != nil {
+		return commandprocessor.PartitionCheckpoint{}, nil, err
+	}
+	return commandprocessor.PartitionCheckpoint{NextPLogOffset: nextOffset}, fields, nil
+}
+
+func decodeWorkspaceCheckpoint(data []byte) (commandprocessor.WorkspaceCheckpoint, map[string]json.RawMessage, error) {
+	fields, err := decodeCheckpointObject(data)
+	if err != nil {
+		return commandprocessor.WorkspaceCheckpoint{}, nil, err
+	}
+	nextWLogOffset, err := decodeRequiredJSONField[istructs.Offset](fields, jsonFieldNextWLogOffset)
+	if err != nil {
+		return commandprocessor.WorkspaceCheckpoint{}, nil, err
+	}
+	nextRecordID, err := decodeRequiredJSONField[istructs.RecordID](fields, jsonFieldNextRecordID)
+	if err != nil {
+		return commandprocessor.WorkspaceCheckpoint{}, nil, err
+	}
+	return commandprocessor.WorkspaceCheckpoint{
+		NextWLogOffset: nextWLogOffset,
+		NextRecordID:   nextRecordID,
+	}, fields, nil
+}
+
+func decodeCheckpointObject(data []byte) (map[string]json.RawMessage, error) {
+	fields := map[string]json.RawMessage{}
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return nil, err
+	}
+	if fields == nil {
+		return nil, errors.New("recovery checkpoint must be a JSON object")
+	}
+	return fields, nil
+}
+
+func decodeRequiredJSONField[T ~uint64](fields map[string]json.RawMessage, name string) (T, error) {
+	raw, ok := fields[name]
+	if !ok {
+		return 0, fmt.Errorf("required recovery checkpoint field %q is missing", name)
+	}
+	var value T
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return 0, fmt.Errorf("decode recovery checkpoint field %q: %w", name, err)
+	}
+	return value, nil
+}
+
+func encodePartitionCheckpoint(checkpoint commandprocessor.PartitionCheckpoint,
+	fields map[string]json.RawMessage) ([]byte, error) {
+	return encodeCheckpointObject(fields, map[string]any{
+		jsonFieldNextPLogOffset: checkpoint.NextPLogOffset,
+	})
+}
+
+func encodeWorkspaceCheckpoint(checkpoint commandprocessor.WorkspaceCheckpoint,
+	fields map[string]json.RawMessage) ([]byte, error) {
+	return encodeCheckpointObject(fields, map[string]any{
+		jsonFieldNextWLogOffset: checkpoint.NextWLogOffset,
+		jsonFieldNextRecordID:   checkpoint.NextRecordID,
+	})
+}
+
+func encodeCheckpointObject(fields map[string]json.RawMessage, values map[string]any) ([]byte, error) {
+	if fields == nil {
+		fields = map[string]json.RawMessage{}
+	}
+	for name, value := range values {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			return nil, err
+		}
+		fields[name] = encoded
+	}
+	return json.Marshal(fields)
+}
