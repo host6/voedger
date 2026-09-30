@@ -30,6 +30,8 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 	)
 
 	t.Run("missing checkpoints are absent", func(t *testing.T) {
+		require.Equal([]byte{0, 0, 0, 1}, recoveryCheckpointCCols)
+
 		partition, ok, err := checkpoints.GetPartitionCheckpoint(appID, partitionID)
 		require.NoError(err)
 		require.False(ok)
@@ -112,8 +114,10 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 	t.Run("malformed checkpoints return errors", func(t *testing.T) {
 		malformedPartitionID := istructs.PartitionID(77)
 		malformedWSID := istructs.WSID(7701)
-		require.NoError(sysVVMStorage.Put(partitionCheckpointPKeyForTest(appID, malformedPartitionID), nil, []byte("not-json")))
-		require.NoError(sysVVMStorage.Put(workspaceCheckpointPKeyForTest(appID, malformedWSID), nil, []byte(`{"nextWLogOffset":`)))
+		require.NoError(sysVVMStorage.Put(partitionCheckpointPKeyForTest(appID, malformedPartitionID),
+			recoveryCheckpointCCols, []byte("not-json")))
+		require.NoError(sysVVMStorage.Put(workspaceCheckpointPKeyForTest(appID, malformedWSID),
+			recoveryCheckpointCCols, []byte(`{"nextWLogOffset":`)))
 
 		_, ok, err := checkpoints.GetPartitionCheckpoint(appID, malformedPartitionID)
 		require.Error(err)
@@ -127,9 +131,9 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 	t.Run("unknown JSON fields are ignored", func(t *testing.T) {
 		futurePartitionID := istructs.PartitionID(78)
 		futureWSID := istructs.WSID(7801)
-		require.NoError(sysVVMStorage.Put(partitionCheckpointPKeyForTest(appID, futurePartitionID), nil,
+		require.NoError(sysVVMStorage.Put(partitionCheckpointPKeyForTest(appID, futurePartitionID), recoveryCheckpointCCols,
 			[]byte(`{"nextPLogOffset":91,"futureField":{"version":2}}`)))
-		require.NoError(sysVVMStorage.Put(workspaceCheckpointPKeyForTest(appID, futureWSID), nil,
+		require.NoError(sysVVMStorage.Put(workspaceCheckpointPKeyForTest(appID, futureWSID), recoveryCheckpointCCols,
 			[]byte(`{"nextWLogOffset":92,"nextRecordID":93,"futureField":[1,2]}`)))
 
 		partition, ok, err := checkpoints.GetPartitionCheckpoint(appID, futurePartitionID)
@@ -264,7 +268,8 @@ func assertCheckpointJSON(t *testing.T, storage ISysVvmStorage, pKey []byte, exp
 	t.Helper()
 	require := require.New(t)
 	value := []byte{}
-	ok, err := storage.Get(pKey, nil, &value)
+	require.Equal([]byte{0, 0, 0, 1}, recoveryCheckpointCCols)
+	ok, err := storage.Get(pKey, recoveryCheckpointCCols, &value)
 	require.NoError(err)
 	require.True(ok)
 	actual := map[string]any{}

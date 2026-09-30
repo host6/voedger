@@ -39,4 +39,5 @@ func TestConsts(t *testing.T) {
 	require.Equal(uint32(4), pKeyPrefix_AppTTL)
 
 	require.Equal(uint32(0), PLogOffsetCC)
+	require.Equal([]byte{0, 0, 0, 1}, recoveryCheckpointCCols)
 }

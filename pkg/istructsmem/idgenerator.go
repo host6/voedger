@@ -19,12 +19,6 @@ func NewIDGeneratorWithHook(onNewID func(rawID, storageID istructs.RecordID) err
 	return newIDGenerator(onNewID)
 }
 
-// NewCheckpointableIDGenerator creates an ID generator whose current next
-// record ID can be captured in a recovery checkpoint.
-func NewCheckpointableIDGenerator() istructs.ICheckpointableIDGenerator {
-	return newIDGenerator(nil)
-}
-
 func newIDGenerator(onNewID func(rawID, storageID istructs.RecordID) error) *implIIDGenerator {
 	return &implIIDGenerator{
 		nextRecordID: istructs.FirstUserRecordID,
@@ -53,6 +47,6 @@ func (g *implIIDGenerator) UpdateOnSync(syncID istructs.RecordID) {
 	}
 }
 
-func (g *implIIDGenerator) NextRecordID() istructs.RecordID {
-	return g.nextRecordID
+func (g *implIIDGenerator) LastRecordID() istructs.RecordID {
+	return g.nextRecordID - 1
 }

@@ -35,8 +35,8 @@ In the production application-processing context:
 Decisions:
 
 - Extend command-processor recovery into two readiness levels: retain one service-scoped recovery lifecycle per application partition, and add deduplicated on-demand workspace recovery scheduled through a bounded worker pool owned by that partition. Normalize a zero worker limit to the default so zero-valued configurations remain usable.
-- Store extensible JSON checkpoints in shared system-VVM storage: a next-PLog-offset snapshot keyed by application and partition, and a next-WLog-offset plus next-record-ID snapshot keyed by application and workspace. Reuse the retained sequence-storage key prefixes with a distinct empty clustering key so legacy binary cells remain untouched and distinguishable.
-- Capture immutable checkpoint snapshots from command-processor memory only after the command's PLog, records, synchronous projections, and WLog have succeeded. Expose the record-ID generator's current next value for this purpose instead of reconstructing outgoing snapshots from events or reviving the removed generic sequencer.
+- Store extensible JSON checkpoints in shared system-VVM storage: a next-PLog-offset snapshot keyed by application and partition, and a next-WLog-offset plus next-record-ID snapshot keyed by application and workspace. Reuse the retained sequence-storage key prefixes with a dedicated nonzero four-byte clustering key so legacy binary cells remain untouched and distinguishable while the partition key can host additional cell types later.
+- Capture immutable checkpoint snapshots from command-processor memory only after the command's PLog, records, synchronous projections, and WLog have succeeded. Expose the record-ID generator's last allocated or synchronized value for this purpose instead of reconstructing outgoing snapshots from events or reviving the removed generic sequencer.
 - Use two built-in asynchronous checkpoint projectors owned by the command service rather than schema-defined async actualizers: persist workspace snapshots for every successful operation, and persist partition progress after each 100 covered events or one minute, whichever comes first.
 - Treat the partition checkpoint as a durability barrier: never advance it past an event until that event's workspace snapshot is durable. Use conditional monotonic updates that merge next offsets and record IDs by maximum so delayed work or overlapping VVM handoff cannot regress shared state.
 - Start partition recovery from the persisted next PLog offset; when it is beyond the first offset, read the immediately preceding event as the initial reapplication candidate, then scan only the uncheckpointed tail and replace the candidate with any newer tail event. Merge tail values with workspace snapshots, reapply the resulting last event, and then save affected workspace snapshots before advancing partition progress. When the partition checkpoint is missing or zero, perform one full-PLog bootstrap scan and seed both checkpoint levels.
@@ -93,7 +93,7 @@ References (external):
   - prove monotonic conditional updates and coexistence with legacy binary cells under the retained key prefixes
 
 - [x] update: [istructsmem/idgenerator_test.go](../../../pkg/istructsmem/idgenerator_test.go)
-  - add: coverage for reading the current next record ID after initialization, allocation, and synchronization updates through the additive checkpoint-capable generator contract
+  - add: coverage for reading the last record ID after initialization, allocation, and synchronization updates through the existing generator contract
 
 - [x] update: [storage/consts_test.go](../../../pkg/vvm/storage/consts_test.go)
   - preserve: fixed sequence-storage prefix values and surrounding prefix order while the prefixes become active checkpoint namespaces
@@ -105,17 +105,17 @@ References (external):
 ### Checkpoint contracts and storage
 
 - [x] update: [istructs/events-types.go](../../../pkg/istructs/events-types.go)
-  - add: an optional checkpoint-capable ID-generator interface that exposes the current next record ID while leaving the existing generator contract unchanged
+  - add: a non-mutating last-record-ID accessor to the existing ID-generator contract for recovery-state capture
 
 - [x] update: [istructsmem/idgenerator.go](../../../pkg/istructsmem/idgenerator.go)
-  - add: a checkpoint-capable constructor and non-mutating next-ID accessor on the existing generator implementation
-  - preserve: existing allocation, synchronization, and hook behavior for callers that use the original interface
+  - add: a non-mutating last-record-ID accessor on the existing generator implementation
+  - preserve: existing allocation, synchronization, and hook behavior
 
 - [x] update: [storage/consts.go](../../../pkg/vvm/storage/consts.go)
   - retain: the existing numeric sequence-storage prefixes from PR #4649 and define their active checkpoint/legacy-cell roles without renumbering later prefixes
 
 - [x] create: [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
-  - system-VVM storage adapter for partition and workspace recovery checkpoints using the retained prefixes and empty clustering keys
+  - system-VVM storage adapter for partition and workspace recovery checkpoints using the retained prefixes and a dedicated nonzero four-byte clustering key
   - extensible JSON values containing the next PLog offset or the next WLog offset and record ID
   - monotonic insert/compare-and-swap loops that merge each next value by maximum and preserve legacy binary cells
   - report missing values as absent for bootstrap recovery, but return malformed JSON as an operational recovery error
@@ -125,29 +125,29 @@ References (external):
 
 ### Command recovery and checkpointing
 
-- [ ] create: [command/checkpoints.go](../../../pkg/processors/command/checkpoints.go)
+- [x] create: [command/checkpoints.go](../../../pkg/processors/command/checkpoints.go)
   - recovery-checkpoint storage contract and immutable partition/workspace snapshot types
   - service-scoped workspace and partition checkpoint projectors with per-partition coverage barriers, event/time flushing, retry, final flush, cancellation, and shutdown coordination
   - deterministic hooks for validating enqueue, persistence, retry, and flush ordering
 
-- [ ] update: [command/types.go](../../../pkg/processors/command/types.go)
+- [x] update: [command/types.go](../../../pkg/processors/command/types.go)
   - extend: partition state with per-workspace absent, recovering, failed, and ready lifecycle state plus tail-recovered counter data
   - add: bounded per-partition workspace recovery scheduling and worker tracking without changing command serialization
-  - use: the checkpoint-capable ID generator for in-memory workspace sequence state
+  - use: the ID generator's last-record-ID accessor for in-memory workspace sequence state
 
-- [ ] update: [command/impl.go](../../../pkg/processors/command/impl.go)
+- [x] update: [command/impl.go](../../../pkg/processors/command/impl.go)
   - update: partition recovery to read its checkpoint, retain the preceding event for reapplication, scan only the uncovered PLog tail, or perform a full bootstrap scan when the checkpoint is absent
   - update: merge recovered counters monotonically, reapply the last event, persist affected workspace snapshots first, and advance partition progress only afterward
   - add: lazy workspace recovery from shared snapshots with deduplicated attempts, bounded concurrency, retryable admission, and the existing retained-error retry pattern
   - preserve: authentication-before-recovery, service-context lifetime, stale-attempt protection, and reset-on-persistence-or-projector-failure behavior
 
-- [ ] update: [command/provide.go](../../../pkg/processors/command/provide.go)
+- [x] update: [command/provide.go](../../../pkg/processors/command/provide.go)
   - inject: checkpoint storage and workspace-recovery concurrency into the command service
   - normalize: a zero workspace-recovery concurrency setting to the default of four for backward-compatible zero-valued configurations
   - update: the command pipeline to admit a recovered workspace immediately after partition admission and to enqueue its immutable checkpoint only after the complete store path succeeds
   - update: service shutdown to stop and join checkpoint and recovery workers before closing shared pipelines
 
-- [ ] update: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
+- [x] update: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
   - extend: deterministic recovery controls to address partition and workspace attempts independently
   - add: checkpoint-worker gates, injected storage failures, flush observation, and wait helpers without timing sleeps
 

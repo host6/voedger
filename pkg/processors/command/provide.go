@@ -20,57 +20,73 @@ import (
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/isecrets"
-	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/pipeline"
 )
 
-type workspace struct {
-	NextWLogOffset istructs.Offset
-	idGenerator    istructs.IIDGenerator
-}
+const defaultNumWorkspaceRecoverers uint = 4
 
 type cmdProc struct {
-	partitionManager *partitionManager
-	n10nBroker       in10n.IN10nBroker
-	time             timeu.ITime
-	authenticator    iauthnz.IAuthenticator
-	storeOp          pipeline.ISyncOperator
+	partitionManager  *partitionManager
+	n10nBroker        in10n.IN10nBroker
+	time              timeu.ITime
+	authenticator     iauthnz.IAuthenticator
+	storeOp           pipeline.ISyncOperator
+	checkpointStorage IRecoveryCheckpointStorage
+	checkpoints       *checkpointProjectors
+	numWSRecoverers   uint
+	recoveryHooks     *recoveryHooks
 }
 
-func newPartitionManager(recoveryHooks *partitionRecoveryHooks) *partitionManager {
+func newPartitionManager(recoveryHooks *recoveryHooks) *partitionManager {
 	return &partitionManager{
 		partitions:    map[partitionKey]*partitionState{},
 		recoveryHooks: recoveryHooks,
 	}
 }
 
-type appPartition struct {
-	workspaces     map[istructs.WSID]*workspace
-	nextPLogOffset istructs.Offset
-}
-
 // syncActualizerFactory is a factory(partitionID) that returns a fork operator with a sync actualizer per each application. Inside of an each actualizer - projectors for each application
 func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
-	secretReader isecrets.ISecretReader) ServiceFactory {
-	return provideServiceFactory(appParts, tm, n10nBroker, metrics, vvm, authenticator, secretReader, nopHooks())
+	secretReader isecrets.ISecretReader, checkpointStorage IRecoveryCheckpointStorage, numWSRecoverers uint) ServiceFactory {
+	return provideServiceFactory(appParts, tm, n10nBroker, metrics, vvm, authenticator, secretReader,
+		checkpointStorage, numWSRecoverers, nopHooks())
 }
 
 func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
-	secretReader isecrets.ISecretReader, recoveryHooks *partitionRecoveryHooks) ServiceFactory {
+	secretReader isecrets.ISecretReader, checkpointStorage IRecoveryCheckpointStorage, numWSRecoverers uint,
+	recoveryHooks *recoveryHooks) ServiceFactory {
+	if numWSRecoverers == 0 {
+		numWSRecoverers = defaultNumWorkspaceRecoverers
+	}
+	recoveryHooks = normalizedRecoveryHooks(recoveryHooks)
 	return func(commandsChannel CommandChannel) pipeline.IService {
 		cmdProc := &cmdProc{
-			partitionManager: newPartitionManager(recoveryHooks),
-			n10nBroker:       n10nBroker,
-			time:             tm,
-			authenticator:    authenticator,
+			partitionManager:  newPartitionManager(recoveryHooks),
+			n10nBroker:        n10nBroker,
+			time:              tm,
+			authenticator:     authenticator,
+			checkpointStorage: checkpointStorage,
+			numWSRecoverers:   numWSRecoverers,
+			recoveryHooks:     recoveryHooks,
 		}
 
 		return pipeline.NewService(func(vvmCtx context.Context) {
+			cmdProc.checkpoints = newCheckpointProjectors(vvmCtx, checkpointProjectorsConfig{
+				storage: checkpointStorage,
+				time:    tm,
+				hooks: checkpointProjectorHooks{
+					workspacePersisted: recoveryHooks.workspaceCheckpointPersisted,
+					partitionPersisted: recoveryHooks.partitionCheckpointPersisted,
+					retryScheduled:     recoveryHooks.checkpointRetryScheduled,
+				},
+			})
 			hs := newReusableHostState(vvmCtx, secretReader)
 			cmdProc.storeOp = pipeline.NewSyncPipeline(vvmCtx, "store",
 				pipeline.WireFunc("applyRecords", func(_ context.Context, cmd *cmdWorkpiece) (err error) {
+					if err = cmdProc.beforeStoreStage(cmd, commandStoreStageApplyRecords); err != nil {
+						return err
+					}
 					if cmd.reapplier != nil {
 						err = cmd.reapplier.ApplyRecords()
 					} else {
@@ -83,6 +99,9 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 				}), pipeline.WireSyncOperator("syncProjectorsAndPutWLog", pipeline.ForkOperator(pipeline.ForkSame,
 					pipeline.ForkBranch(
 						pipeline.NewSyncOp(func(ctx context.Context, cmd *cmdWorkpiece) (err error) {
+							if err = cmdProc.beforeStoreStage(cmd, commandStoreStageSyncProjectors); err != nil {
+								return err
+							}
 							cmd.syncProjectorsStart = tm.Now()
 							err = cmd.appPart.DoSyncActualizer(ctx, cmd)
 							cmd.metrics.increase(ProjectorsSeconds, time.Since(cmd.syncProjectorsStart).Seconds())
@@ -97,6 +116,9 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 						}),
 					),
 					pipeline.ForkBranch(pipeline.NewSyncOp(func(_ context.Context, cmd *cmdWorkpiece) (err error) {
+						if err = cmdProc.beforeStoreStage(cmd, commandStoreStageWLog); err != nil {
+							return err
+						}
 						if cmd.reapplier != nil {
 							err = cmd.reapplier.PutWLog()
 						} else {
@@ -121,12 +143,12 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 				pipeline.WireFunc("checkWSActive", checkWSActive),
 				pipeline.WireFunc("getIWorkspace", getIWorkspace),
 				pipeline.WireFunc("getAppPartition", cmdProc.getAppPartition),
+				pipeline.WireFunc("getWorkspace", cmdProc.getWorkspace),
 				pipeline.WireFunc("limitCallRate", limitCallRate),
 				pipeline.WireFunc("getICommand", getICommand),
 				pipeline.WireFunc("authorizeRequest", cmdProc.authorizeRequest),
 				pipeline.WireFunc("unmarshalRequestBody", unmarshalRequestBody),
 				pipeline.WireFunc("checkUnexpectedRequestBodyFields", checkUnexpectedRequestBodyFields),
-				pipeline.WireFunc("getWorkspace", cmdProc.getWorkspace),
 				pipeline.WireFunc("apiv2_denyODocCUD", apiv2_denyODocCUD),
 				pipeline.WireFunc("setPLogOffset", setPLogOffset),
 				pipeline.WireFunc("getRawEventBuilderBuilders", cmdProc.getRawEventBuilder),
@@ -156,6 +178,7 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 				pipeline.WireFunc("putPLog", cmdProc.putPLog),
 				pipeline.WireFunc("logEventAndCUDs", logEventAndCUDs),
 				pipeline.WireFunc("store", cmdProc.storeOp.DoSync),
+				pipeline.WireFunc("enqueueCheckpoint", cmdProc.enqueueCheckpoint),
 				pipeline.WireFunc("notifyAsyncActualizers", cmdProc.notifyAsyncActualizers),
 			)
 			// TODO: later make so that each partition has its own plogOffset, wsid has its own wlogOffset
@@ -196,6 +219,7 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 				case <-vvmCtx.Done():
 				}
 			}
+			cmdProc.checkpoints.shutdown()
 			cmdProc.partitionManager.shutdown()
 			cmdPipeline.Close()
 			cmdProc.storeOp.Close()

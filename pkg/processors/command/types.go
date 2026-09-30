@@ -168,11 +168,35 @@ type partitionKey struct {
 	partitionID istructs.PartitionID
 }
 
+type workspaceKey struct {
+	partitionKey
+	wsid istructs.WSID
+}
+
+type workspace struct {
+	NextWLogOffset istructs.Offset
+	idGenerator    istructs.IIDGenerator
+}
+
+type workspaceState struct {
+	recoveryErr error
+	attempt     uint64
+}
+
+type appPartition struct {
+	mu                  sync.Mutex
+	clusterAppID        istructs.ClusterAppID
+	workspaces          map[istructs.WSID]*workspace
+	workspaceStates     map[istructs.WSID]*workspaceState
+	workspaceRecoverers chan struct{}
+	nextPLogOffset      istructs.Offset
+}
+
 type partitionManager struct {
 	mu            sync.Mutex
 	partitions    map[partitionKey]*partitionState
 	workers       sync.WaitGroup
-	recoveryHooks *partitionRecoveryHooks
+	recoveryHooks *recoveryHooks
 }
 
 type partitionState struct {

@@ -124,7 +124,7 @@ func (s *implRecoveryCheckpointStorage) PutWorkspaceCheckpoint(appID istructs.Cl
 
 func (s *implRecoveryCheckpointStorage) get(pKey []byte) ([]byte, bool, error) {
 	var data []byte
-	ok, err := s.sysVVMStorage.Get(pKey, nil, &data)
+	ok, err := s.sysVVMStorage.Get(pKey, recoveryCheckpointCCols, &data)
 	return data, ok, err
 }
 
@@ -137,7 +137,7 @@ func (s *implRecoveryCheckpointStorage) putMonotonic(pKey, incoming []byte, merg
 			return fmt.Errorf("read current recovery checkpoint: %w", err)
 		}
 		if !ok {
-			inserted, err := s.sysVVMStorage.InsertIfNotExists(pKey, nil, incoming, 0)
+			inserted, err := s.sysVVMStorage.InsertIfNotExists(pKey, recoveryCheckpointCCols, incoming, 0)
 			if err != nil {
 				return fmt.Errorf("insert recovery checkpoint: %w", err)
 			}
@@ -154,7 +154,7 @@ func (s *implRecoveryCheckpointStorage) putMonotonic(pKey, incoming []byte, merg
 		if !changed {
 			return nil
 		}
-		swapped, err := s.sysVVMStorage.CompareAndSwap(pKey, nil, current, merged, 0)
+		swapped, err := s.sysVVMStorage.CompareAndSwap(pKey, recoveryCheckpointCCols, current, merged, 0)
 		if err != nil {
 			return fmt.Errorf("compare and swap recovery checkpoint: %w", err)
 		}
