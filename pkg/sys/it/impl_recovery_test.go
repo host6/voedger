@@ -74,21 +74,6 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			require.True(ok)
 			require.Greater(workspaceBefore.NextWLogOffset, firstVVMWLogOffset)
 			require.Greater(workspaceBefore.NextRecordID, firstVVMMaxRecordID)
-
-			// A delayed writer from the first VVM must not regress checkpoints
-			// after that VVM has stopped and before the next one starts.
-			require.NoError(checkpointStorage.PutPartitionCheckpoint(appID, partitionID,
-				syscheckpoints.PartitionCheckpoint{NextPLogOffset: istructs.FirstOffset}))
-			require.NoError(checkpointStorage.PutWorkspaceCheckpoint(appID, wsid,
-				syscheckpoints.WorkspaceCheckpoint{NextWLogOffset: istructs.FirstOffset, NextRecordID: istructs.FirstUserRecordID}))
-			partitionAfterStaleWrite, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
-			require.NoError(err)
-			require.True(ok)
-			require.Equal(partitionBefore, partitionAfterStaleWrite)
-			workspaceAfterStaleWrite, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
-			require.NoError(err)
-			require.True(ok)
-			require.Equal(workspaceBefore, workspaceAfterStaleWrite)
 		},
 		SecondRun: func(t *testing.T, vit *it.VIT) {
 			require := require.New(t)
@@ -114,18 +99,6 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			require.True(ok)
 			require.Equal(secondVVMWLogOffset+1, workspaceAfterHandoff.NextWLogOffset)
 			require.Equal(secondVVMMaxRecordID+1, workspaceAfterHandoff.NextRecordID)
-
-			// Snapshots retained by the first VVM remain harmless after handoff.
-			require.NoError(checkpointStorage.PutPartitionCheckpoint(appID, partitionID, partitionBefore))
-			require.NoError(checkpointStorage.PutWorkspaceCheckpoint(appID, wsid, workspaceBefore))
-			actualPartition, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
-			require.NoError(err)
-			require.True(ok)
-			require.Equal(partitionAfterHandoff, actualPartition)
-			actualWorkspace, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
-			require.NoError(err)
-			require.True(ok)
-			require.Equal(workspaceAfterHandoff, actualWorkspace)
 		},
 	})
 }

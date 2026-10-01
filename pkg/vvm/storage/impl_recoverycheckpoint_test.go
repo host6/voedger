@@ -8,7 +8,6 @@ package storage
 import (
 	"encoding/binary"
 	"encoding/json"
-	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -147,7 +146,7 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 	})
 }
 
-func TestRecoveryCheckpointStorageMonotonicWrites(t *testing.T) {
+func TestRecoveryCheckpointStorageOverwritesWithProvidedValues(t *testing.T) {
 	require := require.New(t)
 	_, checkpoints := newRecoveryCheckpointStorageForTest(t)
 
@@ -157,63 +156,25 @@ func TestRecoveryCheckpointStorageMonotonicWrites(t *testing.T) {
 		wsid        = istructs.WSID(3001)
 	)
 
-	partitionOffsets := []istructs.Offset{150, 100, 175, 125, 200, 50}
-	workspaceValues := []recoverycheckpoints.WorkspaceCheckpoint{
-		{NextWLogOffset: 40, NextRecordID: 400},
-		{NextWLogOffset: 50, NextRecordID: 300},
-		{NextWLogOffset: 30, NextRecordID: 500},
-		{NextWLogOffset: 45, NextRecordID: 450},
-	}
-
-	var wg sync.WaitGroup
-	errs := make(chan error, len(partitionOffsets)+len(workspaceValues))
-	for _, offset := range partitionOffsets {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			errs <- checkpoints.PutPartitionCheckpoint(appID, partitionID,
-				recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: offset})
-		}()
-	}
-	for _, checkpoint := range workspaceValues {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			errs <- checkpoints.PutWorkspaceCheckpoint(appID, wsid, checkpoint)
-		}()
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		require.NoError(err)
-	}
-
-	partition, ok, err := checkpoints.GetPartitionCheckpoint(appID, partitionID)
-	require.NoError(err)
-	require.True(ok)
-	require.Equal(istructs.Offset(200), partition.NextPLogOffset)
-
-	workspace, ok, err := checkpoints.GetWorkspaceCheckpoint(appID, wsid)
-	require.NoError(err)
-	require.True(ok)
-	require.Equal(istructs.Offset(50), workspace.NextWLogOffset)
-	require.Equal(istructs.RecordID(500), workspace.NextRecordID)
-
-	// Simulate an overlapping VVM finishing after a newer writer. Each field is
-	// merged by maximum, so stale snapshots cannot regress shared progress.
 	require.NoError(checkpoints.PutPartitionCheckpoint(appID, partitionID,
-		recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: 199}))
+		recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: 200}))
 	require.NoError(checkpoints.PutWorkspaceCheckpoint(appID, wsid,
-		recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: 49, NextRecordID: 499}))
+		recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: 50, NextRecordID: 500}))
 
-	partition, ok, err = checkpoints.GetPartitionCheckpoint(appID, partitionID)
+	partition := recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: 100}
+	workspace := recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: 40, NextRecordID: 400}
+	require.NoError(checkpoints.PutPartitionCheckpoint(appID, partitionID, partition))
+	require.NoError(checkpoints.PutWorkspaceCheckpoint(appID, wsid, workspace))
+
+	actualPartition, ok, err := checkpoints.GetPartitionCheckpoint(appID, partitionID)
 	require.NoError(err)
 	require.True(ok)
-	require.Equal(istructs.Offset(200), partition.NextPLogOffset)
-	workspace, ok, err = checkpoints.GetWorkspaceCheckpoint(appID, wsid)
+	require.Equal(partition, actualPartition)
+
+	actualWorkspace, ok, err := checkpoints.GetWorkspaceCheckpoint(appID, wsid)
 	require.NoError(err)
 	require.True(ok)
-	require.Equal(recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: 50, NextRecordID: 500}, workspace)
+	require.Equal(workspace, actualWorkspace)
 }
 
 func TestRecoveryCheckpointStorageCoexistsWithLegacyCells(t *testing.T) {

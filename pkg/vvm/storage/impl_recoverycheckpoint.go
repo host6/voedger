@@ -51,23 +51,11 @@ func (s *implRecoveryCheckpointStorage) GetPartitionCheckpoint(appID istructs.Cl
 func (s *implRecoveryCheckpointStorage) PutPartitionCheckpoint(appID istructs.ClusterAppID,
 	partitionID istructs.PartitionID, checkpoint checkpoints.PartitionCheckpoint) error {
 	pKey := partitionRecoveryCheckpointPKey(appID, partitionID)
-	incoming, err := encodePartitionCheckpoint(checkpoint, nil)
+	data, err := encodePartitionCheckpoint(checkpoint, nil)
 	if err != nil {
 		return fmt.Errorf("encode partition recovery checkpoint: %w", err)
 	}
-	err = s.putMonotonic(pKey, incoming, func(current []byte) ([]byte, bool, error) {
-		stored, fields, err := decodePartitionCheckpoint(current)
-		if err != nil {
-			return nil, false, err
-		}
-		if stored.NextPLogOffset >= checkpoint.NextPLogOffset {
-			return nil, false, nil
-		}
-		stored.NextPLogOffset = checkpoint.NextPLogOffset
-		merged, err := encodePartitionCheckpoint(stored, fields)
-		return merged, true, err
-	})
-	if err != nil {
+	if err := s.sysVVMStorage.Put(pKey, recoveryCheckpointCCols, data); err != nil {
 		return fmt.Errorf("put partition recovery checkpoint: %w", err)
 	}
 	return nil
@@ -94,29 +82,11 @@ func (s *implRecoveryCheckpointStorage) GetWorkspaceCheckpoint(appID istructs.Cl
 func (s *implRecoveryCheckpointStorage) PutWorkspaceCheckpoint(appID istructs.ClusterAppID,
 	wsid istructs.WSID, checkpoint checkpoints.WorkspaceCheckpoint) error {
 	pKey := workspaceRecoveryCheckpointPKey(appID, wsid)
-	incoming, err := encodeWorkspaceCheckpoint(checkpoint, nil)
+	data, err := encodeWorkspaceCheckpoint(checkpoint, nil)
 	if err != nil {
 		return fmt.Errorf("encode workspace recovery checkpoint: %w", err)
 	}
-	err = s.putMonotonic(pKey, incoming, func(current []byte) ([]byte, bool, error) {
-		stored, fields, err := decodeWorkspaceCheckpoint(current)
-		if err != nil {
-			return nil, false, err
-		}
-		merged := stored
-		if checkpoint.NextWLogOffset > merged.NextWLogOffset {
-			merged.NextWLogOffset = checkpoint.NextWLogOffset
-		}
-		if checkpoint.NextRecordID > merged.NextRecordID {
-			merged.NextRecordID = checkpoint.NextRecordID
-		}
-		if merged == stored {
-			return nil, false, nil
-		}
-		encoded, err := encodeWorkspaceCheckpoint(merged, fields)
-		return encoded, true, err
-	})
-	if err != nil {
+	if err := s.sysVVMStorage.Put(pKey, recoveryCheckpointCCols, data); err != nil {
 		return fmt.Errorf("put workspace recovery checkpoint: %w", err)
 	}
 	return nil
@@ -126,42 +96,6 @@ func (s *implRecoveryCheckpointStorage) get(pKey []byte) ([]byte, bool, error) {
 	var data []byte
 	ok, err := s.sysVVMStorage.Get(pKey, recoveryCheckpointCCols, &data)
 	return data, ok, err
-}
-
-type mergeCheckpointFunc func(current []byte) (merged []byte, changed bool, err error)
-
-func (s *implRecoveryCheckpointStorage) putMonotonic(pKey, incoming []byte, merge mergeCheckpointFunc) error {
-	for {
-		current, ok, err := s.get(pKey)
-		if err != nil {
-			return fmt.Errorf("read current recovery checkpoint: %w", err)
-		}
-		if !ok {
-			inserted, err := s.sysVVMStorage.InsertIfNotExists(pKey, recoveryCheckpointCCols, incoming, 0)
-			if err != nil {
-				return fmt.Errorf("insert recovery checkpoint: %w", err)
-			}
-			if inserted {
-				return nil
-			}
-			continue
-		}
-
-		merged, changed, err := merge(current)
-		if err != nil {
-			return fmt.Errorf("merge recovery checkpoint: %w", err)
-		}
-		if !changed {
-			return nil
-		}
-		swapped, err := s.sysVVMStorage.CompareAndSwap(pKey, recoveryCheckpointCCols, current, merged, 0)
-		if err != nil {
-			return fmt.Errorf("compare and swap recovery checkpoint: %w", err)
-		}
-		if swapped {
-			return nil
-		}
-	}
 }
 
 func partitionRecoveryCheckpointPKey(appID istructs.ClusterAppID, partitionID istructs.PartitionID) []byte {

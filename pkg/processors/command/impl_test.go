@@ -655,7 +655,7 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 		for _, checkpointState := range []string{"missing", "zero"} {
 			t.Run(checkpointState, func(t *testing.T) {
 				require := require.New(t)
-				storage := newMonotonicCheckpointStorage()
+				storage := newTestCheckpointStorage()
 				app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
 				defer tearDown(app)
 
@@ -679,7 +679,7 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 
 	t.Run("usable checkpoint scans only preceding event and uncovered tail", func(t *testing.T) {
 		require := require.New(t)
-		storage := newMonotonicCheckpointStorage()
+		storage := newTestCheckpointStorage()
 		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
 		defer tearDown(app)
 
@@ -724,7 +724,7 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 
 	t.Run("up-to-date checkpoint still reapplies preceding last event", func(t *testing.T) {
 		require := require.New(t)
-		storage := newMonotonicCheckpointStorage()
+		storage := newTestCheckpointStorage()
 		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
 		defer tearDown(app)
 
@@ -761,7 +761,7 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 
 	t.Run("recovered workspaces are durable before partition progress is published", func(t *testing.T) {
 		require := require.New(t)
-		storage := newMonotonicCheckpointStorage()
+		storage := newTestCheckpointStorage()
 		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
 		defer tearDown(app)
 		storage.resetWrites()
@@ -860,10 +860,10 @@ func TestLazyWorkspaceRecovery(t *testing.T) {
 	})
 }
 
-func setUpLazyWorkspaceRecoveryApp(t *testing.T, workers uint, lazyWSIDs ...istructs.WSID) (testApp, *monotonicCheckpointStorage) {
+func setUpLazyWorkspaceRecoveryApp(t *testing.T, workers uint, lazyWSIDs ...istructs.WSID) (testApp, *testCheckpointStorage) {
 	t.Helper()
 	require := require.New(t)
-	storage := newMonotonicCheckpointStorage()
+	storage := newTestCheckpointStorage()
 	allWSIDs := append(append([]istructs.WSID(nil), lazyWSIDs...), 99)
 	app := setUpRecoveryTestApp(t,
 		withCheckpointStorage(storage),
@@ -1354,7 +1354,7 @@ var (
 func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istructsmem.AppConfigType), optionFuncs ...testAppOption) testApp {
 	require := require.New(t)
 	options := testAppOptions{
-		checkpointStorage: newMonotonicCheckpointStorage(),
+		checkpointStorage: newTestCheckpointStorage(),
 		workspaceIDs:      []istructs.WSID{1, 2},
 	}
 	for _, optionFunc := range optionFuncs {

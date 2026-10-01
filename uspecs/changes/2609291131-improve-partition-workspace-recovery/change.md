@@ -38,15 +38,15 @@ Decisions:
 - Store extensible JSON checkpoints in shared system-VVM storage: a next-PLog-offset snapshot keyed by application and partition, and a next-WLog-offset plus next-record-ID snapshot keyed by application and workspace. Reuse the retained sequence-storage key prefixes with a dedicated nonzero four-byte clustering key so legacy binary cells remain untouched and distinguishable while the partition key can host additional cell types later.
 - Capture immutable checkpoint snapshots from command-processor memory only after the command's PLog, records, synchronous projections, and WLog have succeeded. Expose the record-ID generator's last allocated or synchronized value for this purpose instead of reconstructing outgoing snapshots from events or reviving the removed generic sequencer.
 - Use two built-in asynchronous checkpoint projectors owned by the command service rather than schema-defined async actualizers: persist workspace snapshots for every successful operation, and persist partition progress after each 100 covered events or one minute, whichever comes first.
-- Treat the partition checkpoint as a durability barrier: never advance it past an event until that event's workspace snapshot is durable. Use conditional monotonic updates that merge next offsets and record IDs by maximum so delayed work or overlapping VVM handoff cannot regress shared state.
+- Treat the partition checkpoint as a durability barrier: never advance it past an event until that event's workspace snapshot is durable. Persist each partition and workspace checkpoint with an unconditional last-write-wins update; checkpoint producers are responsible for issuing values in order.
 - Start partition recovery from the persisted next PLog offset; when it is beyond the first offset, read the immediately preceding event as the initial reapplication candidate, then scan only the uncheckpointed tail and replace the candidate with any newer tail event. Merge tail values with workspace snapshots, reapply the resulting last event, and then save affected workspace snapshots before advancing partition progress. When the partition checkpoint is missing or zero, perform one full-PLog bootstrap scan and seed both checkpoint levels.
 - Publish workspaces reconstructed by the partition tail immediately; recover all other workspaces lazily from their snapshots. Workspace attempts follow the existing recovery lifecycle for deduplication, service-lifetime cancellation, retained failures, and on-demand retry.
 - Keep checkpoint failures off the successful command response path: retry and report them operationally without advancing the partition barrier. On orderly shutdown, stop accepting snapshots, attempt one final ordered flush, cancel any remaining retries through the service context, and join checkpoint and recovery workers before releasing command-service resources.
-- Verify crash boundaries, stale-writer ordering, checkpoint bootstrap, bounded workspace concurrency, and shared-storage recovery across multiple VVM instances with deterministic gates and injected storage failures.
+- Verify crash boundaries, checkpoint bootstrap, bounded workspace concurrency, and shared-storage recovery across sequential VVM instances with deterministic gates and injected storage failures.
 
 Assumptions:
 
-- Command routing maintains at most one active command writer for an application partition; monotonic conditional checkpoint updates protect state during handoff or transient overlap but do not provide distributed command serialization.
+- Command routing and checkpoint-projector shutdown maintain at most one checkpoint writer for an application partition and ensure its writes complete before handoff. A lower checkpoint cannot be written after a newer checkpoint, so storage does not validate checkpoint ordering.
 
 Out of scope:
 
@@ -75,8 +75,8 @@ References (external):
 
 - [x] create: [command/checkpoints_test.go](../../../pkg/processors/command/checkpoints_test.go)
   - exercise the asynchronous workspace and partition checkpoint workers with deterministic time, storage failures, and queue gates
-  - verify per-operation workspace writes, the 100-event/one-minute partition cadence, workspace-before-partition ordering, monotonic stale-write handling, retries, and the final shutdown flush
-  - cover stale snapshots and overlapping writers without allowing offsets or record IDs to regress
+  - verify per-operation workspace writes, the 100-event/one-minute partition cadence, workspace-before-partition ordering, retries, and the final shutdown flush
+  - use last-write-wins test storage so command tests observe the values provided by checkpoint producers without storage-side merging
 
 - [x] update: [command/impl_test.go](../../../pkg/processors/command/impl_test.go)
   - update: recovery coverage for a full bootstrap scan when the partition checkpoint is missing or zero and a tail-only scan when it contains a usable next offset
@@ -88,9 +88,9 @@ References (external):
   - add: coverage that PLog, record-application, synchronous-projector, and WLog failures never enqueue a workspace checkpoint or advance the partition barrier
 
 - [x] create: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
-  - exercise missing, valid, malformed, and concurrent partition/workspace checkpoint reads and writes
+  - exercise missing, valid, malformed, and sequential partition/workspace checkpoint reads and writes
   - verify the JSON payloads and application/partition/workspace key isolation
-  - prove monotonic conditional updates and coexistence with legacy binary cells under the retained key prefixes
+  - prove last-write-wins overwrite behavior and coexistence with legacy binary cells under the retained key prefixes
 
 - [x] update: [istructsmem/idgenerator_test.go](../../../pkg/istructsmem/idgenerator_test.go)
   - add: coverage for reading the last record ID after initialization, allocation, and synchronization updates through the existing generator contract
@@ -100,7 +100,7 @@ References (external):
 
 - [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
   - update: the shared-storage restart scenario to exercise checkpoint bootstrap followed by recovery on another VVM instance
-  - add: assertions that offsets and record IDs remain continuous across VVM handoff and stale checkpoint writes cannot overwrite newer shared state
+  - add: assertions that offsets and record IDs remain continuous across the ordered VVM handoff
 
 ### Checkpoint contracts and storage
 
@@ -117,7 +117,7 @@ References (external):
 - [x] create: [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
   - system-VVM storage adapter for partition and workspace recovery checkpoints using the retained prefixes and a dedicated nonzero four-byte clustering key
   - extensible JSON values containing the next PLog offset or the next WLog offset and record ID
-  - monotonic insert/compare-and-swap loops that merge each next value by maximum and preserve legacy binary cells
+  - unconditional last-write-wins updates that store the checkpoint values provided by the single ordered writer and preserve legacy binary cells
   - report missing values as absent for bootstrap recovery, but return malformed JSON as an operational recovery error
 
 - [x] update: [storage/provide.go](../../../pkg/vvm/storage/provide.go)
