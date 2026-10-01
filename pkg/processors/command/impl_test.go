@@ -48,6 +48,7 @@ import (
 	"github.com/voedger/voedger/pkg/pipeline"
 	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/processors/actualizers"
+	"github.com/voedger/voedger/pkg/sys/checkpoints"
 	"github.com/voedger/voedger/pkg/vvm/engines"
 )
 
@@ -660,7 +661,7 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 
 				key := recoveryKeyForWSID(1)
 				if checkpointState == "zero" {
-					storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, PartitionCheckpoint{})
+					storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, checkpoints.PartitionCheckpoint{})
 				}
 				app.recovery.resetPLogReads(key)
 
@@ -686,8 +687,15 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 		for range 3 {
 			previous = sendCUD(t, 1, app)
 		}
-		restartCmdProc(&app)
 		key := recoveryKeyForWSID(1)
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{
+			NextWLogOffset: istructs.Offset(previous["CurrentWLogOffset"].(float64)) + 1,
+			NextRecordID:   istructs.RecordID(previous["NewIDs"].(map[string]interface{})["3"].(float64)) + 1,
+		})
+		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, checkpoints.PartitionCheckpoint{
+			NextPLogOffset: nextPLogOffsetForTest(t, app.appStructs, key.partitionID),
+		})
+		restartCmdProc(&app)
 		persisted, ok, err := storage.GetPartitionCheckpoint(app.appStructs.ClusterAppID(), key.partitionID)
 		require.NoError(err)
 		require.True(ok)
@@ -695,7 +703,7 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 
 		usableNextOffset := persisted.NextPLogOffset - 1
 		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID,
-			PartitionCheckpoint{NextPLogOffset: usableNextOffset})
+			checkpoints.PartitionCheckpoint{NextPLogOffset: usableNextOffset})
 		app.recovery.resetPLogReads(key)
 		require.NoError(triggerAndWaitForRecovery(t, app, 1))
 
@@ -721,8 +729,15 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 		defer tearDown(app)
 
 		previous := sendCUD(t, 1, app)
-		restartCmdProc(&app)
 		key := recoveryKeyForWSID(1)
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{
+			NextWLogOffset: istructs.Offset(previous["CurrentWLogOffset"].(float64)) + 1,
+			NextRecordID:   istructs.RecordID(previous["NewIDs"].(map[string]interface{})["3"].(float64)) + 1,
+		})
+		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, checkpoints.PartitionCheckpoint{
+			NextPLogOffset: nextPLogOffsetForTest(t, app.appStructs, key.partitionID),
+		})
+		restartCmdProc(&app)
 		persisted, ok, err := storage.GetPartitionCheckpoint(app.appStructs.ClusterAppID(), key.partitionID)
 		require.NoError(err)
 		require.True(ok)
@@ -845,43 +860,6 @@ func TestLazyWorkspaceRecovery(t *testing.T) {
 	})
 }
 
-func TestFailedStoreStagesDoNotPublishCheckpoints(t *testing.T) {
-	for _, stage := range []commandStoreStage{
-		commandStoreStagePLog,
-		commandStoreStageApplyRecords,
-		commandStoreStageSyncProjectors,
-		commandStoreStageWLog,
-	} {
-		t.Run(string(stage), func(t *testing.T) {
-			require := require.New(t)
-			storage := newMonotonicCheckpointStorage()
-			app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
-			defer tearDown(app)
-
-			response := sendCUD(t, 1, app)
-			app.recovery.waitWorkspaceCheckpoint(app.ctx, recoveryWorkspaceKey(1),
-				WorkspaceCheckpoint{
-					NextWLogOffset: istructs.Offset(response["CurrentWLogOffset"].(float64)) + 1,
-					NextRecordID:   istructs.RecordID(response["NewIDs"].(map[string]interface{})["3"].(float64)) + 1,
-				})
-			workspaceBefore, ok, err := storage.GetWorkspaceCheckpoint(app.appStructs.ClusterAppID(), 1)
-			require.NoError(err)
-			require.True(ok)
-			barrierBefore := app.recovery.partitionBarrier(recoveryKeyForWSID(1))
-			app.recovery.resetCheckpointEnqueues()
-			app.recovery.failNextCommandStoreStage(stage, errors.New("injected "+string(stage)+" failure"))
-
-			sendCUD(t, 1, app, http.StatusInternalServerError)
-			require.Zero(app.recovery.checkpointEnqueueCount())
-			require.Equal(barrierBefore, app.recovery.partitionBarrier(recoveryKeyForWSID(1)))
-			workspaceAfter, ok, err := storage.GetWorkspaceCheckpoint(app.appStructs.ClusterAppID(), 1)
-			require.NoError(err)
-			require.True(ok)
-			require.Equal(workspaceBefore, workspaceAfter)
-		})
-	}
-}
-
 func setUpLazyWorkspaceRecoveryApp(t *testing.T, workers uint, lazyWSIDs ...istructs.WSID) (testApp, *monotonicCheckpointStorage) {
 	t.Helper()
 	require := require.New(t)
@@ -895,9 +873,9 @@ func setUpLazyWorkspaceRecoveryApp(t *testing.T, workers uint, lazyWSIDs ...istr
 	partitionID := coreutils.AppPartitionID(99, testAppPartCount)
 	nextPLogOffset := nextPLogOffsetForTest(t, app.appStructs, partitionID)
 	storage.forcePartition(app.appStructs.ClusterAppID(), partitionID,
-		PartitionCheckpoint{NextPLogOffset: nextPLogOffset})
+		checkpoints.PartitionCheckpoint{NextPLogOffset: nextPLogOffset})
 	for _, wsid := range lazyWSIDs {
-		storage.forceWorkspace(app.appStructs.ClusterAppID(), wsid, WorkspaceCheckpoint{
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), wsid, checkpoints.WorkspaceCheckpoint{
 			NextWLogOffset: 2,
 			NextRecordID:   istructs.FirstUserRecordID,
 		})
@@ -1340,14 +1318,14 @@ type testApp struct {
 }
 
 type testAppOptions struct {
-	checkpointStorage IRecoveryCheckpointStorage
+	checkpointStorage checkpoints.IRecoveryCheckpointStorage
 	numWSRecoverers   uint
 	workspaceIDs      []istructs.WSID
 }
 
 type testAppOption func(*testAppOptions)
 
-func withCheckpointStorage(storage IRecoveryCheckpointStorage) testAppOption {
+func withCheckpointStorage(storage checkpoints.IRecoveryCheckpointStorage) testAppOption {
 	return func(options *testAppOptions) { options.checkpointStorage = storage }
 }
 

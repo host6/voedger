@@ -16,7 +16,7 @@ import (
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	"github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
-	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
+	recoverycheckpoints "github.com/voedger/voedger/pkg/sys/checkpoints"
 )
 
 func TestRecoveryCheckpointStorage(t *testing.T) {
@@ -44,8 +44,8 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 	})
 
 	t.Run("valid checkpoints round trip as JSON", func(t *testing.T) {
-		partition := commandprocessor.PartitionCheckpoint{NextPLogOffset: 42}
-		workspace := commandprocessor.WorkspaceCheckpoint{NextWLogOffset: 43, NextRecordID: 44}
+		partition := recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: 42}
+		workspace := recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: 43, NextRecordID: 44}
 
 		require.NoError(checkpoints.PutPartitionCheckpoint(appID, partitionID, partition))
 		require.NoError(checkpoints.PutWorkspaceCheckpoint(appID, wsid, workspace))
@@ -81,7 +81,7 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 		}
 		for _, tc := range partitionCases {
 			require.NoError(checkpoints.PutPartitionCheckpoint(tc.appID, tc.partitionID,
-				commandprocessor.PartitionCheckpoint{NextPLogOffset: tc.offset}))
+				recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: tc.offset}))
 		}
 		for _, tc := range partitionCases {
 			actual, ok, err := checkpoints.GetPartitionCheckpoint(tc.appID, tc.partitionID)
@@ -101,7 +101,7 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 		}
 		for _, tc := range workspaceCases {
 			require.NoError(checkpoints.PutWorkspaceCheckpoint(tc.appID, tc.wsid,
-				commandprocessor.WorkspaceCheckpoint{NextWLogOffset: istructs.Offset(tc.next), NextRecordID: tc.next}))
+				recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: istructs.Offset(tc.next), NextRecordID: tc.next}))
 		}
 		for _, tc := range workspaceCases {
 			actual, ok, err := checkpoints.GetWorkspaceCheckpoint(tc.appID, tc.wsid)
@@ -139,11 +139,11 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 		partition, ok, err := checkpoints.GetPartitionCheckpoint(appID, futurePartitionID)
 		require.NoError(err)
 		require.True(ok)
-		require.Equal(commandprocessor.PartitionCheckpoint{NextPLogOffset: 91}, partition)
+		require.Equal(recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: 91}, partition)
 		workspace, ok, err := checkpoints.GetWorkspaceCheckpoint(appID, futureWSID)
 		require.NoError(err)
 		require.True(ok)
-		require.Equal(commandprocessor.WorkspaceCheckpoint{NextWLogOffset: 92, NextRecordID: 93}, workspace)
+		require.Equal(recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: 92, NextRecordID: 93}, workspace)
 	})
 }
 
@@ -158,7 +158,7 @@ func TestRecoveryCheckpointStorageMonotonicWrites(t *testing.T) {
 	)
 
 	partitionOffsets := []istructs.Offset{150, 100, 175, 125, 200, 50}
-	workspaceValues := []commandprocessor.WorkspaceCheckpoint{
+	workspaceValues := []recoverycheckpoints.WorkspaceCheckpoint{
 		{NextWLogOffset: 40, NextRecordID: 400},
 		{NextWLogOffset: 50, NextRecordID: 300},
 		{NextWLogOffset: 30, NextRecordID: 500},
@@ -172,7 +172,7 @@ func TestRecoveryCheckpointStorageMonotonicWrites(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			errs <- checkpoints.PutPartitionCheckpoint(appID, partitionID,
-				commandprocessor.PartitionCheckpoint{NextPLogOffset: offset})
+				recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: offset})
 		}()
 	}
 	for _, checkpoint := range workspaceValues {
@@ -202,9 +202,9 @@ func TestRecoveryCheckpointStorageMonotonicWrites(t *testing.T) {
 	// Simulate an overlapping VVM finishing after a newer writer. Each field is
 	// merged by maximum, so stale snapshots cannot regress shared progress.
 	require.NoError(checkpoints.PutPartitionCheckpoint(appID, partitionID,
-		commandprocessor.PartitionCheckpoint{NextPLogOffset: 199}))
+		recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: 199}))
 	require.NoError(checkpoints.PutWorkspaceCheckpoint(appID, wsid,
-		commandprocessor.WorkspaceCheckpoint{NextWLogOffset: 49, NextRecordID: 499}))
+		recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: 49, NextRecordID: 499}))
 
 	partition, ok, err = checkpoints.GetPartitionCheckpoint(appID, partitionID)
 	require.NoError(err)
@@ -213,7 +213,7 @@ func TestRecoveryCheckpointStorageMonotonicWrites(t *testing.T) {
 	workspace, ok, err = checkpoints.GetWorkspaceCheckpoint(appID, wsid)
 	require.NoError(err)
 	require.True(ok)
-	require.Equal(commandprocessor.WorkspaceCheckpoint{NextWLogOffset: 50, NextRecordID: 500}, workspace)
+	require.Equal(recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: 50, NextRecordID: 500}, workspace)
 }
 
 func TestRecoveryCheckpointStorageCoexistsWithLegacyCells(t *testing.T) {
@@ -235,9 +235,9 @@ func TestRecoveryCheckpointStorageCoexistsWithLegacyCells(t *testing.T) {
 	require.NoError(sysVVMStorage.Put(workspacePKey, legacyWorkspaceCCols, legacyWorkspaceValue))
 
 	require.NoError(checkpoints.PutPartitionCheckpoint(appID, partitionID,
-		commandprocessor.PartitionCheckpoint{NextPLogOffset: 81}))
+		recoverycheckpoints.PartitionCheckpoint{NextPLogOffset: 81}))
 	require.NoError(checkpoints.PutWorkspaceCheckpoint(appID, wsid,
-		commandprocessor.WorkspaceCheckpoint{NextWLogOffset: 82, NextRecordID: 83}))
+		recoverycheckpoints.WorkspaceCheckpoint{NextWLogOffset: 82, NextRecordID: 83}))
 
 	actualLegacyPartition := []byte{}
 	ok, err := sysVVMStorage.Get(partitionPKey, legacyPartitionCCols, &actualLegacyPartition)
@@ -277,7 +277,7 @@ func assertCheckpointJSON(t *testing.T, storage ISysVvmStorage, pKey []byte, exp
 	require.Equal(expected, actual)
 }
 
-func newRecoveryCheckpointStorageForTest(t *testing.T) (ISysVvmStorage, commandprocessor.IRecoveryCheckpointStorage) {
+func newRecoveryCheckpointStorageForTest(t *testing.T) (ISysVvmStorage, recoverycheckpoints.IRecoveryCheckpointStorage) {
 	t.Helper()
 	appStorageProvider := provider.Provide(mem.Provide(testingu.MockTime))
 	sysVVMStorage, err := appStorageProvider.AppStorage(istructs.AppQName_sys_vvm)

@@ -428,6 +428,8 @@ func (c *buildContext) projectors() error {
 				types := []appdef.TypeKind{}
 				for _, n := range trigger.QNames {
 					switch n.qName {
+					case istructs.QNameCommand:
+						types = append(types, appdef.TypeKind_Command)
 					case istructs.QNameCRecord:
 						types = append(types, appdef.TypeKind_CDoc, appdef.TypeKind_CRecord)
 					case istructs.QNameWRecord:

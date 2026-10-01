@@ -74,6 +74,7 @@ import (
 	commandprocessor "github.com/voedger/voedger/pkg/processors/command"
 	queryprocessor "github.com/voedger/voedger/pkg/processors/query"
 	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys/checkpoints"
 	"github.com/voedger/voedger/pkg/sys/invite"
 	"github.com/voedger/voedger/pkg/sys/sysprovide"
 	dbcertcache "github.com/voedger/voedger/pkg/vvm/db_cert_cache"
@@ -229,6 +230,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		blobprocessor.NewIRequestHandler,
 		provideIVVMAppTTLStorage,
 		storage.NewElectionsTTLStorage,
+		storage.NewRecoveryCheckpointStorage,
 		provideStateOpts,
 		n10n.NewIN10NProc,
 		provideHTTPClient,
@@ -249,6 +251,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 			"EmailSender",
 			"SecretsReader",
 			"SequencesTrustLevel",
+			"NumWSRecoverers",
 			"SchemasCache",
 			"BusyProcessorLogMode",
 			"PolicyOptsForFederationWithRetry",
@@ -376,10 +379,11 @@ func provideAppsExtensionPoints(vvmConfig *VVMConfig) map[appdef.AppQName]extens
 
 func provideStatelessResources(cfgs AppConfigsTypeEmpty, vvmCfg *VVMConfig, appEPs map[appdef.AppQName]extensionpoints.IExtensionPoint,
 	buildInfo *debug.BuildInfo, sp istorage.IAppStorageProvider, itokens itokens.ITokens, federation federation.IFederation,
-	asp istructs.IAppStructsProvider, atf payloads.IAppTokensFactory, postWireInterfacePtrs btstrp.PostWireInterfacePtrs) istructsmem.IStatelessResources {
+	asp istructs.IAppStructsProvider, atf payloads.IAppTokensFactory, postWireInterfacePtrs btstrp.PostWireInterfacePtrs,
+	checkpointStorage checkpoints.IRecoveryCheckpointStorage) istructsmem.IStatelessResources {
 	ssr := istructsmem.NewStatelessResources()
 	sysprovide.ProvideStateless(ssr, vvmCfg.SMTPConfig, appEPs, buildInfo, sp, vvmCfg.WSPostInitFunc, vvmCfg.Time, itokens, federation,
-		asp, atf, postWireInterfacePtrs.BlobHandler, postWireInterfacePtrs.RequestSender)
+		asp, atf, postWireInterfacePtrs.BlobHandler, postWireInterfacePtrs.RequestSender, checkpointStorage)
 	return ssr
 }
 

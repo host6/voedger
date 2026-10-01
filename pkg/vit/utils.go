@@ -465,10 +465,38 @@ func getWorkspaceInitAwaitTimeout() time.Duration {
 	return defaultWorkspaceAwaitTimeout
 }
 
-// calls testBeforeRestart() then stops then VIT, then launches new VIT on the same config but with storage from previous VIT
-// then calls testAfterRestart() with the new VIT
-// cfg must be owned
-func TestRestartPreservingStorage(t *testing.T, cfg *VITConfig, testBeforeRestart, testAfterRestart func(t *testing.T, vit *VIT)) {
+// RestartStorage provides test-friendly access to the storage shared by both
+// VVM runs.
+type RestartStorage interface {
+	AppStorage(t testing.TB, appQName appdef.AppQName) istorage.IAppStorage
+}
+
+// RestartPreservingStorageHooks defines actions at the running and stopped
+// phases of two VVM instances that share storage.
+type RestartPreservingStorageHooks struct {
+	FirstRun        func(t *testing.T, vit *VIT)
+	AfterFirstStop  func(t *testing.T, storage RestartStorage)
+	SecondRun       func(t *testing.T, vit *VIT)
+	AfterSecondStop func(t *testing.T, storage RestartStorage)
+}
+
+type restartStorage struct {
+	provider istorage.IAppStorageProvider
+}
+
+func (s restartStorage) AppStorage(t testing.TB, appQName appdef.AppQName) istorage.IAppStorage {
+	t.Helper()
+	storage, err := s.provider.AppStorage(appQName)
+	require.NoError(t, err)
+	return storage
+}
+
+// TestRestartPreservingStorageWithHooks runs two VVM instances over the same
+// storage. Stop hooks run after the respective VVM has fully stopped, so they
+// can inspect stable storage before the next lifecycle phase starts.
+// cfg must be owned.
+func TestRestartPreservingStorageWithHooks(t *testing.T, cfg *VITConfig, hooks RestartPreservingStorageHooks) {
+	t.Helper()
 	require.False(t, cfg.isShared, "storage restart could be done on Own VIT Config only")
 	var sharedStorageFactory istorage.IAppStorageFactory
 	suffix := provider.NewTestKeyspaceIsolationSuffix()
@@ -486,11 +514,40 @@ func TestRestartPreservingStorage(t *testing.T, cfg *VITConfig, testBeforeRestar
 	func() {
 		vit := NewVIT(t, cfg)
 		defer vit.TearDown()
-		testBeforeRestart(t, vit)
+		if hooks.FirstRun != nil {
+			hooks.FirstRun(t, vit)
+		}
 	}()
-	vit := NewVIT(t, cfg)
-	defer vit.TearDown()
-	testAfterRestart(t, vit)
+
+	storage := restartStorage{
+		provider: provider.Provide(sharedStorageFactory, suffix),
+	}
+	if hooks.AfterFirstStop != nil {
+		hooks.AfterFirstStop(t, storage)
+	}
+
+	func() {
+		vit := NewVIT(t, cfg)
+		defer vit.TearDown()
+		if hooks.SecondRun != nil {
+			hooks.SecondRun(t, vit)
+		}
+	}()
+
+	if hooks.AfterSecondStop != nil {
+		hooks.AfterSecondStop(t, storage)
+	}
+}
+
+// TestRestartPreservingStorage calls testBeforeRestart, stops the VVM, then
+// calls testAfterRestart with a new VVM backed by the preserved storage.
+// cfg must be owned.
+func TestRestartPreservingStorage(t *testing.T, cfg *VITConfig, testBeforeRestart, testAfterRestart func(t *testing.T, vit *VIT)) {
+	t.Helper()
+	TestRestartPreservingStorageWithHooks(t, cfg, RestartPreservingStorageHooks{
+		FirstRun:  testBeforeRestart,
+		SecondRun: testAfterRestart,
+	})
 }
 
 func (c *implISchemasCache_nonTestApps) Get(appQName appdef.AppQName) *parser.AppSchemaAST {
