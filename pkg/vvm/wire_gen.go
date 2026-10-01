@@ -58,6 +58,7 @@ import (
 	"github.com/voedger/voedger/pkg/processors/schedulers"
 	"github.com/voedger/voedger/pkg/router"
 	"github.com/voedger/voedger/pkg/state"
+	"github.com/voedger/voedger/pkg/sys/checkpoints"
 	"github.com/voedger/voedger/pkg/sys/invite"
 	"github.com/voedger/voedger/pkg/sys/sysprovide"
 	"github.com/voedger/voedger/pkg/vvm/builtin"
@@ -125,7 +126,8 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 	iRequestHandlerPtr := provideBlobHandlerPtr()
 	iRequestSenderPtr := provideIRequestSenderPtr()
 	postWireInterfacePtrs := providePostWireInterfacePtrs(blobAppStoragePtr, routerAppStoragePtr, iRequestHandlerPtr, iRequestSenderPtr)
-	iStatelessResources := provideStatelessResources(appConfigsTypeEmpty, vvmConfig, v2, buildInfo, iAppStorageProvider, iTokens, iFederation, iAppStructsProvider, iAppTokensFactory, postWireInterfacePtrs)
+	iRecoveryCheckpointStorage := storage.NewRecoveryCheckpointStorage(iSysVvmStorage)
+	iStatelessResources := provideStatelessResources(appConfigsTypeEmpty, vvmConfig, v2, buildInfo, iAppStorageProvider, iTokens, iFederation, iAppStructsProvider, iAppTokensFactory, postWireInterfacePtrs, iRecoveryCheckpointStorage)
 	v3 := actualizers.NewSyncActualizerFactoryFactory(syncActualizerFactory, iSecretReader, in10nBroker, iStatelessResources)
 	stateOpts := provideStateOpts()
 	iEmailSender := vvmConfig.EmailSender
@@ -145,6 +147,7 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 	}
 	iSchedulerRunner := provideSchedulerRunner(basicSchedulerConfig)
 	bucketsFactoryType := provideBucketsFactory(iTime)
+	iblobStorage := provideBlobStorage(blobAppStoragePtr, iTime)
 	v4, err := provideSidecarApps(vvmConfig)
 	if err != nil {
 		cleanup3()
@@ -152,7 +155,6 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		cleanup()
 		return nil, nil, err
 	}
-	iblobStorage := provideBlobStorage(blobAppStoragePtr, iTime)
 	apIs := builtinapps.APIs{
 		ITokens:             iTokens,
 		IAppStructsProvider: iAppStructsProvider,
@@ -160,8 +162,8 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 		IAppTokensFactory:   iAppTokensFactory,
 		IFederation:         iFederation,
 		ITime:               iTime,
-		SidecarApps:         v4,
 		IBLOBStorage:        iblobStorage,
+		SidecarApps:         v4,
 	}
 	iSchemasCache := vvmConfig.SchemasCache
 	builtInAppsArtefacts, err := provideBuiltInAppsArtefacts(vvmConfig, apIs, appConfigsTypeEmpty, v2, iSchemasCache)
@@ -181,7 +183,8 @@ func wireVVM(vvmCtx context.Context, vvmConfig *VVMConfig) (*VVM, func(), error)
 	v5 := provideSubjectGetterFunc()
 	isDeviceAllowedFuncs := provideIsDeviceAllowedFunc(v2)
 	iAuthenticator := iauthnzimpl.NewDefaultAuthenticator(v5, isDeviceAllowedFuncs)
-	serviceFactory := commandprocessor.ProvideServiceFactory(iAppPartitions, iTime, in10nBroker, iMetrics, vvmName, iAuthenticator, iSecretReader)
+	uint2 := vvmConfig.NumWSRecoverers
+	serviceFactory := commandprocessor.ProvideServiceFactory(iAppPartitions, iTime, in10nBroker, iMetrics, vvmName, iAuthenticator, iSecretReader, iRecoveryCheckpointStorage, uint2)
 	operatorCommandProcessors := provideCommandProcessors(numCommandProcessors, commandChannelFactory, serviceFactory)
 	numQueryProcessors := vvmConfig.NumQueryProcessors
 	queryChannel_V1 := provideQueryChannel_V1(serviceChannelFactory)
@@ -448,9 +451,10 @@ func provideAppsExtensionPoints(vvmConfig *VVMConfig) map[appdef.AppQName]extens
 
 func provideStatelessResources(cfgs AppConfigsTypeEmpty, vvmCfg *VVMConfig, appEPs map[appdef.AppQName]extensionpoints.IExtensionPoint,
 	buildInfo *debug.BuildInfo, sp istorage.IAppStorageProvider, itokens2 itokens.ITokens, federation2 federation.IFederation,
-	asp istructs.IAppStructsProvider, atf payloads.IAppTokensFactory, postWireInterfacePtrs btstrp.PostWireInterfacePtrs) istructsmem.IStatelessResources {
+	asp istructs.IAppStructsProvider, atf payloads.IAppTokensFactory, postWireInterfacePtrs btstrp.PostWireInterfacePtrs,
+	checkpointStorage checkpoints.IRecoveryCheckpointStorage) istructsmem.IStatelessResources {
 	ssr := istructsmem.NewStatelessResources()
-	sysprovide.ProvideStateless(ssr, vvmCfg.SMTPConfig, appEPs, buildInfo, sp, vvmCfg.WSPostInitFunc, vvmCfg.Time, itokens2, federation2, asp, atf, postWireInterfacePtrs.BlobHandler, postWireInterfacePtrs.RequestSender)
+	sysprovide.ProvideStateless(ssr, vvmCfg.SMTPConfig, appEPs, buildInfo, sp, vvmCfg.WSPostInitFunc, vvmCfg.Time, itokens2, federation2, asp, atf, postWireInterfacePtrs.BlobHandler, postWireInterfacePtrs.RequestSender, checkpointStorage)
 	return ssr
 }
 

@@ -1100,6 +1100,11 @@ func analyzeProjector(prj *ProjectorStmt, c *iterateCtx) {
 					}
 					defQName.qName = pkg.NewQName(defQName.Name)
 				} else {
+					if defQName.Name == Ident(istructs.QNameCommand.Entity()) &&
+						(defQName.Package == "" && c.pkg.Path == appdef.SysPackage || defQName.Package == Ident(appdef.SysPackage)) {
+						defQName.qName = istructs.QNameCommand
+						continue
+					}
 					err := resolveInCtx(*defQName, c, func(f *CommandStmt, pkg *PackageSchemaAST) error {
 						defQName.qName = pkg.NewQName(f.Name)
 						return nil

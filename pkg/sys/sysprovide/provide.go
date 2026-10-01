@@ -23,6 +23,7 @@ import (
 	"github.com/voedger/voedger/pkg/sys/authnz"
 	"github.com/voedger/voedger/pkg/sys/blobber"
 	"github.com/voedger/voedger/pkg/sys/builtin"
+	"github.com/voedger/voedger/pkg/sys/checkpoints"
 	"github.com/voedger/voedger/pkg/sys/collection"
 	"github.com/voedger/voedger/pkg/sys/describe"
 	"github.com/voedger/voedger/pkg/sys/invite"
@@ -37,7 +38,9 @@ import (
 func ProvideStateless(sr istructsmem.IStatelessResources, smtpCfg smtp.Cfg, eps map[appdef.AppQName]extensionpoints.IExtensionPoint, buildInfo *debug.BuildInfo,
 	storageProvider istorage.IAppStorageProvider, wsPostInitFunc workspace.WSPostInitFunc, time timeu.ITime,
 	itokens itokens.ITokens, federation federation.IFederation, asp istructs.IAppStructsProvider, atf payloads.IAppTokensFactory,
-	blobHandlerPtr blobprocessor.IRequestHandlerPtr, requestSenderPtr bus.IRequestSenderPtr) {
+	blobHandlerPtr blobprocessor.IRequestHandlerPtr, requestSenderPtr bus.IRequestSenderPtr,
+	checkpointStorage checkpoints.IRecoveryCheckpointStorage) {
+	checkpoints.Provide(sr, checkpointStorage)
 	blobber.ProvideBlobberCmds(sr)
 	collection.Provide(sr)
 	journal.Provide(sr, eps)

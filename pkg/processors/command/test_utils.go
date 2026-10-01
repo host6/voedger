@@ -32,18 +32,14 @@ type pLogRead struct {
 // recoveryHooks provides deterministic synchronization points for package tests.
 // Production command processors use nopHooks().
 type recoveryHooks struct {
-	scheduled                    func(partitionKey)
-	beforeAttempt                func(context.Context, partitionKey) error
-	attemptCompleted             func(partitionKey, error)
-	workspaceScheduled           func(workspaceKey)
-	beforeWorkspaceAttempt       func(context.Context, workspaceKey) error
-	workspaceAttemptCompleted    func(workspaceKey, error)
-	pLogRead                     func(partitionKey, istructs.Offset, int)
-	beforeCommandStoreStage      func(commandStoreStage) error
-	checkpointEnqueued           func(checkpointSnapshot)
-	workspaceCheckpointPersisted func(checkpointSnapshot)
-	partitionCheckpointPersisted func(checkpointSnapshot)
-	checkpointRetryScheduled     func(checkpointSnapshot, error)
+	scheduled                 func(partitionKey)
+	beforeAttempt             func(context.Context, partitionKey) error
+	attemptCompleted          func(partitionKey, error)
+	workspaceScheduled        func(workspaceKey)
+	beforeWorkspaceAttempt    func(context.Context, workspaceKey) error
+	workspaceAttemptCompleted func(workspaceKey, error)
+	pLogRead                  func(partitionKey, istructs.Offset, int)
+	beforeCommandStoreStage   func(commandStoreStage) error
 }
 
 type partitionRecoveryHooks = recoveryHooks
@@ -73,11 +69,8 @@ type recoveryTestControl struct {
 	workspaceActive        map[partitionKey]int
 	workspaceMaxActive     map[partitionKey]int
 
-	checkpointEnqueues int
-	partitionBarriers  map[istructs.PartitionID]istructs.Offset
-	workspacePersisted map[workspaceKey]WorkspaceCheckpoint
-	stageFailures      map[commandStoreStage]error
-	changed            chan struct{}
+	stageFailures map[commandStoreStage]error
+	changed       chan struct{}
 }
 
 func newRecoveryTestControl() *recoveryTestControl {
@@ -94,8 +87,6 @@ func newRecoveryTestControl() *recoveryTestControl {
 		nextWorkspaceFailures:  map[workspaceKey]error{},
 		workspaceActive:        map[partitionKey]int{},
 		workspaceMaxActive:     map[partitionKey]int{},
-		partitionBarriers:      map[istructs.PartitionID]istructs.Offset{},
-		workspacePersisted:     map[workspaceKey]WorkspaceCheckpoint{},
 		stageFailures:          map[commandStoreStage]error{},
 		changed:                make(chan struct{}),
 	}
@@ -103,18 +94,14 @@ func newRecoveryTestControl() *recoveryTestControl {
 
 func (c *recoveryTestControl) testHooks() *recoveryHooks {
 	return &recoveryHooks{
-		scheduled:                    c.recoveryStarted,
-		beforeAttempt:                c.beforeRecovery,
-		attemptCompleted:             c.recoveryFinished,
-		workspaceScheduled:           c.workspaceRecoveryScheduled,
-		beforeWorkspaceAttempt:       c.beforeWorkspaceRecovery,
-		workspaceAttemptCompleted:    c.workspaceRecoveryFinished,
-		pLogRead:                     c.recordPLogRead,
-		beforeCommandStoreStage:      c.beforeStoreStage,
-		checkpointEnqueued:           c.recordCheckpointEnqueued,
-		workspaceCheckpointPersisted: c.recordWorkspaceCheckpointPersisted,
-		partitionCheckpointPersisted: func(checkpointSnapshot) {},
-		checkpointRetryScheduled:     func(checkpointSnapshot, error) {},
+		scheduled:                 c.recoveryStarted,
+		beforeAttempt:             c.beforeRecovery,
+		attemptCompleted:          c.recoveryFinished,
+		workspaceScheduled:        c.workspaceRecoveryScheduled,
+		beforeWorkspaceAttempt:    c.beforeWorkspaceRecovery,
+		workspaceAttemptCompleted: c.workspaceRecoveryFinished,
+		pLogRead:                  c.recordPLogRead,
+		beforeCommandStoreStage:   c.beforeStoreStage,
 	}
 }
 
@@ -382,69 +369,6 @@ func (c *recoveryTestControl) failNextCommandStoreStage(stage commandStoreStage,
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.stageFailures[stage] = err
-}
-
-func (c *recoveryTestControl) recordCheckpointEnqueued(snapshot checkpointSnapshot) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.checkpointEnqueues++
-	if snapshot.partition.NextPLogOffset > c.partitionBarriers[snapshot.partitionID] {
-		c.partitionBarriers[snapshot.partitionID] = snapshot.partition.NextPLogOffset
-	}
-	c.signalLocked()
-}
-
-func (c *recoveryTestControl) resetCheckpointEnqueues() {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.checkpointEnqueues = 0
-}
-
-func (c *recoveryTestControl) checkpointEnqueueCount() int {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.checkpointEnqueues
-}
-
-func (c *recoveryTestControl) partitionBarrier(key partitionKey) istructs.Offset {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.partitionBarriers[key.partitionID]
-}
-
-func checkpointWorkspaceKey(partitionID istructs.PartitionID, wsid istructs.WSID) workspaceKey {
-	return workspaceKey{
-		partitionKey: partitionKey{partitionID: partitionID},
-		wsid:         wsid,
-	}
-}
-
-func (c *recoveryTestControl) recordWorkspaceCheckpointPersisted(snapshot checkpointSnapshot) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	key := checkpointWorkspaceKey(snapshot.partitionID, snapshot.wsid)
-	c.workspacePersisted[key] = snapshot.workspace
-	c.signalLocked()
-}
-
-func (c *recoveryTestControl) waitWorkspaceCheckpoint(ctx context.Context, key workspaceKey, expected WorkspaceCheckpoint) {
-	for {
-		c.mu.Lock()
-		actual := c.workspacePersisted[key]
-		if actual == (WorkspaceCheckpoint{}) {
-			actual = c.workspacePersisted[checkpointWorkspaceKey(key.partitionID, key.wsid)]
-		}
-		changed := c.changed
-		c.mu.Unlock()
-		if actual.NextWLogOffset >= expected.NextWLogOffset && actual.NextRecordID >= expected.NextRecordID {
-			return
-		}
-		select {
-		case <-changed:
-		case <-ctx.Done():
-			return
-		}
-	}
 }
 
 type recoveryRetrySender struct {

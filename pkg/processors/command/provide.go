@@ -21,6 +21,7 @@ import (
 	"github.com/voedger/voedger/pkg/in10n"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/pipeline"
+	"github.com/voedger/voedger/pkg/sys/checkpoints"
 )
 
 const defaultNumWorkspaceRecoverers uint = 4
@@ -31,8 +32,7 @@ type cmdProc struct {
 	time              timeu.ITime
 	authenticator     iauthnz.IAuthenticator
 	storeOp           pipeline.ISyncOperator
-	checkpointStorage IRecoveryCheckpointStorage
-	checkpoints       *checkpointProjectors
+	checkpointStorage checkpoints.IRecoveryCheckpointStorage
 	numWSRecoverers   uint
 	recoveryHooks     *recoveryHooks
 }
@@ -47,14 +47,14 @@ func newPartitionManager(recoveryHooks *recoveryHooks) *partitionManager {
 // syncActualizerFactory is a factory(partitionID) that returns a fork operator with a sync actualizer per each application. Inside of an each actualizer - projectors for each application
 func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
-	secretReader isecrets.ISecretReader, checkpointStorage IRecoveryCheckpointStorage, numWSRecoverers uint) ServiceFactory {
+	secretReader isecrets.ISecretReader, checkpointStorage checkpoints.IRecoveryCheckpointStorage, numWSRecoverers uint) ServiceFactory {
 	return provideServiceFactory(appParts, tm, n10nBroker, metrics, vvm, authenticator, secretReader,
 		checkpointStorage, numWSRecoverers, nopHooks())
 }
 
 func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
-	secretReader isecrets.ISecretReader, checkpointStorage IRecoveryCheckpointStorage, numWSRecoverers uint,
+	secretReader isecrets.ISecretReader, checkpointStorage checkpoints.IRecoveryCheckpointStorage, numWSRecoverers uint,
 	recoveryHooks *recoveryHooks) ServiceFactory {
 	if numWSRecoverers == 0 {
 		numWSRecoverers = defaultNumWorkspaceRecoverers
@@ -72,15 +72,6 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 		}
 
 		return pipeline.NewService(func(vvmCtx context.Context) {
-			cmdProc.checkpoints = newCheckpointProjectors(vvmCtx, checkpointProjectorsConfig{
-				storage: checkpointStorage,
-				time:    tm,
-				hooks: checkpointProjectorHooks{
-					workspacePersisted: recoveryHooks.workspaceCheckpointPersisted,
-					partitionPersisted: recoveryHooks.partitionCheckpointPersisted,
-					retryScheduled:     recoveryHooks.checkpointRetryScheduled,
-				},
-			})
 			hs := newReusableHostState(vvmCtx, secretReader)
 			cmdProc.storeOp = pipeline.NewSyncPipeline(vvmCtx, "store",
 				pipeline.WireFunc("applyRecords", func(_ context.Context, cmd *cmdWorkpiece) (err error) {
@@ -178,7 +169,6 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 				pipeline.WireFunc("putPLog", cmdProc.putPLog),
 				pipeline.WireFunc("logEventAndCUDs", logEventAndCUDs),
 				pipeline.WireFunc("store", cmdProc.storeOp.DoSync),
-				pipeline.WireFunc("enqueueCheckpoint", cmdProc.enqueueCheckpoint),
 				pipeline.WireFunc("notifyAsyncActualizers", cmdProc.notifyAsyncActualizers),
 			)
 			// TODO: later make so that each partition has its own plogOffset, wsid has its own wlogOffset
@@ -219,7 +209,6 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 				case <-vvmCtx.Done():
 				}
 			}
-			cmdProc.checkpoints.shutdown()
 			cmdProc.partitionManager.shutdown()
 			cmdPipeline.Close()
 			cmdProc.storeOp.Close()

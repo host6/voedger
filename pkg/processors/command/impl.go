@@ -35,6 +35,7 @@ import (
 	"github.com/voedger/voedger/pkg/sys/authnz"
 	"github.com/voedger/voedger/pkg/sys/blobber"
 	"github.com/voedger/voedger/pkg/sys/builtin"
+	"github.com/voedger/voedger/pkg/sys/checkpoints"
 	workspacemgmt "github.com/voedger/voedger/pkg/sys/workspace"
 )
 
@@ -177,7 +178,7 @@ func newAppPartition(numWSRecoverers uint) *appPartition {
 	}
 }
 
-func newRecoveredWorkspace(checkpoint WorkspaceCheckpoint) *workspace {
+func newRecoveredWorkspace(checkpoint checkpoints.WorkspaceCheckpoint) *workspace {
 	idGenerator := istructsmem.NewIDGenerator()
 	if checkpoint.NextRecordID > istructs.FirstUserRecordID {
 		idGenerator.UpdateOnSync(checkpoint.NextRecordID - 1)
@@ -366,7 +367,7 @@ func (cmdProc *cmdProc) recoverWorkspace(appID istructs.ClusterAppID, wsid istru
 		return nil, err
 	}
 	if !ok {
-		checkpoint = WorkspaceCheckpoint{}
+		checkpoint = checkpoints.WorkspaceCheckpoint{}
 	}
 	return newRecoveredWorkspace(checkpoint), nil
 }
@@ -569,14 +570,14 @@ func (cmdProc *cmdProc) recovery(vvmCtx context.Context, cmd *cmdWorkpiece) (ap 
 
 	for wsid := range affectedWorkspaces {
 		ws := ap.workspaces[wsid]
-		if err := cmdProc.checkpointStorage.PutWorkspaceCheckpoint(appID, wsid, WorkspaceCheckpoint{
+		if err := cmdProc.checkpointStorage.PutWorkspaceCheckpoint(appID, wsid, checkpoints.WorkspaceCheckpoint{
 			NextWLogOffset: ws.NextWLogOffset,
 			NextRecordID:   ws.idGenerator.LastRecordID() + 1,
 		}); err != nil {
 			return nil, err
 		}
 	}
-	if err := cmdProc.checkpointStorage.PutPartitionCheckpoint(appID, key.partitionID, PartitionCheckpoint{
+	if err := cmdProc.checkpointStorage.PutPartitionCheckpoint(appID, key.partitionID, checkpoints.PartitionCheckpoint{
 		NextPLogOffset: ap.nextPLogOffset,
 	}); err != nil {
 		return nil, err
@@ -617,25 +618,6 @@ func (cmdProc *cmdProc) putPLog(_ context.Context, cmd *cmdWorkpiece) (err error
 		cmd.appPartition.nextPLogOffset++
 	}
 	return err
-}
-
-func (cmdProc *cmdProc) enqueueCheckpoint(_ context.Context, cmd *cmdWorkpiece) error {
-	snapshot := checkpointSnapshot{
-		clusterAppID: cmd.appStructs.ClusterAppID(),
-		partitionID:  cmd.cmdMes.PartitionID(),
-		wsid:         cmd.cmdMes.WSID(),
-		partition: PartitionCheckpoint{
-			NextPLogOffset: cmd.appPartition.nextPLogOffset,
-		},
-		workspace: WorkspaceCheckpoint{
-			NextWLogOffset: cmd.workspace.NextWLogOffset,
-			NextRecordID:   cmd.workspace.idGenerator.LastRecordID() + 1,
-		},
-	}
-	if cmdProc.checkpoints.enqueue(snapshot) {
-		cmdProc.recoveryHooks.checkpointEnqueued(snapshot)
-	}
-	return nil
 }
 
 func logEventAndCUDs(_ context.Context, cmd *cmdWorkpiece) (err error) {
@@ -1323,18 +1305,6 @@ func normalizedRecoveryHooks(hooks *recoveryHooks) *recoveryHooks {
 	}
 	if hooks.beforeCommandStoreStage == nil {
 		hooks.beforeCommandStoreStage = func(commandStoreStage) error { return nil }
-	}
-	if hooks.checkpointEnqueued == nil {
-		hooks.checkpointEnqueued = func(checkpointSnapshot) {}
-	}
-	if hooks.workspaceCheckpointPersisted == nil {
-		hooks.workspaceCheckpointPersisted = func(checkpointSnapshot) {}
-	}
-	if hooks.partitionCheckpointPersisted == nil {
-		hooks.partitionCheckpointPersisted = func(checkpointSnapshot) {}
-	}
-	if hooks.checkpointRetryScheduled == nil {
-		hooks.checkpointRetryScheduled = func(checkpointSnapshot, error) {}
 	}
 	return hooks
 }

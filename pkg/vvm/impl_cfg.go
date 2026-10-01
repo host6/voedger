@@ -45,6 +45,7 @@ func NewVVMDefaultConfig() VVMConfig {
 		NumCommandProcessors:              DefaultNumCommandProcessors,
 		NumQueryProcessors:                DefaultNumQueryProcessors,
 		NumBLOBProcessors:                 DefaultNumBLOBProcessors,
+		NumWSRecoverers:                   DefaultNumWSRecoverers,
 		CommandProcessorChannelBufferSize: DefaultCommandProcessorChannelBufferSize,
 		StorageCacheSize:                  DefaultCacheSize,
 		MaxPrepareQueries:                 DefaultMaxPrepareQueries,

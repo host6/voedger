@@ -154,6 +154,7 @@ type VVMConfig struct {
 	NumCommandProcessors              istructs.NumCommandProcessors
 	NumQueryProcessors                istructs.NumQueryProcessors
 	NumBLOBProcessors                 istructs.NumBLOBProcessors
+	NumWSRecoverers                   uint
 	CommandProcessorChannelBufferSize uint
 	MaxPrepareQueries                 MaxPrepareQueriesType
 	StorageCacheSize                  StorageCacheSizeType
