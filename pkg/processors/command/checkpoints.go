@@ -38,6 +38,8 @@ type IRecoveryCheckpointStorage interface {
 	PutWorkspaceCheckpoint(appID istructs.ClusterAppID, wsid istructs.WSID, checkpoint WorkspaceCheckpoint) error
 }
 
+// checkpointSnapshot captures the workspace and partition recovery positions
+// produced by a command for asynchronous persistence to the correct targets.
 type checkpointSnapshot struct {
 	clusterAppID istructs.ClusterAppID
 	partitionID  istructs.PartitionID
@@ -46,6 +48,8 @@ type checkpointSnapshot struct {
 	workspace    WorkspaceCheckpoint
 }
 
+// checkpointProjectorHooks provides callbacks for observing successful
+// checkpoint persistence and scheduled retries.
 type checkpointProjectorHooks struct {
 	workspacePersisted func(checkpointSnapshot)
 	partitionPersisted func(checkpointSnapshot)
