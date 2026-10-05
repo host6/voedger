@@ -29,21 +29,13 @@ type pLogRead struct {
 	count  int
 }
 
-// recoveryHooks provides deterministic synchronization points for package tests.
-// Production command processors use nopHooks().
-type recoveryHooks struct {
-	scheduled                 func(partitionKey)
-	beforeAttempt             func(context.Context, partitionKey) error
-	attemptCompleted          func(partitionKey, error)
-	workspaceScheduled        func(workspaceKey)
-	beforeWorkspaceAttempt    func(context.Context, workspaceKey) error
-	workspaceAttemptCompleted func(workspaceKey, error)
-	pLogRead                  func(partitionKey, istructs.Offset, int)
-	wLogRead                  func(workspaceKey, istructs.Offset, int)
-	beforeCommandStoreStage   func(commandStoreStage) error
+// commandProcessorHooks provides deterministic synchronization points for package tests.
+// Production command processors use nopCommandProcessorHooks().
+type commandProcessorHooks struct {
+	pLogRead                func(partitionKey, istructs.Offset, int)
+	wLogRead                func(workspaceKey, istructs.Offset, int)
+	beforeCommandStoreStage func(commandStoreStage) error
 }
-
-type partitionRecoveryHooks = recoveryHooks
 
 type recoveryAttempt struct {
 	done    chan struct{}
@@ -95,17 +87,21 @@ func newRecoveryTestControl() *recoveryTestControl {
 	}
 }
 
-func (c *recoveryTestControl) testHooks() *recoveryHooks {
-	return &recoveryHooks{
-		scheduled:                 c.recoveryStarted,
-		beforeAttempt:             c.beforeRecovery,
-		attemptCompleted:          c.recoveryFinished,
-		workspaceScheduled:        c.workspaceRecoveryScheduled,
-		beforeWorkspaceAttempt:    c.beforeWorkspaceRecovery,
-		workspaceAttemptCompleted: c.workspaceRecoveryFinished,
-		pLogRead:                  c.recordPLogRead,
-		wLogRead:                  c.recordWLogRead,
-		beforeCommandStoreStage:   c.beforeStoreStage,
+func (c *recoveryTestControl) testHooks() (
+	recoveryHooks[partitionKey], recoveryHooks[workspaceKey], *commandProcessorHooks,
+) {
+	return recoveryHooks[partitionKey]{
+		scheduled:        c.recoveryStarted,
+		beforeAttempt:    c.beforeRecovery,
+		attemptCompleted: c.recoveryFinished,
+	}, recoveryHooks[workspaceKey]{
+		scheduled:        c.workspaceRecoveryScheduled,
+		beforeAttempt:    c.beforeWorkspaceRecovery,
+		attemptCompleted: c.workspaceRecoveryFinished,
+	}, &commandProcessorHooks{
+		pLogRead:                c.recordPLogRead,
+		wLogRead:                c.recordWLogRead,
+		beforeCommandStoreStage: c.beforeStoreStage,
 	}
 }
 

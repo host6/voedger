@@ -26,25 +26,24 @@ import (
 )
 
 type cmdProc struct {
-	partitionManager  *partitionManager
-	n10nBroker        in10n.IN10nBroker
-	time              timeu.ITime
-	authenticator     iauthnz.IAuthenticator
-	storeOp           pipeline.ISyncOperator
-	checkpointStorage checkpoints.IRecoveryCheckpointStorage
-	numWSRecoverers   uint
-	recoveryHooks     *recoveryHooks
+	partitionManager       *partitionManager
+	n10nBroker             in10n.IN10nBroker
+	time                   timeu.ITime
+	authenticator          iauthnz.IAuthenticator
+	storeOp                pipeline.ISyncOperator
+	checkpointStorage      checkpoints.IRecoveryCheckpointStorage
+	numWSRecoverers        uint
+	workspaceRecoveryHooks recoveryHooks[workspaceKey]
+	hooks                  *commandProcessorHooks
 }
 
-func newPartitionManager(recoveryHooks *recoveryHooks) *partitionManager {
+func newPartitionManager(hooks recoveryHooks[partitionKey]) *partitionManager {
 	workers := &sync.WaitGroup{}
 	return &partitionManager{
 		partitions: newRecoverManager[partitionKey, appPartition](
 			nil,
 			workers,
-			recoveryHooks.scheduled,
-			recoveryHooks.beforeAttempt,
-			recoveryHooks.attemptCompleted,
+			hooks,
 		),
 	}
 }
@@ -54,23 +53,28 @@ func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
 	secretReader isecrets.ISecretReader, checkpointStorage checkpoints.IRecoveryCheckpointStorage, numWSRecoverers uint) ServiceFactory {
 	return provideServiceFactory(appParts, tm, n10nBroker, metrics, vvm, authenticator, secretReader,
-		checkpointStorage, numWSRecoverers, nopHooks())
+		checkpointStorage, numWSRecoverers, nopRecoveryHooks[partitionKey](),
+		nopRecoveryHooks[workspaceKey](), nopCommandProcessorHooks())
 }
 
 func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
 	secretReader isecrets.ISecretReader, checkpointStorage checkpoints.IRecoveryCheckpointStorage, numWSRecoverers uint,
-	recoveryHooks *recoveryHooks) ServiceFactory {
-	recoveryHooks = normalizedRecoveryHooks(recoveryHooks)
+	partitionRecoveryHooks recoveryHooks[partitionKey], workspaceRecoveryHooks recoveryHooks[workspaceKey],
+	hooks *commandProcessorHooks) ServiceFactory {
+	partitionRecoveryHooks = normalizedRecoveryHooks(partitionRecoveryHooks)
+	workspaceRecoveryHooks = normalizedRecoveryHooks(workspaceRecoveryHooks)
+	hooks = normalizedCommandProcessorHooks(hooks)
 	return func(commandsChannel CommandChannel) pipeline.IService {
 		cmdProc := &cmdProc{
-			partitionManager:  newPartitionManager(recoveryHooks),
-			n10nBroker:        n10nBroker,
-			time:              tm,
-			authenticator:     authenticator,
-			checkpointStorage: checkpointStorage,
-			numWSRecoverers:   numWSRecoverers,
-			recoveryHooks:     recoveryHooks,
+			partitionManager:       newPartitionManager(partitionRecoveryHooks),
+			n10nBroker:             n10nBroker,
+			time:                   tm,
+			authenticator:          authenticator,
+			checkpointStorage:      checkpointStorage,
+			numWSRecoverers:        numWSRecoverers,
+			workspaceRecoveryHooks: workspaceRecoveryHooks,
+			hooks:                  hooks,
 		}
 
 		return pipeline.NewService(func(vvmCtx context.Context) {

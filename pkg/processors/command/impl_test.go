@@ -433,7 +433,7 @@ func TestAsynchronousRecovery(t *testing.T) {
 		// them out of order proves that the old result cannot become the partition's current state.
 		require := require.New(t)
 		finished := make(chan struct{}, 2)
-		manager := newPartitionManager(&partitionRecoveryHooks{
+		manager := newPartitionManager(recoveryHooks[partitionKey]{
 			scheduled: func(partitionKey) {},
 			beforeAttempt: func(context.Context, partitionKey) error {
 				return nil
@@ -487,7 +487,7 @@ func TestAsynchronousRecovery(t *testing.T) {
 		<-newStarted
 
 		manager.partitions.mu.Lock()
-		replacementState := manager.partitions.items[key]
+		replacementState := manager.partitions.values[key]
 		manager.partitions.mu.Unlock()
 
 		// Complete the old worker first. Its result must not overwrite the replacement state or
@@ -496,10 +496,10 @@ func TestAsynchronousRecovery(t *testing.T) {
 		<-finished
 
 		manager.partitions.mu.Lock()
-		currentState := manager.partitions.items[key]
+		currentState := manager.partitions.values[key]
 		var currentPartition *appPartition
 		if currentState != nil {
-			currentPartition = currentState.recovered
+			currentPartition = currentState.value
 		}
 		manager.partitions.mu.Unlock()
 		require.Same(replacementState, currentState)
@@ -509,11 +509,11 @@ func TestAsynchronousRecovery(t *testing.T) {
 		newGateOnce.Do(func() { close(newGate) })
 		<-finished
 		manager.partitions.mu.Lock()
-		currentState = manager.partitions.items[key]
+		currentState = manager.partitions.values[key]
 		currentPartition = nil
 		var currentErr error
 		if currentState != nil {
-			currentPartition = currentState.recovered
+			currentPartition = currentState.value
 			currentErr = currentState.recoveryErr
 		}
 		manager.partitions.mu.Unlock()
@@ -1604,9 +1604,10 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	systemToken, err := payloads.GetSystemPrincipalTokenApp(appTokens)
 	require.NoError(err)
 	recoveryControl := newRecoveryTestControl()
+	partitionRecoveryHooks, workspaceRecoveryHooks, hooks := recoveryControl.testHooks()
 	cmdProcessorFactory := provideServiceFactory(appParts, tm, n10nBroker, imetrics.Provide(), "vvm",
 		iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs), secretReader,
-		options.checkpointStorage, options.numWSRecoverers, recoveryControl.testHooks())
+		options.checkpointStorage, options.numWSRecoverers, partitionRecoveryHooks, workspaceRecoveryHooks, hooks)
 	cmdProcService := cmdProcessorFactory(serviceChannel)
 	requestSender := &recoveryRetrySender{
 		raw:     rawRequestSender,

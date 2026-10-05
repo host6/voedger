@@ -178,26 +178,34 @@ type workspace struct {
 	idGenerator    istructs.IIDGenerator
 }
 
-type recoverableUnit[T any] struct {
-	recovered   *T
+type recoverableValue[T any] struct {
+	value       *T
 	recoveryErr error
 }
 
 type recoveryAttemptFunc[T any] func(context.Context) (*T, error)
+
+// newRecoveryAttemptFunc creates an attempt only after recoverManager has reserved a recovery slot.
+// This lets the caller synchronously transfer request-owned resources to the asynchronous attempt;
+// creating it eagerly could orphan those resources when no attempt is started.
 type newRecoveryAttemptFunc[T any] func() recoveryAttemptFunc[T]
 
-type recoverManager[K comparable, T any] struct {
-	mu               sync.Mutex
-	items            map[K]*recoverableUnit[T]
-	slots            chan struct{} // nil means unlimited recovery concurrency
-	workers          *sync.WaitGroup
+type recoveryHooks[K comparable] struct {
 	scheduled        func(K)
 	beforeAttempt    func(context.Context, K) error
 	attemptCompleted func(K, error)
 }
 
+type recoverManager[K comparable, T any] struct {
+	mu      sync.Mutex
+	values  map[K]*recoverableValue[T]
+	slots   chan struct{} // nil means unlimited recovery concurrency
+	workers *sync.WaitGroup
+	hooks   recoveryHooks[K]
+}
+
 type workspaceManager struct {
-	workspaces *recoverManager[istructs.WSID, workspace]
+	workspaces *recoverManager[workspaceKey, workspace]
 }
 
 type appPartition struct {
