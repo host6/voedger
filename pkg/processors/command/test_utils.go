@@ -39,6 +39,7 @@ type recoveryHooks struct {
 	beforeWorkspaceAttempt    func(context.Context, workspaceKey) error
 	workspaceAttemptCompleted func(workspaceKey, error)
 	pLogRead                  func(partitionKey, istructs.Offset, int)
+	wLogRead                  func(workspaceKey, istructs.Offset, int)
 	beforeCommandStoreStage   func(commandStoreStage) error
 }
 
@@ -60,6 +61,7 @@ type recoveryTestControl struct {
 	nextGates    map[partitionKey]<-chan struct{}
 	nextFailures map[partitionKey]error
 	pLogReadLog  map[partitionKey][]pLogRead
+	wLogReadLog  map[workspaceKey][]pLogRead
 
 	workspaceAttempts      map[workspaceKey]*recoveryAttempt
 	workspaceStarts        map[workspaceKey]int
@@ -80,6 +82,7 @@ func newRecoveryTestControl() *recoveryTestControl {
 		nextGates:              map[partitionKey]<-chan struct{}{},
 		nextFailures:           map[partitionKey]error{},
 		pLogReadLog:            map[partitionKey][]pLogRead{},
+		wLogReadLog:            map[workspaceKey][]pLogRead{},
 		workspaceAttempts:      map[workspaceKey]*recoveryAttempt{},
 		workspaceStarts:        map[workspaceKey]int{},
 		workspaceAttemptStarts: map[workspaceKey]int{},
@@ -101,6 +104,7 @@ func (c *recoveryTestControl) testHooks() *recoveryHooks {
 		beforeWorkspaceAttempt:    c.beforeWorkspaceRecovery,
 		workspaceAttemptCompleted: c.workspaceRecoveryFinished,
 		pLogRead:                  c.recordPLogRead,
+		wLogRead:                  c.recordWLogRead,
 		beforeCommandStoreStage:   c.beforeStoreStage,
 	}
 }
@@ -355,6 +359,24 @@ func (c *recoveryTestControl) pLogReads(key partitionKey) []pLogRead {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]pLogRead(nil), c.pLogReadLog[key]...)
+}
+
+func (c *recoveryTestControl) resetWLogReads(key workspaceKey) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.wLogReadLog, key)
+}
+
+func (c *recoveryTestControl) wLogReads(key workspaceKey) []pLogRead {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]pLogRead(nil), c.wLogReadLog[key]...)
+}
+
+func (c *recoveryTestControl) recordWLogRead(key workspaceKey, offset istructs.Offset, count int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.wLogReadLog[key] = append(c.wLogReadLog[key], pLogRead{offset: offset, count: count})
 }
 
 func (c *recoveryTestControl) beforeStoreStage(stage commandStoreStage) error {

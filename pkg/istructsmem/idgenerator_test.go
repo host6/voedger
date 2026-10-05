@@ -64,25 +64,6 @@ func TestIDGenerator(t *testing.T) {
 	})
 }
 
-func TestIDGeneratorLastRecordID(t *testing.T) {
-	require := require.New(t)
-
-	idGen := NewIDGenerator()
-	require.Equal(istructs.FirstUserRecordID-1, idGen.LastRecordID())
-
-	allocatedID, err := idGen.NextID(1)
-	require.NoError(err)
-	require.Equal(istructs.FirstUserRecordID, allocatedID)
-	require.Equal(allocatedID, idGen.LastRecordID())
-
-	idGen.UpdateOnSync(allocatedID + 100)
-	require.Equal(allocatedID+100, idGen.LastRecordID())
-
-	// A stale synchronization value must not move the last ID backwards.
-	idGen.UpdateOnSync(allocatedID)
-	require.Equal(allocatedID+100, idGen.LastRecordID())
-}
-
 // https://github.com/voedger/voedger/issues/688
 // 9999999999 ID causes next IDs collision
 func TestIDGenCollision(t *testing.T) {

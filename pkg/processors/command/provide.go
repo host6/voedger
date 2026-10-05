@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"sync"
 	"time"
 
 	"github.com/voedger/voedger/pkg/goutils/logger"
@@ -24,8 +25,6 @@ import (
 	"github.com/voedger/voedger/pkg/sys/checkpoints"
 )
 
-const defaultNumWorkspaceRecoverers uint = 4
-
 type cmdProc struct {
 	partitionManager  *partitionManager
 	n10nBroker        in10n.IN10nBroker
@@ -38,9 +37,15 @@ type cmdProc struct {
 }
 
 func newPartitionManager(recoveryHooks *recoveryHooks) *partitionManager {
+	workers := &sync.WaitGroup{}
 	return &partitionManager{
-		partitions:    map[partitionKey]*partitionState{},
-		recoveryHooks: recoveryHooks,
+		partitions: newRecoverManager[partitionKey, appPartition](
+			nil,
+			workers,
+			recoveryHooks.scheduled,
+			recoveryHooks.beforeAttempt,
+			recoveryHooks.attemptCompleted,
+		),
 	}
 }
 
@@ -56,9 +61,6 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
 	secretReader isecrets.ISecretReader, checkpointStorage checkpoints.IRecoveryCheckpointStorage, numWSRecoverers uint,
 	recoveryHooks *recoveryHooks) ServiceFactory {
-	if numWSRecoverers == 0 {
-		numWSRecoverers = defaultNumWorkspaceRecoverers
-	}
 	recoveryHooks = normalizedRecoveryHooks(recoveryHooks)
 	return func(commandsChannel CommandChannel) pipeline.IService {
 		cmdProc := &cmdProc{

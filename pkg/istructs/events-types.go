@@ -80,9 +80,6 @@ type ICUDRow interface {
 type IIDGenerator interface {
 	NextID(rawID RecordID) (storageID RecordID, err error)
 	UpdateOnSync(syncID RecordID)
-	// LastRecordID returns the record-ID sequence high-water mark. Recovery
-	// persists this value so the sequence can resume without scanning the PLog.
-	LastRecordID() RecordID
 }
 
 type IRawEvent interface {

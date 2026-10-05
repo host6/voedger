@@ -32,14 +32,13 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 	]}`
 
 	var (
-		wsid                 istructs.WSID
-		partitionID          istructs.PartitionID
-		firstVVMWLogOffset   istructs.Offset
-		firstVVMMaxRecordID  istructs.RecordID
-		secondVVMWLogOffset  istructs.Offset
-		secondVVMMaxRecordID istructs.RecordID
-		partitionBefore      syscheckpoints.PartitionCheckpoint
-		workspaceBefore      syscheckpoints.WorkspaceCheckpoint
+		wsid                istructs.WSID
+		partitionID         istructs.PartitionID
+		firstVVMWLogOffset  istructs.Offset
+		firstVVMMaxRecordID istructs.RecordID
+		secondVVMWLogOffset istructs.Offset
+		partitionBefore     syscheckpoints.PartitionCheckpoint
+		workspaceBefore     syscheckpoints.WorkspaceCheckpoint
 	)
 	appID := istructs.ClusterApps[istructs.AppQName_test1_app1]
 
@@ -50,14 +49,16 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			wsid = ws.WSID
 			partitionID = coreutils.AppPartitionID(wsid, istructs.NumAppPartitions(vit.NumCommandProcessors))
 
-			body := `{"args":{"sys.ID": 1,"orecord1":[{"sys.ID":2,"sys.ParentID":1,"orecord2":[{"sys.ID":3,"sys.ParentID":2}]}]},"unloggedArgs":{"sys.ID":4}}`
-			resp := vit.PostWS(ws, "c.app1pkg.CmdODocOne", body)
-			require.NotEmpty(resp.NewIDs)
-
-			resp = vit.PostWS(ws, "c.sys.CUD", cudBody)
+			resp := vit.PostWS(ws, "c.sys.CUD", cudBody)
 			require.Len(resp.NewIDs, 3)
+
+			body := `{"args":{"sys.ID": 1,"orecord1":[{"sys.ID":2,"sys.ParentID":1,"orecord2":[{"sys.ID":3,"sys.ParentID":2}]}]},"unloggedArgs":{"sys.ID":4}}`
+			resp = vit.PostWS(ws, "c.app1pkg.CmdODocOne", body)
+			require.NotEmpty(resp.NewIDs)
 			firstVVMWLogOffset = resp.CurrentWLogOffset
-			firstVVMMaxRecordID = resp.NewIDs["3"]
+			for _, id := range resp.NewIDs {
+				firstVVMMaxRecordID = max(firstVVMMaxRecordID, id)
+			}
 		},
 		AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
 			require := require.New(t)
@@ -72,8 +73,7 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			workspaceBefore, ok, err = checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
 			require.NoError(err)
 			require.True(ok)
-			require.Greater(workspaceBefore.NextWLogOffset, firstVVMWLogOffset)
-			require.Greater(workspaceBefore.NextRecordID, firstVVMMaxRecordID)
+			require.Equal(firstVVMWLogOffset, workspaceBefore.LastHandledWLogOffset)
 		},
 		SecondRun: func(t *testing.T, vit *it.VIT) {
 			require := require.New(t)
@@ -84,7 +84,6 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			require.Equal(resp.NewIDs["1"]+1, resp.NewIDs["2"])
 			require.Equal(resp.NewIDs["1"]+2, resp.NewIDs["3"])
 			secondVVMWLogOffset = resp.CurrentWLogOffset
-			secondVVMMaxRecordID = resp.NewIDs["3"]
 		},
 		AfterSecondStop: func(t *testing.T, storage it.RestartStorage) {
 			require := require.New(t)
@@ -93,12 +92,11 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			partitionAfterHandoff, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
 			require.NoError(err)
 			require.True(ok)
-			require.Greater(partitionAfterHandoff.NextPLogOffset, partitionBefore.NextPLogOffset)
+			require.Greater(partitionAfterHandoff.LastHandledPLogOffset, partitionBefore.LastHandledPLogOffset)
 			workspaceAfterHandoff, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
 			require.NoError(err)
 			require.True(ok)
-			require.Equal(secondVVMWLogOffset+1, workspaceAfterHandoff.NextWLogOffset)
-			require.Equal(secondVVMMaxRecordID+1, workspaceAfterHandoff.NextRecordID)
+			require.Equal(secondVVMWLogOffset, workspaceAfterHandoff.LastHandledWLogOffset)
 		},
 	})
 }

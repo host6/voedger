@@ -178,30 +178,38 @@ type workspace struct {
 	idGenerator    istructs.IIDGenerator
 }
 
-type workspaceState struct {
+type recoverableUnit[T any] struct {
+	recovered   *T
 	recoveryErr error
-	attempt     uint64
+}
+
+type recoveryAttemptFunc[T any] func(context.Context) (*T, error)
+type newRecoveryAttemptFunc[T any] func() recoveryAttemptFunc[T]
+
+type recoverManager[K comparable, T any] struct {
+	mu               sync.Mutex
+	items            map[K]*recoverableUnit[T]
+	slots            chan struct{} // nil means unlimited recovery concurrency
+	workers          *sync.WaitGroup
+	scheduled        func(K)
+	beforeAttempt    func(context.Context, K) error
+	attemptCompleted func(K, error)
+}
+
+type workspaceManager struct {
+	workspaces *recoverManager[istructs.WSID, workspace]
 }
 
 type appPartition struct {
-	mu                  sync.Mutex
-	clusterAppID        istructs.ClusterAppID
-	workspaces          map[istructs.WSID]*workspace
-	workspaceStates     map[istructs.WSID]*workspaceState
-	workspaceRecoverers chan struct{}
-	nextPLogOffset      istructs.Offset
+	clusterAppID   istructs.ClusterAppID
+	appStructs     istructs.IAppStructs
+	workspaces     *workspaceManager
+	nextPLogOffset istructs.Offset
 }
 
 type partitionManager struct {
-	mu            sync.Mutex
-	partitions    map[partitionKey]*partitionState
-	workers       sync.WaitGroup
-	recoveryHooks *recoveryHooks
-}
-
-type partitionState struct {
-	*appPartition // not nil -> the partition is successfully recovered
-	recoveryErr   error
+	partitions *recoverManager[partitionKey, appPartition]
 }
 
 type recoverPartitionFunc func(context.Context, *cmdWorkpiece) (*appPartition, error)
+type recoverWorkspaceFunc func(context.Context, workspaceKey) (*workspace, error)

@@ -16,10 +16,6 @@ type implIIDGenerator struct {
 
 // used in tests
 func NewIDGeneratorWithHook(onNewID func(rawID, storageID istructs.RecordID) error) istructs.IIDGenerator {
-	return newIDGenerator(onNewID)
-}
-
-func newIDGenerator(onNewID func(rawID, storageID istructs.RecordID) error) *implIIDGenerator {
 	return &implIIDGenerator{
 		nextRecordID: istructs.FirstUserRecordID,
 		onNewID:      onNewID,
@@ -41,12 +37,9 @@ func (g *implIIDGenerator) NextID(rawID istructs.RecordID) (storageID istructs.R
 	return storageID, nil
 }
 
+
 func (g *implIIDGenerator) UpdateOnSync(syncID istructs.RecordID) {
 	if syncID >= g.nextRecordID {
 		g.nextRecordID = syncID + 1
 	}
-}
-
-func (g *implIIDGenerator) LastRecordID() istructs.RecordID {
-	return g.nextRecordID - 1
 }

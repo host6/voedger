@@ -14,16 +14,18 @@ Refs:
 
 ## Why
 
-The application-processing recovery path needs durable checkpoints for partition and workspace sequence state; reconstructing counters from event history makes recovery work grow with that history. Demand-driven, bounded recovery improves responsiveness while preserving sequence continuity.
+Partition and workspace sequence state must survive a VVM restart without rebuilding every counter from the complete PLog. Durable handled-offset checkpoints let recovery scan only the log suffix that can contain newer events, while bounded on-demand workspace recovery prevents one partition from creating an unlimited number of recovery goroutines.
 
 ## What
 
 In the production application-processing context:
 
-- Partition recovery restores persisted partition progress and workspace sequence state into memory, reapplies the last event, and saves workspace state before partition progress.
-- Recovery checkpoints stay current during normal processing: partition progress is recorded periodically, and workspace sequence state is recorded for every operation.
-- A command for an unrecovered partition starts its recovery; a command for an unrecovered workspace in a recovered partition starts workspace recovery and receives a retryable service-unavailable response until recovery completes.
-- Workspace recovery concurrency is bounded per partition and defaults to four workers.
+- Store only the last handled log offset in each recovery checkpoint. Do not persist record IDs.
+- Recover a partition by reading the PLog from its saved handled offset through the end, using the final event to set the next PLog offset, and reapplying that final event.
+- After partition recovery, let the requesting command continue to the workspace stage, which starts workspace recovery on demand.
+- Recover a workspace by reading its WLog from its saved handled offset through the end. Use the final event to set the next WLog offset, and rewind in 10-event windows when needed to find the latest non-singleton record ID.
+- Return `503 Service Unavailable` while recovery of the requested partition or workspace is already running or if the partition already has `NumWSRecoverers` workspace recoveries running. Log a corresponding message for each case.
+- Keep the default workspace-recovery limit at four per partition.
 
 ## Constraints
 
@@ -34,19 +36,26 @@ In the production application-processing context:
 
 Decisions:
 
-- Extend command-processor recovery into two readiness levels: retain one service-scoped recovery lifecycle per application partition, and add deduplicated on-demand workspace recovery scheduled through a bounded worker pool owned by that partition. Normalize a zero worker limit to the default so zero-valued configurations remain usable.
-- Store extensible JSON checkpoints in shared system-VVM storage: a next-PLog-offset snapshot keyed by application and partition, and a next-WLog-offset plus next-record-ID snapshot keyed by application and workspace. Reuse the retained sequence-storage key prefixes with a dedicated nonzero four-byte clustering key so legacy binary cells remain untouched and distinguishable while the partition key can host additional cell types later.
-- Capture immutable checkpoint snapshots from command-processor memory only after the command's PLog, records, synchronous projections, and WLog have succeeded. Expose the record-ID generator's last allocated or synchronized value for this purpose instead of reconstructing outgoing snapshots from events or reviving the removed generic sequencer.
-- Use two built-in asynchronous checkpoint projectors owned by the command service rather than schema-defined async actualizers: persist workspace snapshots for every successful operation, and persist partition progress after each 100 covered events or one minute, whichever comes first.
-- Treat the partition checkpoint as a durability barrier: never advance it past an event until that event's workspace snapshot is durable. Persist each partition and workspace checkpoint with an unconditional last-write-wins update; checkpoint producers are responsible for issuing values in order.
-- Start partition recovery from the persisted next PLog offset; when it is beyond the first offset, read the immediately preceding event as the initial reapplication candidate, then scan only the uncheckpointed tail and replace the candidate with any newer tail event. Merge tail values with workspace snapshots, reapply the resulting last event, and then save affected workspace snapshots before advancing partition progress. When the partition checkpoint is missing or zero, perform one full-PLog bootstrap scan and seed both checkpoint levels.
-- Publish workspaces reconstructed by the partition tail immediately; recover all other workspaces lazily from their snapshots. Workspace attempts follow the existing recovery lifecycle for deduplication, service-lifetime cancellation, retained failures, and on-demand retry.
-- Keep checkpoint failures off the successful command response path: retry and report them operationally without advancing the partition barrier. On orderly shutdown, stop accepting snapshots, attempt one final ordered flush, cancel any remaining retries through the service context, and join checkpoint and recovery workers before releasing command-service resources.
-- Verify crash boundaries, checkpoint bootstrap, bounded workspace concurrency, and shared-storage recovery across sequential VVM instances with deterministic gates and injected storage failures.
-
-Assumptions:
-
-- Command routing and checkpoint-projector shutdown maintain at most one checkpoint writer for an application partition and ensure its writes complete before handoff. A lower checkpoint cannot be written after a newer checkpoint, so storage does not validate checkpoint ordering.
+- Retain one service-scoped recovery lifecycle per application partition and add a per-partition, on-demand workspace recovery lifecycle.
+- Store checkpoint values as JSON objects with exactly one field: `lastHandledWLogOffset` and `lastHandledPLogOffset` for workspace and PLog storage respectively.
+- Store the partition checkpoint in `SeqStorage_Part_PLog_offset`, keyed by application, using the partition ID as the clustering column. The value is `{"lastHandledPLogOffset": <offset>}`.
+- Store all workspace checkpoints for an application in `SeqStorage_WS_sequences`, with the WSID encoded in the clustering columns and `{"lastHandledWLogOffset": <offset>}` as the value.
+- Do not store a record-ID high-water mark and do not extend `IIDGenerator` with a persisted-state accessor.
+- Use the built-in asynchronous recovery-checkpoint projector to save the current event's WLog offset first and its PLog offset second. This ordering prevents the partition checkpoint from covering an event whose workspace checkpoint has not been stored.
+- On the first request to an unrecovered partition, start only partition recovery and return the existing partition-recovering `503` response.
+- Start partition recovery at the persisted `lastHandledPLogOffset`, or `FirstOffset` when the value is absent or zero. Perform one inclusive `ReadPLog(startOffset, ReadToTheEnd)` and retain only the final event returned by the scan.
+- Set `nextPLogOffset = lastPLogEventOffset + 1` from that final event without comparing it with any earlier or persisted value. Reapply the final event and publish the recovered partition. Do not start workspace recovery from the partition-recovery goroutine.
+- Start workspace recovery from the workspace command-processing stage when a subsequent request reaches the recovered partition.
+- Admit a workspace recovery only after reserving one of the partition's `NumWSRecoverers` slots. If no slot is available, return `503`, log that the workspace recovery limit was reached, and create neither recovery state nor a waiting goroutine. A later request may try again.
+- Deduplicate by WSID. A request for a workspace whose goroutine is still running returns `503`; a completed workspace is admitted immediately. Preserve the existing retained-error/report-and-retry lifecycle for failed recovery attempts.
+- Start workspace recovery at the workspace's persisted `lastHandledWLogOffset`, or `FirstOffset` when the value is absent or zero. Perform one inclusive `ReadWLog(startOffset, ReadToTheEnd)` and retain the final event offset.
+- Set `nextWLogOffset = lastWLogEventOffset + 1` from the final WLog event without comparing it with any earlier or persisted value.
+- Determine `nextRecordID` only from newly allocated non-singleton CUD record IDs. Singleton IDs have a different scope and must not advance the workspace record-ID generator.
+- While scanning from `lastHandledWLogOffset` to the WLog end, retain the maximum non-singleton record ID from the latest event that contains one. If none is found, scan backward from `lastHandledWLogOffset` in non-overlapping 10-event windows until such an event is found or `FirstOffset` is reached.
+- If no newly allocated non-singleton CUD exists between `FirstOffset` and the WLog end, use `FirstUserRecordID` as `nextRecordID`. Otherwise, use the found event's maximum non-singleton record ID plus one. Backward scans do not change `nextWLogOffset`.
+- Log distinct messages when partition recovery is in progress, workspace recovery is in progress, or the workspace recovery limit prevents a goroutine from starting.
+- Treat `NumWSRecoverers` as the exact upper bound. The default VVM configuration sets it to four; an explicit zero permits no workspace recovery and therefore yields `503` for an unrecovered workspace.
+- Keep partition and workspace recovery tied to the service context, ignore stale attempt completion after partition replacement, and join recovery goroutines during command-service shutdown.
 
 Out of scope:
 
@@ -54,15 +63,13 @@ Out of scope:
 
 References (internal):
 
-- [active partition recovery and counter reconstruction](../../../pkg/processors/command/impl.go)
-- [command persistence and service-lifetime boundaries](../../../pkg/processors/command/provide.go)
-- [recovery concurrency, failure, and shutdown behavior](../../../pkg/processors/command/impl_test.go)
-- [event-based async actualizer lifecycle](../../../pkg/processors/actualizers/async.go)
-- [shared system-storage conditional operations](../../../pkg/vvm/storage/interface.go)
-- [retained sequence-storage key prefixes](../../../pkg/vvm/storage/consts.go)
-- [in-memory record-ID allocation](../../../pkg/istructsmem/idgenerator.go)
-- [VVM configuration boundary](../../../pkg/vvm/types.go)
-- [AIR-5009 recovery and checkpoint requirements](./issue-AIR-5009.md)
+- [command/impl.go](../../../pkg/processors/command/impl.go)
+- [command/provide.go](../../../pkg/processors/command/provide.go)
+- [sys/checkpoints/checkpoints.go](../../../pkg/sys/checkpoints/checkpoints.go)
+- [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
+- [istructs/events-types.go](../../../pkg/istructs/events-types.go)
+- [vvm/types.go](../../../pkg/vvm/types.go)
+- [AIR-5009 recovery requirements](./issue-AIR-5009.md)
 
 References (external):
 
@@ -73,106 +80,134 @@ References (external):
 
 ### Tests
 
-- [x] create: [command/checkpoints_test.go](../../../pkg/processors/command/checkpoints_test.go)
-  - exercise the asynchronous workspace and partition checkpoint workers with deterministic time, storage failures, and queue gates
-  - verify per-operation workspace writes, the 100-event/one-minute partition cadence, workspace-before-partition ordering, retries, and the final shutdown flush
-  - use last-write-wins test storage so command tests observe the values provided by checkpoint producers without storage-side merging
+- [x] update: [checkpoints/checkpoints_test.go](../../../pkg/sys/checkpoints/checkpoints_test.go)
+  - verify that the projector stores the event's handled PLog and WLog offsets rather than next offsets
+  - verify workspace-before-partition write ordering and failure behavior
 
 - [x] update: [command/impl_test.go](../../../pkg/processors/command/impl_test.go)
-  - update: recovery coverage for a full bootstrap scan when the partition checkpoint is missing or zero and a tail-only scan when it contains a usable next offset
-  - add: coverage that an up-to-date checkpoint with an empty tail still reads and reapplies the preceding last event
-  - add: workspace recovery coverage for first-request and in-progress `503` responses, one attempt per workspace, the configured per-partition concurrency bound, retained failures, retries, and service cancellation
-  - add: coverage that a zero workspace-worker setting uses the default instead of blocking recovery
-  - preserve: last-event reapplication plus PLog offset, WLog offset, and record-ID continuity across partition and workspace recovery
-  - add: coverage that affected workspace snapshots are saved before recovered partition progress is published
-  - add: coverage that PLog, record-application, synchronous-projector, and WLog failures never enqueue a workspace checkpoint or advance the partition barrier
+  - verify one inclusive PLog read from the saved handled offset to the end
+  - verify that partition recovery does not start workspace recovery and that a subsequent request starts it from the command stage
+  - verify one inclusive WLog read from the workspace's saved handled offset to the end
+  - verify that the final WLog event determines the next WLog offset
+  - verify that singleton-only and CUD-free tails rewind in 10-event windows to find the latest non-singleton record ID
+  - verify that a history without non-singleton CUDs starts allocation at `FirstUserRecordID`
+  - verify one recovery attempt per WSID, `503` while it is running, and retained failure/retry behavior
+  - verify that the concurrency limit admits at most `NumWSRecoverers`, returns `503` without queueing excess work, logs the limit condition, and permits a later retry after a slot is released
+  - verify distinct log messages for partition-in-progress and workspace-in-progress responses
+  - verify that a zero limit admits no workspace recovery
 
-- [x] create: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
-  - exercise missing, valid, malformed, and sequential partition/workspace checkpoint reads and writes
-  - verify the JSON payloads and application/partition/workspace key isolation
-  - prove last-write-wins overwrite behavior and coexistence with legacy binary cells under the retained key prefixes
+- [x] update: [command/checkpoints_test.go](../../../pkg/processors/command/checkpoints_test.go)
+  - provide a thread-safe last-write-wins checkpoint test double using handled-offset values only
 
-- [x] update: [istructsmem/idgenerator_test.go](../../../pkg/istructsmem/idgenerator_test.go)
-  - add: coverage for reading the last record ID after initialization, allocation, and synchronization updates through the existing generator contract
+- [x] update: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
+  - add deterministic PLog/WLog read observations and independent partition/workspace recovery gates
+
+- [x] update: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
+  - verify exact single-field JSON values, missing and malformed values, and last-write-wins replacement
+  - verify application/partition isolation and WSID clustering-column isolation
 
 - [x] update: [storage/consts_test.go](../../../pkg/vvm/storage/consts_test.go)
-  - preserve: fixed sequence-storage prefix values and surrounding prefix order while the prefixes become active checkpoint namespaces
+  - preserve fixed sequence-storage prefix values
+
+- [x] update: [istructsmem/idgenerator_test.go](../../../pkg/istructsmem/idgenerator_test.go)
+  - remove checkpoint-specific last-record-ID accessor coverage
+
+- [x] update: [actualizers/impl_helpers_test.go](../../../pkg/processors/actualizers/impl_helpers_test.go)
+  - extend PLog event mocks with handling-partition and PLog-offset accessors used by the checkpoint projector
 
 - [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
-  - update: the shared-storage restart scenario to exercise checkpoint bootstrap followed by recovery on another VVM instance
-  - add: assertions that offsets and record IDs remain continuous across the ordered VVM handoff
+  - verify handled-offset checkpoint values across sequential VVM instances sharing storage
+  - verify WLog offset and record-ID continuity when record IDs are reconstructed from WLog CUDs
+
+- [x] update: [vit/utils.go](../../../pkg/vit/utils.go)
+  - retain the shared-storage two-VVM lifecycle helper used by the recovery integration test
 
 ### Checkpoint contracts and storage
 
 - [x] update: [istructs/events-types.go](../../../pkg/istructs/events-types.go)
-  - add: a non-mutating last-record-ID accessor to the existing ID-generator contract for recovery-state capture
+  - expose handling partition and PLog offset on persisted PLog events for checkpoint projection
+  - keep `IIDGenerator` free of checkpoint-specific record-ID accessors
 
 - [x] update: [istructsmem/idgenerator.go](../../../pkg/istructsmem/idgenerator.go)
-  - add: a non-mutating last-record-ID accessor on the existing generator implementation
-  - preserve: existing allocation, synchronization, and hook behavior
+  - remove the last-record-ID accessor and its checkpoint-only helper plumbing
 
 - [x] update: [storage/consts.go](../../../pkg/vvm/storage/consts.go)
-  - retain: the existing numeric sequence-storage prefixes from PR #4649 and define their active checkpoint/legacy-cell roles without renumbering later prefixes
+  - retain the sequence-storage prefix values and identify their partition-offset and WSID clustering-column roles
 
-- [x] create: [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
-  - system-VVM storage adapter for partition and workspace recovery checkpoints using the retained prefixes and a dedicated nonzero four-byte clustering key
-  - extensible JSON values containing the next PLog offset or the next WLog offset and record ID
-  - unconditional last-write-wins updates that store the checkpoint values provided by the single ordered writer and preserve legacy binary cells
-  - report missing values as absent for bootstrap recovery, but return malformed JSON as an operational recovery error
+- [x] update: [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
+  - store partition JSON under an application key with partition ID in the clustering columns
+  - store workspace JSON under an application key with WSID in the clustering columns
+  - encode only `lastHandledPLogOffset` or `lastHandledWLogOffset`, report missing values as absent, reject malformed values, and overwrite unconditionally
 
 - [x] update: [storage/provide.go](../../../pkg/vvm/storage/provide.go)
-  - add: construction of the recovery-checkpoint storage adapter over the shared system-VVM storage
+  - construct the recovery-checkpoint adapter over shared system-VVM storage
 
-### Command recovery and checkpointing
+- [x] update: [checkpoints/checkpoints.go](../../../pkg/sys/checkpoints/checkpoints.go)
+  - define single-field partition and workspace handled-offset checkpoint contracts
+  - register the built-in asynchronous projector and persist workspace before partition for each event
 
-- [x] create: [command/checkpoints.go](../../../pkg/processors/command/checkpoints.go)
-  - recovery-checkpoint storage contract and immutable partition/workspace snapshot types
-  - service-scoped workspace and partition checkpoint projectors with per-partition coverage barriers, event/time flushing, retry, final flush, cancellation, and shutdown coordination
-  - deterministic hooks for validating enqueue, persistence, retry, and flush ordering
+- [x] update: [parser/impl_analyse.go](../../../pkg/parser/impl_analyse.go)
+  - resolve the built-in generic Command trigger used by the recovery-checkpoint projector
+
+- [x] update: [parser/impl_build.go](../../../pkg/parser/impl_build.go)
+  - map the generic Command trigger to command events
+
+- [x] update: [sys/sys.vsql](../../../pkg/sys/sys.vsql)
+  - declare the built-in recovery-checkpoint projector for command, CUD, and ODoc events
+
+- [x] update: [sys/sysprovide/provide.go](../../../pkg/sys/sysprovide/provide.go)
+  - register the checkpoint projector with stateless resources
+
+### Command recovery
 
 - [x] update: [command/types.go](../../../pkg/processors/command/types.go)
-  - extend: partition state with per-workspace absent, recovering, failed, and ready lifecycle state plus tail-recovered counter data
-  - add: bounded per-partition workspace recovery scheduling and worker tracking without changing command serialization
-  - use: the ID generator's last-record-ID accessor for in-memory workspace sequence state
+  - add a generic recovery manager that maintains absent, recovering, failed, and ready units in one synchronized map, using an embedded non-nil recovered value to represent readiness
+  - use the same manager for application partitions and for the per-partition workspace collection
+  - keep the shared application structures needed by asynchronous WLog recovery
+  - let each generic manager own its attempt hooks and recovery lifecycle while workspace managers share the service worker wait group
 
 - [x] update: [command/impl.go](../../../pkg/processors/command/impl.go)
-  - update: partition recovery to read its checkpoint, retain the preceding event for reapplication, scan only the uncovered PLog tail, or perform a full bootstrap scan when the checkpoint is absent
-  - update: merge recovered counters monotonically, reapply the last event, persist affected workspace snapshots first, and advance partition progress only afterward
-  - add: lazy workspace recovery from shared snapshots with deduplicated attempts, bounded concurrency, retryable admission, and the existing retained-error retry pattern
-  - preserve: authentication-before-recovery, service-context lifetime, stale-attempt protection, and reset-on-persistence-or-projector-failure behavior
+  - recover the partition with one inclusive PLog suffix scan and use only its final event
+  - publish the recovered partition without starting workspace recovery from the partition-recovery goroutine
+  - start workspace recovery on demand from the command pipeline's workspace stage
+  - recover the WLog end offset with one inclusive suffix scan and rewind in 10-event windows when no non-singleton CUD ID is found
+  - ignore singleton IDs and retain `FirstUserRecordID` when the complete WLog contains no newly allocated non-singleton CUD
+  - let the generic manager deduplicate attempts, enforce admission, run workers and hooks, retain failures, reject stale completions, publish results, and account for worker shutdown
+  - expose the lifecycle through one generic `getOrStart` operation returning only the recovered value or an error, without a separate state enum or decision object
+  - keep recovery startup, logging, hooks, and HTTP error policy in the thin partition and workspace managers
+  - reserve a slot before starting a goroutine and return `503` both when full and for an in-progress WSID
+  - log partition-in-progress, workspace-in-progress, and workspace-limit conditions separately
+  - remove recovery-time checkpoint writes and all persisted record-ID handling
 
 - [x] update: [command/provide.go](../../../pkg/processors/command/provide.go)
-  - inject: checkpoint storage and workspace-recovery concurrency into the command service
-  - normalize: a zero workspace-recovery concurrency setting to the default of four for backward-compatible zero-valued configurations
-  - update: the command pipeline to admit a recovered workspace immediately after partition admission and to enqueue its immutable checkpoint only after the complete store path succeeds
-  - update: service shutdown to stop and join checkpoint and recovery workers before closing shared pipelines
-
-- [x] update: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
-  - extend: deterministic recovery controls to address partition and workspace attempts independently
-  - add: checkpoint-worker gates, injected storage failures, flush observation, and wait helpers without timing sleeps
+  - inject checkpoint storage and the exact workspace-recovery limit into command-service construction
+  - do not reinterpret an explicit zero limit as the default
+  - preserve service-context cancellation and worker joining during shutdown
 
 ### VVM configuration and wiring
 
-- [ ] update: [vvm/consts.go](../../../pkg/vvm/consts.go)
-  - add: the default per-partition workspace recovery concurrency of four
+- [x] update: [vvm/consts.go](../../../pkg/vvm/consts.go)
+  - define the default per-partition workspace recovery concurrency as four
 
-- [ ] update: [vvm/types.go](../../../pkg/vvm/types.go)
-  - add: the workspace-recovery concurrency field to VVM configuration
+- [x] update: [vvm/types.go](../../../pkg/vvm/types.go)
+  - expose `NumWSRecoverers` in VVM configuration
 
-- [ ] update: [vvm/impl_cfg.go](../../../pkg/vvm/impl_cfg.go)
-  - initialize: the new concurrency field from its default
+- [x] update: [vvm/impl_cfg.go](../../../pkg/vvm/impl_cfg.go)
+  - initialize `NumWSRecoverers` from its default
 
-- [ ] update: [vvm/provide.go](../../../pkg/vvm/provide.go)
-  - wire: shared recovery-checkpoint storage and workspace-recovery concurrency into command-service construction
+- [x] update: [vvm/provide.go](../../../pkg/vvm/provide.go)
+  - wire shared checkpoint storage and workspace-recovery concurrency into stateless resources and the command service
 
-- [ ] regenerate: [vvm/wire_gen.go](../../../pkg/vvm/wire_gen.go)
-  - run: `go generate ./pkg/vvm` after updating the Wire provider graph
+- [x] regenerate: [vvm/wire_gen.go](../../../pkg/vvm/wire_gen.go)
+  - reflect the updated Wire provider graph
 
 ## Quick start
 
-The default configuration permits four concurrent workspace recoveries per partition; zero also selects this default. Override it before starting the VVM when a deployment needs a different positive bound:
+The default configuration permits four concurrent workspace recoveries per partition. Override it before starting the VVM when a deployment needs a different hard limit:
 
 ```go
 cfg := vvm.NewVVMDefaultConfig()
 cfg.NumWSRecoverers = 8
 ```
+
+Setting `NumWSRecoverers` to zero disables workspace recovery admission; requests for unrecovered workspaces receive `503 Service Unavailable` and the limit condition is logged.

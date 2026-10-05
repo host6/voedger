@@ -22,8 +22,8 @@ const (
 	_ = uint32(pKeyPrefix_SeqStorage_WS - 3)
 	_ = uint32(3 - pKeyPrefix_SeqStorage_WS)
 
-	// Recovery checkpoints intentionally reuse the retained sequence-storage
-	// namespaces. Keep both their values and their position before AppTTL fixed.
+	// Recovery checkpoints reuse the retained sequence-storage namespaces. Keep
+	// both their values and their position before AppTTL fixed.
 	_ = uint32(pKeyPrefix_SeqStorage_Part - pKeyPrefix_VVMLeader - 1)
 	_ = uint32(pKeyPrefix_SeqStorage_WS - pKeyPrefix_SeqStorage_Part - 1)
 	_ = uint32(pKeyPrefix_AppTTL - pKeyPrefix_SeqStorage_WS - 1)
@@ -37,7 +37,4 @@ func TestConsts(t *testing.T) {
 
 	require.Equal(uint32(3), pKeyPrefix_SeqStorage_WS)
 	require.Equal(uint32(4), pKeyPrefix_AppTTL)
-
-	require.Equal(uint32(0), PLogOffsetCC)
-	require.Equal([]byte{0, 0, 0, 1}, recoveryCheckpointCCols)
 }
