@@ -222,7 +222,6 @@ func toRecoveryWorkpiece(cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
 }
 
 func (m *partitionManager) getOrStart(vvmCtx context.Context, partKey partitionKey, cmd *cmdWorkpiece) (*appPartition, error) {
-
 	// attempt factory instead of attempt func because we need to detach the recoveryCmd only if recover will be started
 	// otherwise need to detach first, call getOrStart with attempt func that captured that recoveryCmd
 	// and, if the recovery will not be actually started (e.g. if in progress already)
@@ -1199,7 +1198,6 @@ type commandProcessorHooks struct {
 
 func nopCommandProcessorHooks() *commandProcessorHooks {
 	return cmdProcHooksOrNOP(nil)
-
 }
 
 func cmdProcHooksOrNOP(hooks *commandProcessorHooks) *commandProcessorHooks {
