@@ -357,75 +357,75 @@ func TestRecoveryOnSyncProjectorError(t *testing.T) {
 	require.Equal(istructs.FirstUserRecordID+8, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
 }
 
-func TestRecovery(t *testing.T) {
-	require := require.New(t)
-
-	logCap := logger.StartCapture(t, logger.LogLevelVerbose)
-
-	cudQName := appdef.NewQName(appdef.SysPackage, "CUD")
-	app := setUp(t, func(wsb appdef.IWorkspaceBuilder, cfg *istructsmem.AppConfigType) {
-		wsb.AddCRecord(testCRecord)
-		wsb.AddCDoc(testCDoc).AddContainer("TestCRecord", testCRecord, 0, 1)
-		wsb.AddWDoc(testWDoc)
-		wsb.AddCommand(cudQName)
-		wsb.AddRole(iauthnz.QNameRoleAuthenticatedUser)
-		wsb.AddRole(iauthnz.QNameRoleEveryone)
-		wsb.AddRole(iauthnz.QNameRoleSystem)
-		cfg.Resources.Add(istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec))
-	})
-	defer tearDown(app)
-
-	cmdCUD := istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec)
-	app.cfg.Resources.Add(cmdCUD)
-
-	respData := sendCUD(t, 1, app)
-	require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
-	logCap.Reset()
-	restartCmdProc(&app)
-	require.NoError(triggerAndWaitForRecovery(t, app, 1))
-	respData = sendCUD(t, 1, app)
-	require.Equal(3, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+3, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+4, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+5, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
-	logCap.HasLine(
-		"stage=cp.partition_recovery.start",
-		"vapp=sys/voedger",
-		"extension=sys._Recovery",
-		"partid=1",
-	)
-	logCap.HasLine("stage=cp.partition_recovery.complete",
-		"vapp=sys/voedger",
-		"extension=sys._Recovery",
-		"partid=1",
-	)
-
-	restartCmdProc(&app)
-	require.NoError(triggerAndWaitForRecovery(t, app, 2))
-	respData = sendCUD(t, 2, app)
-	require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
-	restartCmdProc(&app)
-	require.NoError(triggerAndWaitForRecovery(t, app, 1))
-	respData = sendCUD(t, 1, app)
-	require.Equal(4, int(respData["CurrentWLogOffset"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+6, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+7, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-	require.Equal(istructs.FirstUserRecordID+8, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
-	app.cancel()
-	<-app.done
-}
-
 func TestPartitionRecovery(t *testing.T) {
+	t.Run("restores offsets and IDs across restarts", func(t *testing.T) {
+		require := require.New(t)
+
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+
+		cudQName := appdef.NewQName(appdef.SysPackage, "CUD")
+		app := setUp(t, func(wsb appdef.IWorkspaceBuilder, cfg *istructsmem.AppConfigType) {
+			wsb.AddCRecord(testCRecord)
+			wsb.AddCDoc(testCDoc).AddContainer("TestCRecord", testCRecord, 0, 1)
+			wsb.AddWDoc(testWDoc)
+			wsb.AddCommand(cudQName)
+			wsb.AddRole(iauthnz.QNameRoleAuthenticatedUser)
+			wsb.AddRole(iauthnz.QNameRoleEveryone)
+			wsb.AddRole(iauthnz.QNameRoleSystem)
+			cfg.Resources.Add(istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec))
+		})
+		defer tearDown(app)
+
+		cmdCUD := istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec)
+		app.cfg.Resources.Add(cmdCUD)
+
+		respData := sendCUD(t, 1, app)
+		require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
+		require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+
+		logCap.Reset()
+		restartCmdProc(&app)
+		require.NoError(triggerAndWaitForRecovery(t, app, 1))
+		respData = sendCUD(t, 1, app)
+		require.Equal(3, int(respData["CurrentWLogOffset"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+3, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+4, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+5, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+
+		logCap.HasLine(
+			"stage=cp.partition_recovery.start",
+			"vapp=sys/voedger",
+			"extension=sys._Recovery",
+			"partid=1",
+		)
+		logCap.HasLine("stage=cp.partition_recovery.complete",
+			"vapp=sys/voedger",
+			"extension=sys._Recovery",
+			"partid=1",
+		)
+
+		restartCmdProc(&app)
+		require.NoError(triggerAndWaitForRecovery(t, app, 2))
+		respData = sendCUD(t, 2, app)
+		require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
+		require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+
+		restartCmdProc(&app)
+		require.NoError(triggerAndWaitForRecovery(t, app, 1))
+		respData = sendCUD(t, 1, app)
+		require.Equal(4, int(respData["CurrentWLogOffset"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+6, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+7, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
+		require.Equal(istructs.FirstUserRecordID+8, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
+
+		app.cancel()
+		<-app.done
+	})
+
 	t.Run("partition recovery limit returns service unavailable", func(t *testing.T) {
 		require := require.New(t)
 		recoverCalled := false
@@ -622,7 +622,7 @@ func restartCmdProc(app *testApp) {
 	}()
 }
 
-func TestCheckpointBasedPartitionRecovery(t *testing.T) {
+func TestRecordIDsRecovery(t *testing.T) {
 	t.Run("missing and zero checkpoints scan from the first offset", func(t *testing.T) {
 		for _, checkpointState := range []string{"missing", "zero"} {
 			t.Run(checkpointState, func(t *testing.T) {
