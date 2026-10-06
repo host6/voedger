@@ -18,8 +18,9 @@ import (
 )
 
 func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
+	appQName := istructs.AppQName_test1_app1
 	cfg := it.NewOwnVITConfig(
-		it.WithApp(istructs.AppQName_test1_app1, it.ProvideApp1,
+		it.WithApp(appQName, it.ProvideApp1,
 			it.WithWorkspaceTemplate(it.QNameApp1_TestWSKind, "test_template", sys_test_template.TestTemplateFS),
 			it.WithUserLogin("login", "pwd"),
 			it.WithChildWorkspace(it.QNameApp1_TestWSKind, "test_ws", "test_template", "", "login", map[string]interface{}{"IntFld": 42}),
@@ -35,30 +36,28 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 		wsid                istructs.WSID
 		partitionID         istructs.PartitionID
 		firstVVMWLogOffset  istructs.Offset
-		firstVVMMaxRecordID istructs.RecordID
+		lastPersistedID     istructs.RecordID
 		secondVVMWLogOffset istructs.Offset
 		partitionBefore     syscheckpoints.PartitionCheckpoint
 		workspaceBefore     syscheckpoints.WorkspaceCheckpoint
 	)
-	appID := istructs.ClusterApps[istructs.AppQName_test1_app1]
+	appID := istructs.ClusterApps[appQName]
 
 	it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
 		FirstRun: func(t *testing.T, vit *it.VIT) {
 			require := require.New(t)
-			ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+			ws := vit.WS(appQName, "test_ws")
 			wsid = ws.WSID
 			partitionID = coreutils.AppPartitionID(wsid, istructs.NumAppPartitions(vit.NumCommandProcessors))
 
 			resp := vit.PostWS(ws, "c.sys.CUD", cudBody)
 			require.Len(resp.NewIDs, 3)
+			lastPersistedID = resp.NewIDs["3"]
 
 			body := `{"args":{"sys.ID": 1,"orecord1":[{"sys.ID":2,"sys.ParentID":1,"orecord2":[{"sys.ID":3,"sys.ParentID":2}]}]},"unloggedArgs":{"sys.ID":4}}`
 			resp = vit.PostWS(ws, "c.app1pkg.CmdODocOne", body)
 			require.NotEmpty(resp.NewIDs)
 			firstVVMWLogOffset = resp.CurrentWLogOffset
-			for _, id := range resp.NewIDs {
-				firstVVMMaxRecordID = max(firstVVMMaxRecordID, id)
-			}
 		},
 		AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
 			require := require.New(t)
@@ -80,7 +79,7 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			ws := vit.WS(istructs.AppQName_test1_app1, "test_ws")
 			resp := vit.PostWS(ws, "c.sys.CUD", cudBody)
 			require.Greater(resp.CurrentWLogOffset, firstVVMWLogOffset)
-			require.Greater(resp.NewIDs["1"], firstVVMMaxRecordID)
+			require.Greater(resp.NewIDs["1"], lastPersistedID)
 			require.Equal(resp.NewIDs["1"]+1, resp.NewIDs["2"])
 			require.Equal(resp.NewIDs["1"]+2, resp.NewIDs["3"])
 			secondVVMWLogOffset = resp.CurrentWLogOffset

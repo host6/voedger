@@ -142,6 +142,7 @@ References (external):
 
 - [x] update: [vit/utils.go](../../../pkg/vit/utils.go)
   - retain the shared-storage two-VVM lifecycle helper used by the recovery integration test
+  - allow the second VVM run to use a separate setup configuration while preserving the first run's storage
 
 ### Checkpoint contracts and storage
 
