@@ -208,6 +208,12 @@ The context with attributes is received from Router
 - Logs the event details right after successful write to PLog: calls `processors.LogEventAndCUDs()` (see [LogEventAndCUDs](#logeventandcuds)) with stage `cp.plog_saved`; per-CUD callback always returns `shouldLog=true`; `msgAdds` is `,oldfields={...}` for CUDs that arrived with the HTTP request, empty for CUDs created by the command; `eventMessageAdds` is empty
 - Right before sending the response to the bus:
   - Command handling error: level `Error`, stage `cp.error`, msg `<error message>`, `body`=`<compacted request body>`
+    - Partition recovery in progress: msg `partition <partitionID>: recovery is in progress`
+    - Partition recovery admission limit reached: msg `partition <partitionID>: recovery concurrency limit is reached`
+    - Partition recovery failed: msg `partition <partitionID>: recovery failed: <error message>`
+    - Workspace recovery in progress: msg `workspace <wsid>: recovery is in progress`
+    - Workspace recovery admission limit reached: msg `workspace <wsid>: recovery concurrency limit is reached`
+    - Workspace recovery failed: msg `workspace <wsid>: recovery failed: <error message>`
   - Command executed successfully: level `Verbose`, stage `cp.success`, msg `<command result>`
 - Additional log on errors:
   - if error happens on any of:
@@ -227,11 +233,19 @@ The context with attributes is received from Router
 - `extension` attrib: `sys._Recovery`
 - `partid` attrib: partition ID
 - Partition recovery start: level `Info`, stage `cp.partition_recovery.start`, msg (empty)
-- Partition recovery complete: level `Info`, stage `cp.partition_recovery.complete`, msg `completed`, nextPLogOffset and workspaces JSON
+- Partition recovery complete: level `Info`, stage `cp.partition_recovery.complete`, msg contains `nextPLogOffset <offset>, workspaces <JSON>`
 - ReadPLog failure: level `Error`, stage `cp.partition_recovery.readplog.error`, msg `<error message>`
 - Last event re-apply: `processors.LogEventAndCUDs()` called with stage `cp.partition_recovery.reapply` to log which event is being re-applied (with `woffset`, `poffset`, `evqname` attribs); the enriched context is stored in `cmdWorkpiece.logCtx` and used by sync projectors during re-apply
 - `LogEventAndCUDs` failure during re-apply: level `Error`, stage `cp.partition_recovery.logeventandcuds.error`, msg `<error message>`
 - StoreOp failure (re-apply last event): level `Error`, stage `cp.partition_recovery.storeop.error`, msg `<error message>`
+
+**Workspace recovery:**
+
+- Inherits the partition-recovery attributes `vapp=sys/voedger`, `extension=sys._Recovery`, and `partid=<partitionID>`
+- `wsid` attrib: workspace ID
+- Workspace recovery start: level `Info`, stage `cp.workspace_recovery.start`, msg (empty)
+- Initial WLog suffix-read failure: level `Error`, stage `cp.workspace_recovery.readwlog.error`, msg `<error message>`
+- Workspace recovery complete: level `Info`, stage `cp.workspace_recovery.complete`, msg contains `nextWLogOffset <offset>` and `lastRecordID <recordID>`
 
 ---
 
@@ -527,7 +541,7 @@ Automatically append context attributes and stage to log entries using slog.
   ```go
   logger.VerboseCtx(ctx, "routing", "request accepted")
   logger.ErrorCtx(ctx, "cp.error", "command failed:", err)
-  logger.InfoCtx(ctx, "cp.partition_recovery.complete", "completed, nextPLogOffset:", offset)
+  logger.InfoCtx(ctx, "cp.partition_recovery.complete", "nextPLogOffset ", offset)
   ```
 
 **Standard functions ([logger.go](../../../../pkg/goutils/logger/logger.go#L44))**

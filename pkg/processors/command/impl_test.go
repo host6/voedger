@@ -12,7 +12,6 @@ import (
 	"log"
 	"net/http"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -273,7 +272,7 @@ func recoveryKeyForWSID(wsid istructs.WSID) partitionKey {
 func triggerAndWaitForRecovery(t *testing.T, app testApp, wsid istructs.WSID) error {
 	t.Helper()
 	sendCUDWithSender(t, wsid, app, app.rawRequestSender, http.StatusServiceUnavailable)
-	return app.recovery.wait(app.ctx, recoveryKeyForWSID(wsid))
+	return app.recovery.partitions.wait(app.ctx, recoveryKeyForWSID(wsid))
 }
 
 func triggerWorkspaceRecovery(t *testing.T, app testApp, wsid istructs.WSID) {
@@ -287,7 +286,7 @@ func triggerAndWaitForWorkspaceRecovery(t *testing.T, app testApp, wsid istructs
 		return err
 	}
 	triggerWorkspaceRecovery(t, app, wsid)
-	return app.recovery.waitWorkspace(app.ctx, recoveryWorkspaceKey(wsid))
+	return app.recovery.workspaces.wait(app.ctx, recoveryWorkspaceKey(wsid))
 }
 
 func TestRecoveryOnSyncProjectorError(t *testing.T) {
@@ -426,100 +425,28 @@ func TestRecovery(t *testing.T) {
 	<-app.done
 }
 
-func TestAsynchronousRecovery(t *testing.T) {
-	t.Run("stale recovery does not overwrite reset partition state", func(t *testing.T) {
-		// Keep two recoveries for the same partition alive across a state reset. The old worker owns
-		// the removed state object, while the replacement worker owns the new map entry. Completing
-		// them out of order proves that the old result cannot become the partition's current state.
+func TestPartitionRecovery(t *testing.T) {
+	t.Run("partition recovery limit returns service unavailable", func(t *testing.T) {
 		require := require.New(t)
-		finished := make(chan struct{}, 2)
-		manager := newPartitionManager(recoveryHooks[partitionKey]{
-			scheduled: func(partitionKey) {},
-			beforeAttempt: func(context.Context, partitionKey) error {
-				return nil
-			},
-			attemptCompleted: func(partitionKey, error) {
-				finished <- struct{}{}
-			},
-		})
-		oldGate := make(chan struct{})
-		newGate := make(chan struct{})
-		var oldGateOnce sync.Once
-		var newGateOnce sync.Once
-		defer func() {
-			oldGateOnce.Do(func() { close(oldGate) })
-			newGateOnce.Do(func() { close(newGate) })
-			manager.shutdown()
-		}()
-
+		recoverCalled := false
+		manager := newPartitionManager(nopRecoveryHooks[partitionKey](),
+			func(context.Context, *cmdWorkpiece) (*appPartition, error) {
+				recoverCalled = true
+				return &appPartition{}, nil
+			})
+		manager.partitions.slots = make(chan struct{})
 		key := recoveryKeyForWSID(1)
-		newCmd := func() *cmdWorkpiece {
-			return &cmdWorkpiece{cmdMes: &implICommandMessage{
-				appQName:    key.appQName,
-				partitionID: key.partitionID,
-				requestCtx:  context.Background(),
-			}}
-		}
-		// Start the original recovery and keep it blocked before it can publish its result.
-		oldStarted := make(chan struct{})
-		oldPartition := &appPartition{}
-		gotPartition, err := manager.getOrStart(context.Background(), key, newCmd(), func(context.Context, *cmdWorkpiece) (*appPartition, error) {
-			close(oldStarted)
-			<-oldGate
-			return oldPartition, nil
+		cmd := &cmdWorkpiece{cmdMes: &implICommandMessage{requestCtx: context.Background()}}
+
+		partition, err := manager.getOrStart(context.Background(), key, cmd)
+
+		require.Nil(partition)
+		require.ErrorIs(err, coreutils.SysError{
+			HTTPStatus: http.StatusServiceUnavailable,
+			Message:    "partition 1: recovery concurrency limit is reached",
 		})
-		require.Nil(gotPartition)
-		require.ErrorIs(err, partitionRecoveringError(key.partitionID))
-		<-oldStarted
-
-		// Reset the original state and start a new recovery for the same partition. This recreates
-		// the map entry with a different state instance while the old worker is alive.
-		manager.resetPartitionState(key)
-		newStarted := make(chan struct{})
-		newPartition := &appPartition{}
-		gotPartition, err = manager.getOrStart(context.Background(), key, newCmd(), func(context.Context, *cmdWorkpiece) (*appPartition, error) {
-			close(newStarted)
-			<-newGate
-			return newPartition, nil
-		})
-		require.Nil(gotPartition)
-		require.ErrorIs(err, partitionRecoveringError(key.partitionID))
-		<-newStarted
-
-		manager.partitions.mu.Lock()
-		replacementState := manager.partitions.values[key]
-		manager.partitions.mu.Unlock()
-
-		// Complete the old worker first. Its result must not overwrite the replacement state or
-		// mark the replacement recovery as finished.
-		oldGateOnce.Do(func() { close(oldGate) })
-		<-finished
-
-		manager.partitions.mu.Lock()
-		currentState := manager.partitions.values[key]
-		var currentPartition *appPartition
-		if currentState != nil {
-			currentPartition = currentState.value
-		}
-		manager.partitions.mu.Unlock()
-		require.Same(replacementState, currentState)
-		require.Nil(currentPartition)
-
-		// Complete the replacement worker and verify that only its result becomes ready.
-		newGateOnce.Do(func() { close(newGate) })
-		<-finished
-		manager.partitions.mu.Lock()
-		currentState = manager.partitions.values[key]
-		currentPartition = nil
-		var currentErr error
-		if currentState != nil {
-			currentPartition = currentState.value
-			currentErr = currentState.recoveryErr
-		}
-		manager.partitions.mu.Unlock()
-		require.Same(replacementState, currentState)
-		require.Same(newPartition, currentPartition)
-		require.NoError(currentErr)
+		require.False(recoverCalled)
+		manager.shutdown()
 	})
 
 	t.Run("authentication precedes recovery", func(t *testing.T) {
@@ -535,7 +462,7 @@ func TestAsynchronousRecovery(t *testing.T) {
 		status, err := requestStatus(app.ctx, app.rawRequestSender, request)
 		require.NoError(err)
 		require.Equal(http.StatusUnauthorized, status)
-		require.Equal(0, app.recovery.startCount(recoveryKeyForWSID(1)))
+		require.Equal(0, app.recovery.partitions.startCount(recoveryKeyForWSID(1)))
 	})
 
 	t.Run("another partition remains available", func(t *testing.T) {
@@ -547,14 +474,14 @@ func TestAsynchronousRecovery(t *testing.T) {
 		defer tearDown(app)
 
 		recoveringKey := recoveryKeyForWSID(1)
-		gate := app.recovery.blockNext(recoveringKey)
+		gate := app.recovery.partitions.blockNext(recoveringKey)
 		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
 
 		sendCUD(t, 2, app)
-		require.Equal(1, app.recovery.startCount(recoveringKey))
+		require.Equal(1, app.recovery.partitions.startCount(recoveringKey))
 
 		close(gate)
-		require.NoError(app.recovery.wait(app.ctx, recoveringKey))
+		require.NoError(app.recovery.partitions.wait(app.ctx, recoveringKey))
 		sendCUD(t, 1, app)
 	})
 
@@ -568,7 +495,7 @@ func TestAsynchronousRecovery(t *testing.T) {
 		defer tearDown(app)
 
 		key := recoveryKeyForWSID(1)
-		gate := app.recovery.blockNext(key)
+		gate := app.recovery.partitions.blockNext(key)
 		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
 
 		const concurrentRequests = 5
@@ -588,12 +515,11 @@ func TestAsynchronousRecovery(t *testing.T) {
 			require.NoError(result.err)
 			require.Equal(http.StatusServiceUnavailable, result.status)
 		}
-		require.Equal(1, app.recovery.startCount(key))
-		logCap.HasLine("stage=cp.partition_recovery.in_progress",
-			"partition 1 recovery is already running")
+		require.Equal(1, app.recovery.partitions.startCount(key))
+		logCap.HasLine("partition 1: recovery is in progress")
 
 		close(gate)
-		require.NoError(app.recovery.wait(app.ctx, key))
+		require.NoError(app.recovery.partitions.wait(app.ctx, key))
 		sendCUD(t, 1, app)
 	})
 
@@ -606,7 +532,7 @@ func TestAsynchronousRecovery(t *testing.T) {
 		defer tearDown(app)
 
 		key := recoveryKeyForWSID(1)
-		gate := app.recovery.blockNext(key)
+		gate := app.recovery.partitions.blockNext(key)
 		requestCtx, cancelRequest := context.WithCancel(app.ctx)
 		status, err := requestStatus(requestCtx, app.rawRequestSender, newCUDRequest(1, app))
 		require.NoError(err)
@@ -614,7 +540,7 @@ func TestAsynchronousRecovery(t *testing.T) {
 
 		cancelRequest()
 		close(gate)
-		require.NoError(app.recovery.wait(app.ctx, key))
+		require.NoError(app.recovery.partitions.wait(app.ctx, key))
 		sendCUD(t, 1, app)
 	})
 
@@ -629,21 +555,21 @@ func TestAsynchronousRecovery(t *testing.T) {
 
 		key := recoveryKeyForWSID(1)
 		recoveryErr := errors.New("injected recovery failure")
-		app.recovery.failNext(key, recoveryErr)
+		app.recovery.partitions.failNext(key, recoveryErr)
 		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
-		require.ErrorIs(app.recovery.wait(app.ctx, key), recoveryErr)
-		require.Equal(1, app.recovery.startCount(key))
+		require.ErrorIs(app.recovery.partitions.wait(app.ctx, key), recoveryErr)
+		require.Equal(1, app.recovery.partitions.startCount(key))
 
-		gate := app.recovery.blockNext(key)
+		gate := app.recovery.partitions.blockNext(key)
 		respData := sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusInternalServerError)
 		sysError := respData["sys.Error"].(map[string]interface{})
-		require.Equal("partition 1 recovery failed: injected recovery failure", sysError["Message"])
-		require.Equal(2, app.recovery.startCount(key))
+		require.Equal("partition 1: recovery failed: injected recovery failure", sysError["Message"])
+		require.Equal(2, app.recovery.partitions.startCount(key))
 
 		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
-		require.Equal(2, app.recovery.startCount(key))
+		require.Equal(2, app.recovery.partitions.startCount(key))
 		close(gate)
-		require.NoError(app.recovery.wait(app.ctx, key))
+		require.NoError(app.recovery.partitions.wait(app.ctx, key))
 		sendCUD(t, 1, app)
 	})
 
@@ -655,14 +581,14 @@ func TestAsynchronousRecovery(t *testing.T) {
 		app := setUpRecoveryTestApp(t)
 
 		key := recoveryKeyForWSID(1)
-		app.recovery.blockNext(key)
+		app.recovery.partitions.blockNext(key)
 		sendCUDWithSender(t, 1, app, app.rawRequestSender, http.StatusServiceUnavailable)
 
 		app.n10nBrokerCleanup()
 		app.cancel()
 		<-app.done
-		require.ErrorIs(app.recovery.wait(context.Background(), key), context.Canceled)
-		require.Equal(1, app.recovery.startCount(key))
+		require.ErrorIs(app.recovery.partitions.wait(context.Background(), key), context.Canceled)
+		require.Equal(1, app.recovery.partitions.startCount(key))
 	})
 }
 
@@ -709,10 +635,10 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 				if checkpointState == "zero" {
 					storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, checkpoints.PartitionCheckpoint{})
 				}
-				app.recovery.resetPLogReads(key)
+				app.recovery.pLogReads.reset(key)
 
 				response := sendCUD(t, 1, app)
-				reads := app.recovery.pLogReads(key)
+				reads := app.recovery.pLogReads.values(key)
 				require.Len(reads, 1)
 				require.Equal(istructs.FirstOffset, reads[0].offset)
 				require.Equal(istructs.ReadToTheEnd, reads[0].count)
@@ -743,14 +669,14 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID,
 			checkpoints.PartitionCheckpoint{LastHandledPLogOffset: savedPLogOffset})
 		restartCmdProc(&app)
-		app.recovery.resetPLogReads(key)
-		app.recovery.resetWLogReads(workspaceKey)
+		app.recovery.pLogReads.reset(key)
+		app.recovery.wLogReads.reset(workspaceKey)
 		require.NoError(triggerAndWaitForWorkspaceRecovery(t, app, 1))
 
-		reads := app.recovery.pLogReads(key)
-		require.Equal([]pLogRead{{offset: savedPLogOffset, count: istructs.ReadToTheEnd}}, reads)
-		wLogReads := app.recovery.wLogReads(workspaceKey)
-		require.Equal([]pLogRead{{offset: savedWLogOffset, count: istructs.ReadToTheEnd}}, wLogReads)
+		reads := app.recovery.pLogReads.values(key)
+		require.Equal([]logRead{{offset: savedPLogOffset, count: istructs.ReadToTheEnd}}, reads)
+		wLogReads := app.recovery.wLogReads.values(workspaceKey)
+		require.Equal([]logRead{{offset: savedWLogOffset, count: istructs.ReadToTheEnd}}, wLogReads)
 
 		response := sendCUD(t, 1, app)
 		require.Equal(int(previous["CurrentWLogOffset"].(float64))+1, int(response["CurrentWLogOffset"].(float64)))
@@ -778,14 +704,14 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 			LastHandledPLogOffset: savedPLogOffset,
 		})
 		restartCmdProc(&app)
-		app.recovery.resetPLogReads(key)
-		app.recovery.resetWLogReads(workspaceKey)
+		app.recovery.pLogReads.reset(key)
+		app.recovery.wLogReads.reset(workspaceKey)
 
 		require.NoError(triggerAndWaitForWorkspaceRecovery(t, app, 1))
-		require.Equal([]pLogRead{{offset: savedPLogOffset, count: istructs.ReadToTheEnd}},
-			app.recovery.pLogReads(key))
-		require.Equal([]pLogRead{{offset: savedWLogOffset, count: istructs.ReadToTheEnd}},
-			app.recovery.wLogReads(workspaceKey))
+		require.Equal([]logRead{{offset: savedPLogOffset, count: istructs.ReadToTheEnd}},
+			app.recovery.pLogReads.values(key))
+		require.Equal([]logRead{{offset: savedWLogOffset, count: istructs.ReadToTheEnd}},
+			app.recovery.wLogReads.values(workspaceKey))
 
 		response := sendCUD(t, 1, app)
 		require.Equal(int(previous["CurrentWLogOffset"].(float64))+1, int(response["CurrentWLogOffset"].(float64)))
@@ -816,12 +742,12 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 		})
 
 		restartCmdProc(&app)
-		app.recovery.resetWLogReads(workspaceKey)
+		app.recovery.wLogReads.reset(workspaceKey)
 		require.NoError(triggerAndWaitForWorkspaceRecovery(t, app, 1))
-		require.Equal([]pLogRead{
+		require.Equal([]logRead{
 			{offset: lastHandledWLogOffset, count: istructs.ReadToTheEnd},
 			{offset: istructs.FirstOffset, count: int(lastHandledWLogOffset - istructs.FirstOffset)},
-		}, app.recovery.wLogReads(workspaceKey))
+		}, app.recovery.wLogReads.values(workspaceKey))
 
 		response := sendCUD(t, 1, app)
 		require.Equal(int(lastHandledWLogOffset+1), int(response["CurrentWLogOffset"].(float64)))
@@ -854,21 +780,21 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 		})
 
 		restartCmdProc(&app)
-		app.recovery.resetWLogReads(workspaceKey)
+		app.recovery.wLogReads.reset(workspaceKey)
 		require.NoError(triggerAndWaitForWorkspaceRecovery(t, app, 1))
-		expectedReads := []pLogRead{{offset: lastHandledWLogOffset, count: istructs.ReadToTheEnd}}
+		expectedReads := []logRead{{offset: lastHandledWLogOffset, count: istructs.ReadToTheEnd}}
 		for rewindEnd := lastHandledWLogOffset; rewindEnd > istructs.FirstOffset; {
 			rewindStart := istructs.FirstOffset
 			if rewindEnd > istructs.FirstOffset+workspaceRecoveryRewindEvents {
 				rewindStart = rewindEnd - workspaceRecoveryRewindEvents
 			}
-			expectedReads = append(expectedReads, pLogRead{
+			expectedReads = append(expectedReads, logRead{
 				offset: rewindStart,
 				count:  int(rewindEnd - rewindStart),
 			})
 			rewindEnd = rewindStart
 		}
-		require.Equal(expectedReads, app.recovery.wLogReads(workspaceKey))
+		require.Equal(expectedReads, app.recovery.wLogReads.values(workspaceKey))
 
 		response := sendCUD(t, 1, app)
 		require.Equal(int(lastHandledWLogOffset+1), int(response["CurrentWLogOffset"].(float64)))
@@ -883,47 +809,44 @@ func TestCheckpointBasedPartitionRecovery(t *testing.T) {
 		defer tearDown(app)
 		partitionKey := recoveryKeyForWSID(1)
 		workspaceKey := recoveryWorkspaceKey(1)
-		gate := app.recovery.blockNextWorkspace(workspaceKey)
+		gate := app.recovery.workspaces.blockNext(workspaceKey)
 
 		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(1, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		require.NoError(app.recovery.wait(app.ctx, partitionKey))
-		require.Equal(0, app.recovery.workspaceStartCount(workspaceKey))
+		require.NoError(app.recovery.partitions.wait(app.ctx, partitionKey))
+		require.Equal(0, app.recovery.workspaces.startCount(workspaceKey))
 
 		status, err = requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(1, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		app.recovery.waitWorkspaceStarted(app.ctx, workspaceKey)
-		require.Equal(1, app.recovery.workspaceStartCount(workspaceKey))
+		require.Equal(1, app.recovery.workspaces.startCount(workspaceKey))
 
 		close(gate)
-		require.NoError(app.recovery.waitWorkspace(app.ctx, workspaceKey))
+		require.NoError(app.recovery.workspaces.wait(app.ctx, workspaceKey))
 	})
 }
 
-func TestLazyWorkspaceRecovery(t *testing.T) {
+func TestWorkspaceRecovery(t *testing.T) {
 	t.Run("first and in-progress requests return 503 and schedule one attempt", func(t *testing.T) {
 		require := require.New(t)
 		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
-		app, _ := setUpLazyWorkspaceRecoveryApp(t, 2, 1, 3, 5)
+		app, _ := setWorkspaceRecoveryApp(t, 2, 1, 3, 5)
 		defer tearDown(app)
 		key := recoveryWorkspaceKey(1)
-		gate := app.recovery.blockNextWorkspace(key)
+		gate := app.recovery.workspaces.blockNext(key)
 
 		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(1, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		app.recovery.waitWorkspaceStarted(app.ctx, key)
 		status, err = requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(1, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		require.Equal(1, app.recovery.workspaceStartCount(key))
-		logCap.HasLine("stage=cp.workspace_recovery.in_progress",
-			"workspace 1 recovery is already running")
+		require.Equal(1, app.recovery.workspaces.startCount(key))
+		logCap.HasLine("workspace 1: recovery is in progress")
 
 		close(gate)
-		require.NoError(app.recovery.waitWorkspace(app.ctx, key))
+		require.NoError(app.recovery.workspaces.wait(app.ctx, key))
 		response := sendCUD(t, 1, app)
 		require.Equal(2, int(response["CurrentWLogOffset"].(float64)))
 		require.Equal(istructs.FirstUserRecordID,
@@ -932,29 +855,28 @@ func TestLazyWorkspaceRecovery(t *testing.T) {
 
 	t.Run("failure is retained while the next request starts one retry", func(t *testing.T) {
 		require := require.New(t)
-		app, _ := setUpLazyWorkspaceRecoveryApp(t, 1, 1, 3, 5)
+		app, _ := setWorkspaceRecoveryApp(t, 1, 1, 3, 5)
 		defer tearDown(app)
 		key := recoveryWorkspaceKey(3)
 		injectedErr := errors.New("injected workspace recovery failure")
-		app.recovery.failNextWorkspace(key, injectedErr)
+		app.recovery.workspaces.failNext(key, injectedErr)
 
 		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(3, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		require.ErrorIs(app.recovery.waitWorkspace(app.ctx, key), injectedErr)
+		require.ErrorIs(app.recovery.workspaces.wait(app.ctx, key), injectedErr)
 
-		retryGate := app.recovery.blockNextWorkspace(key)
+		retryGate := app.recovery.workspaces.blockNext(key)
 		status, err = requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(3, app))
 		require.NoError(err)
 		require.Equal(http.StatusInternalServerError, status)
-		app.recovery.waitWorkspaceStarted(app.ctx, key)
 		status, err = requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(3, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		require.Equal(2, app.recovery.workspaceStartCount(key))
+		require.Equal(2, app.recovery.workspaces.startCount(key))
 
 		close(retryGate)
-		require.NoError(app.recovery.waitWorkspace(app.ctx, key))
+		require.NoError(app.recovery.workspaces.wait(app.ctx, key))
 		sendCUD(t, 3, app)
 	})
 
@@ -968,28 +890,27 @@ func TestLazyWorkspaceRecovery(t *testing.T) {
 
 	t.Run("service cancellation stops active workspace attempts", func(t *testing.T) {
 		require := require.New(t)
-		app, _ := setUpLazyWorkspaceRecoveryApp(t, 1, 1, 3, 5)
+		app, _ := setWorkspaceRecoveryApp(t, 1, 1, 3, 5)
 		key := recoveryWorkspaceKey(5)
 		rejectedKey := recoveryWorkspaceKey(3)
-		app.recovery.blockNextWorkspace(key)
+		app.recovery.workspaces.blockNext(key)
 		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(5, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		app.recovery.waitWorkspaceStarted(app.ctx, key)
 		status, err = requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(3, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		require.Equal(0, app.recovery.workspaceAttemptCount(rejectedKey))
+		require.Equal(0, app.recovery.workspaces.startCount(rejectedKey))
 
 		app.cancel()
 		<-app.done
-		require.ErrorIs(app.recovery.waitWorkspace(context.Background(), key), context.Canceled)
-		require.Equal(0, app.recovery.workspaceStartCount(rejectedKey))
+		require.ErrorIs(app.recovery.workspaces.wait(context.Background(), key), context.Canceled)
+		require.Equal(0, app.recovery.workspaces.startCount(rejectedKey))
 		app.n10nBrokerCleanup()
 	})
 }
 
-func setUpLazyWorkspaceRecoveryApp(t *testing.T, workers uint, lazyWSIDs ...istructs.WSID) (testApp, *testCheckpointStorage) {
+func setWorkspaceRecoveryApp(t *testing.T, workers uint, lazyWSIDs ...istructs.WSID) (testApp, *testCheckpointStorage) {
 	t.Helper()
 	require := require.New(t)
 	storage := newTestCheckpointStorage()
@@ -1012,7 +933,7 @@ func setUpLazyWorkspaceRecoveryApp(t *testing.T, workers uint, lazyWSIDs ...istr
 	require.NoError(triggerAndWaitForRecovery(t, app, 99))
 	triggerWorkspaceRecovery(t, app, 99)
 	if workers > 0 {
-		require.NoError(app.recovery.waitWorkspace(app.ctx, recoveryWorkspaceKey(99)))
+		require.NoError(app.recovery.workspaces.wait(app.ctx, recoveryWorkspaceKey(99)))
 	}
 	return app, storage
 }
@@ -1021,46 +942,39 @@ func assertWorkspaceRecoveryLimit(t *testing.T, configuredWorkers uint, wsids []
 	t.Helper()
 	require := require.New(t)
 	logCap := logger.StartCapture(t, logger.LogLevelVerbose)
-	app, _ := setUpLazyWorkspaceRecoveryApp(t, configuredWorkers, wsids...)
+	app, _ := setWorkspaceRecoveryApp(t, configuredWorkers, wsids...)
 	defer tearDown(app)
 
 	gates := make(map[workspaceKey]chan struct{}, len(wsids))
 	limit := min(int(configuredWorkers), len(wsids))
 	for _, wsid := range wsids[:limit] {
 		key := recoveryWorkspaceKey(wsid)
-		gates[key] = app.recovery.blockNextWorkspace(key)
+		gates[key] = app.recovery.workspaces.blockNext(key)
 		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(wsid, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		app.recovery.waitWorkspaceStarted(app.ctx, key)
-	}
-	if limit > 0 {
-		app.recovery.waitWorkspaceActive(app.ctx, recoveryKeyForWSID(wsids[0]), limit)
-		require.Equal(limit, app.recovery.maxActiveWorkspaces(recoveryKeyForWSID(wsids[0])))
+		require.Equal(1, app.recovery.workspaces.startCount(key))
 	}
 
 	for _, wsid := range wsids[limit:] {
 		key := recoveryWorkspaceKey(wsid)
-		gates[key] = app.recovery.blockNextWorkspace(key)
+		gates[key] = app.recovery.workspaces.blockNext(key)
 		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(wsid, app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		require.Equal(0, app.recovery.workspaceStartCount(key))
-		logCap.HasLine("stage=cp.workspace_recovery.limit",
-			fmt.Sprintf("workspace recovery limit %d is reached", configuredWorkers),
-			fmt.Sprintf("workspace %d recovery was not started", wsid))
+		require.Equal(0, app.recovery.workspaces.startCount(key))
+		logCap.HasLine(fmt.Sprintf("workspace %d: recovery concurrency limit is reached", wsid))
 	}
 
 	if limit > 0 && limit < len(wsids) {
 		firstKey := recoveryWorkspaceKey(wsids[0])
 		close(gates[firstKey])
-		require.NoError(app.recovery.waitWorkspace(app.ctx, firstKey))
+		require.NoError(app.recovery.workspaces.wait(app.ctx, firstKey))
 		overflowKey := recoveryWorkspaceKey(wsids[limit])
 		status, err := requestStatus(app.ctx, app.rawRequestSender, newCUDRequest(wsids[limit], app))
 		require.NoError(err)
 		require.Equal(http.StatusServiceUnavailable, status)
-		app.recovery.waitWorkspaceStarted(app.ctx, overflowKey)
-		require.Equal(1, app.recovery.workspaceStartCount(overflowKey))
+		require.Equal(1, app.recovery.workspaces.startCount(overflowKey))
 	}
 
 	for key, gate := range gates {
@@ -1069,8 +983,8 @@ func assertWorkspaceRecoveryLimit(t *testing.T, configuredWorkers uint, wsids []
 		default:
 			close(gate)
 		}
-		if app.recovery.workspaceStartCount(key) > 0 {
-			_ = app.recovery.waitWorkspace(app.ctx, key)
+		if app.recovery.workspaces.startCount(key) > 0 {
+			_ = app.recovery.workspaces.wait(app.ctx, key)
 		}
 	}
 }

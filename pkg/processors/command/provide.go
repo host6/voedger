@@ -8,7 +8,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"sync"
 	"time"
 
 	"github.com/voedger/voedger/pkg/goutils/logger"
@@ -34,17 +33,16 @@ type cmdProc struct {
 	checkpointStorage      checkpoints.IRecoveryCheckpointStorage
 	numWSRecoverers        uint
 	workspaceRecoveryHooks recoveryHooks[workspaceKey]
-	hooks                  *commandProcessorHooks
+	cmdProcHooks           *commandProcessorHooks
 }
 
-func newPartitionManager(hooks recoveryHooks[partitionKey]) *partitionManager {
-	workers := &sync.WaitGroup{}
+func newPartitionManager(hooks recoveryHooks[partitionKey], recoverFunc recoverPartitionFunc) *partitionManager {
 	return &partitionManager{
 		partitions: newRecoverManager[partitionKey, appPartition](
 			nil,
-			workers,
 			hooks,
 		),
+		recoverFunc: recoverFunc,
 	}
 }
 
@@ -61,29 +59,26 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
 	secretReader isecrets.ISecretReader, checkpointStorage checkpoints.IRecoveryCheckpointStorage, numWSRecoverers uint,
 	partitionRecoveryHooks recoveryHooks[partitionKey], workspaceRecoveryHooks recoveryHooks[workspaceKey],
-	hooks *commandProcessorHooks) ServiceFactory {
-	partitionRecoveryHooks = normalizedRecoveryHooks(partitionRecoveryHooks)
-	workspaceRecoveryHooks = normalizedRecoveryHooks(workspaceRecoveryHooks)
-	hooks = normalizedCommandProcessorHooks(hooks)
+	cmdProcHooks *commandProcessorHooks) ServiceFactory {
+	partitionRecoveryHooks = hooksOrNOP(partitionRecoveryHooks)
+	workspaceRecoveryHooks = hooksOrNOP(workspaceRecoveryHooks)
+	cmdProcHooks = cmdProcHooksOrNOP(cmdProcHooks)
 	return func(commandsChannel CommandChannel) pipeline.IService {
 		cmdProc := &cmdProc{
-			partitionManager:       newPartitionManager(partitionRecoveryHooks),
 			n10nBroker:             n10nBroker,
 			time:                   tm,
 			authenticator:          authenticator,
 			checkpointStorage:      checkpointStorage,
 			numWSRecoverers:        numWSRecoverers,
 			workspaceRecoveryHooks: workspaceRecoveryHooks,
-			hooks:                  hooks,
+			cmdProcHooks:           cmdProcHooks,
 		}
+		cmdProc.partitionManager = newPartitionManager(partitionRecoveryHooks, cmdProc.recoverPartition)
 
 		return pipeline.NewService(func(vvmCtx context.Context) {
 			hs := newReusableHostState(vvmCtx, secretReader)
 			cmdProc.storeOp = pipeline.NewSyncPipeline(vvmCtx, "store",
 				pipeline.WireFunc("applyRecords", func(_ context.Context, cmd *cmdWorkpiece) (err error) {
-					if err = cmdProc.beforeStoreStage(cmd, commandStoreStageApplyRecords); err != nil {
-						return err
-					}
 					if cmd.reapplier != nil {
 						err = cmd.reapplier.ApplyRecords()
 					} else {
@@ -96,9 +91,6 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 				}), pipeline.WireSyncOperator("syncProjectorsAndPutWLog", pipeline.ForkOperator(pipeline.ForkSame,
 					pipeline.ForkBranch(
 						pipeline.NewSyncOp(func(ctx context.Context, cmd *cmdWorkpiece) (err error) {
-							if err = cmdProc.beforeStoreStage(cmd, commandStoreStageSyncProjectors); err != nil {
-								return err
-							}
 							cmd.syncProjectorsStart = tm.Now()
 							err = cmd.appPart.DoSyncActualizer(ctx, cmd)
 							cmd.metrics.increase(ProjectorsSeconds, time.Since(cmd.syncProjectorsStart).Seconds())
@@ -113,9 +105,6 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 						}),
 					),
 					pipeline.ForkBranch(pipeline.NewSyncOp(func(_ context.Context, cmd *cmdWorkpiece) (err error) {
-						if err = cmdProc.beforeStoreStage(cmd, commandStoreStageWLog); err != nil {
-							return err
-						}
 						if cmd.reapplier != nil {
 							err = cmd.reapplier.PutWLog()
 						} else {
@@ -204,8 +193,8 @@ func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 							logSuccess(cmd)
 						}
 						if cmd.appPartitionRestartScheduled {
-							logger.WarningCtx(newRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID()), "cp.partition_recovery", "partition will be restarted due of an error on writing to Log: ", cmdHandlingErr)
-							cmdProc.partitionManager.resetPartitionState(partitionKey{
+							logger.WarningCtx(newPartRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID()), "cp.partition_recovery", "partition will be restarted due of an error on writing to Log: ", cmdHandlingErr)
+							cmdProc.partitionManager.scheduleRecovery(partitionKey{
 								appQName:    cmd.cmdMes.AppQName(),
 								partitionID: cmd.cmdMes.PartitionID(),
 							})

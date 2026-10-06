@@ -216,7 +216,8 @@ type appPartition struct {
 }
 
 type partitionManager struct {
-	partitions *recoverManager[partitionKey, appPartition]
+	partitions  *recoverManager[partitionKey, appPartition]
+	recoverFunc recoverPartitionFunc
 }
 
 type recoverPartitionFunc func(context.Context, *cmdWorkpiece) (*appPartition, error)

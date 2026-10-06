@@ -13,7 +13,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/voedger/voedger/pkg/bus"
@@ -169,152 +168,20 @@ func borrowAppPart(_ context.Context, cmd *cmdWorkpiece) error {
 	return cmd.borrow()
 }
 
-func newAppPartition(numWSRecoverers uint, workers *sync.WaitGroup,
-	workspaceRecoveryHooks recoveryHooks[workspaceKey]) *appPartition {
+func newAppPartition(numWSRecoverers uint, workspaceRecoveryHooks recoveryHooks[workspaceKey]) *appPartition {
 	return &appPartition{
-		workspaces:     newWorkspaceManager(numWSRecoverers, workers, workspaceRecoveryHooks),
+		workspaces:     newWorkspaceManager(numWSRecoverers, workspaceRecoveryHooks),
 		nextPLogOffset: istructs.FirstOffset,
 	}
 }
 
-func newWorkspaceManager(numRecoverers uint, workers *sync.WaitGroup,
-	hooks recoveryHooks[workspaceKey]) *workspaceManager {
+func newWorkspaceManager(numRecoverers uint, hooks recoveryHooks[workspaceKey]) *workspaceManager {
 	return &workspaceManager{
 		workspaces: newRecoverManager[workspaceKey, workspace](
 			make(chan struct{}, numRecoverers),
-			workers,
 			hooks,
 		),
 	}
-}
-
-var (
-	errRecoveryInProgress = errors.New("recovery is in progress")
-	errRecoveryLimit      = errors.New("recovery concurrency limit is reached")
-)
-
-func newRecoverManager[K comparable, T any](slots chan struct{}, workers *sync.WaitGroup,
-	hooks recoveryHooks[K]) *recoverManager[K, T] {
-	return &recoverManager[K, T]{
-		values:  map[K]*recoverableValue[T]{},
-		slots:   slots,
-		workers: workers,
-		hooks:   hooks,
-	}
-}
-
-func (m *recoverManager[K, T]) getOrStart(vvmCtx context.Context, key K,
-	newAttempt newRecoveryAttemptFunc[T]) (*T, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	value := m.values[key]
-	if value == nil {
-		if !m.reserveSlot() {
-			return nil, errRecoveryLimit
-		}
-		value = &recoverableValue[T]{}
-		m.values[key] = value
-		// The slot is ours, so caller-owned resources can now be transferred to the attempt.
-		m.startRecover(vvmCtx, key, value, newAttempt())
-		return nil, errRecoveryInProgress
-	}
-	if value.value != nil {
-		return value.value, nil
-	}
-	if value.recoveryErr == nil {
-		return nil, errRecoveryInProgress
-	}
-	if !m.reserveSlot() {
-		return nil, errRecoveryLimit
-	}
-	previousErr := value.recoveryErr
-	value.recoveryErr = nil
-	// Create a fresh attempt for the retry only after its slot has been reserved.
-	m.startRecover(vvmCtx, key, value, newAttempt())
-	return nil, previousErr
-}
-
-func (m *recoverManager[K, T]) reserveSlot() bool {
-	if m.slots == nil {
-		return true
-	}
-	select {
-	case m.slots <- struct{}{}:
-		return true
-	default:
-		return false
-	}
-}
-
-func (m *recoverManager[K, T]) startRecover(vvmCtx context.Context, key K, value *recoverableValue[T],
-	attempt recoveryAttemptFunc[T]) {
-	m.workers.Add(1)
-	m.hooks.scheduled(key)
-	go m.recover(vvmCtx, key, value, attempt)
-}
-
-func (m *recoverManager[K, T]) recover(vvmCtx context.Context, key K, value *recoverableValue[T],
-	attempt recoveryAttemptFunc[T]) {
-	defer m.workers.Done()
-	var (
-		recovered *T
-		err       error
-	)
-	err = m.hooks.beforeAttempt(vvmCtx, key)
-	if err == nil {
-		recovered, err = attempt(vvmCtx)
-	}
-	if err == nil {
-		err = vvmCtx.Err()
-	}
-	m.complete(key, value, recovered, err)
-	m.hooks.attemptCompleted(key, err)
-}
-
-func (m *recoverManager[K, T]) complete(key K, value *recoverableValue[T], recovered *T, err error) {
-	m.mu.Lock()
-	if m.values[key] == value {
-		if err == nil {
-			value.value = recovered
-			value.recoveryErr = nil
-		} else {
-			value.value = nil
-			value.recoveryErr = err
-		}
-	}
-	m.mu.Unlock()
-	if m.slots != nil {
-		<-m.slots
-	}
-}
-
-func (m *recoverManager[K, T]) reset(key K) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	delete(m.values, key)
-}
-
-func (m *recoverManager[K, T]) clear() {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.values = map[K]*recoverableValue[T]{}
-}
-
-func (m *recoverManager[K, T]) shutdown() {
-	m.workers.Wait()
-	m.clear()
-}
-
-func (m *recoverManager[K, T]) recoveredValues() map[K]*T {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	values := map[K]*T{}
-	for key, value := range m.values {
-		if value.value != nil {
-			values[key] = value.value
-		}
-	}
-	return values
 }
 
 func newRecoveredWorkspace() *workspace {
@@ -329,49 +196,12 @@ func (cmdProc *cmdProc) getAppPartition(vvmCtx context.Context, cmd *cmdWorkpiec
 		appQName:    cmd.cmdMes.AppQName(),
 		partitionID: cmd.cmdMes.PartitionID(),
 	}
-	appPartition, err := cmdProc.partitionManager.getOrStart(vvmCtx, key, cmd, cmdProc.recovery)
+	appPartition, err := cmdProc.partitionManager.getOrStart(vvmCtx, key, cmd)
 	if err != nil {
 		return err
 	}
 	cmd.appPartition = appPartition
 	return nil
-}
-
-func partitionRecoveringError(partitionID istructs.PartitionID) error {
-	return coreutils.NewHTTPError(http.StatusServiceUnavailable, fmt.Errorf("partition %d is recovering", partitionID))
-}
-
-func logPartitionRecoveryInProgress(ctx context.Context, key partitionKey) {
-	logger.InfoCtx(newRecoveryCtx(ctx, key.partitionID), "cp.partition_recovery.in_progress",
-		"partition ", key.partitionID, " recovery is already running")
-}
-
-func partitionRecoveryFailedError(partitionID istructs.PartitionID, err error) error {
-	return coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("partition %d recovery failed: %w", partitionID, err))
-}
-
-func workspaceRecoveringError(wsid istructs.WSID) error {
-	return coreutils.NewHTTPError(http.StatusServiceUnavailable, fmt.Errorf("workspace %d is recovering", wsid))
-}
-
-func workspaceRecoveryLimitError(wsid istructs.WSID) error {
-	return coreutils.NewHTTPError(http.StatusServiceUnavailable,
-		fmt.Errorf("workspace %d recovery concurrency limit is reached", wsid))
-}
-
-func logWorkspaceRecoveryInProgress(ctx context.Context, key workspaceKey) {
-	logger.InfoCtx(newRecoveryCtx(ctx, key.partitionID), "cp.workspace_recovery.in_progress",
-		"workspace ", key.wsid, " recovery is already running")
-}
-
-func logWorkspaceRecoveryLimit(ctx context.Context, key workspaceKey, limit int) {
-	logger.InfoCtx(newRecoveryCtx(ctx, key.partitionID), "cp.workspace_recovery.limit",
-		"workspace recovery limit ", limit, " is reached for partition ", key.partitionID,
-		"; workspace ", key.wsid, " recovery was not started")
-}
-
-func workspaceRecoveryFailedError(wsid istructs.WSID, err error) error {
-	return coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("workspace %d recovery failed: %w", wsid, err))
 }
 
 func toRecoveryWorkpiece(cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
@@ -391,33 +221,34 @@ func toRecoveryWorkpiece(cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
 	return recoveryCmd
 }
 
-func (m *partitionManager) getOrStart(vvmCtx context.Context, key partitionKey, cmd *cmdWorkpiece,
-	recoverPartitionFunc recoverPartitionFunc) (*appPartition, error) {
-	// Build the recovery workpiece only when an attempt will start. toRecoveryWorkpiece transfers
-	// the borrowed app partition from cmd; doing that eagerly would orphan it when recovery is
-	// already running or complete, while doing it in the goroutine would race with cmd.Release().
-	recovered, err := m.partitions.getOrStart(vvmCtx, key, func() recoveryAttemptFunc[appPartition] {
-		recoveryCmd := toRecoveryWorkpiece(cmd, key)
+func (m *partitionManager) getOrStart(vvmCtx context.Context, partKey partitionKey, cmd *cmdWorkpiece) (*appPartition, error) {
+
+	// attempt factory instead of attempt func because we need to detach the recoveryCmd only if recover will be started
+	// otherwise need to detach first, call getOrStart with attempt func that captured that recoveryCmd
+	// and, if the recovery will not be actually started (e.g. if in progress already)
+	// then after getOrStart do cmdWorkpiece.appPart=recoveryCmd.appPart again to keep cmdWorkpiece release frow correct
+	// need 3rd bool result from getOrStart showing whether recovery was actually started or not
+	// need additional strange `if` here
+	// factory of attempt funcs is much better
+	recoveredPartition, err := m.partitions.getOrStart(vvmCtx, partKey, func() recoveryAttemptFunc[appPartition] {
+		recoveryCmd := toRecoveryWorkpiece(cmd, partKey)
 		return func(ctx context.Context) (*appPartition, error) {
 			defer recoveryCmd.Release()
-			return recoverPartitionFunc(ctx, recoveryCmd)
+			return m.recoverFunc(ctx, recoveryCmd)
 		}
 	})
 	switch {
 	case err == nil:
-		return recovered, nil
-	case errors.Is(err, errRecoveryInProgress):
-		logPartitionRecoveryInProgress(cmd.cmdMes.RequestCtx(), key)
-		return nil, partitionRecoveringError(key.partitionID)
-	case errors.Is(err, errRecoveryLimit):
-		panic("partition recovery unexpectedly limited")
+		return recoveredPartition, nil
+	case errors.Is(err, errRecoveryInProgress), errors.Is(err, errRecoveryLimit):
+		return nil, coreutils.NewHTTPError(http.StatusServiceUnavailable, fmt.Errorf("partition %d: %w", partKey.partitionID, err))
 	default:
-		return nil, partitionRecoveryFailedError(key.partitionID, err)
+		return nil, coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("partition %d: %w", partKey.partitionID, err))
 	}
 }
 
-// resetPartitionState removes the current state so the next request starts a fresh recovery.
-func (m *partitionManager) resetPartitionState(key partitionKey) {
+// scheduleRecovery removes the current state so the next request starts a fresh recovery.
+func (m *partitionManager) scheduleRecovery(key partitionKey) {
 	m.partitions.reset(key)
 }
 
@@ -425,27 +256,22 @@ func (m *partitionManager) shutdown() {
 	m.partitions.shutdown()
 }
 
-func (m *workspaceManager) getOrStart(vvmCtx, requestCtx context.Context, key workspaceKey,
+func (m *workspaceManager) getOrStart(vvmCtx context.Context, wsKey workspaceKey,
 	recoverWorkspace recoverWorkspaceFunc) (*workspace, error) {
-	wsid := key.wsid
 	// Supply a factory so the generic manager creates an attempt only after a workspace recovery
 	// slot is available; rejected and duplicate requests must not prepare unused attempts.
-	recovered, err := m.workspaces.getOrStart(vvmCtx, key, func() recoveryAttemptFunc[workspace] {
+	recoveredWS, err := m.workspaces.getOrStart(vvmCtx, wsKey, func() recoveryAttemptFunc[workspace] {
 		return func(ctx context.Context) (*workspace, error) {
-			return recoverWorkspace(ctx, key)
+			return recoverWorkspace(ctx, wsKey)
 		}
 	})
 	switch {
 	case err == nil:
-		return recovered, nil
-	case errors.Is(err, errRecoveryInProgress):
-		logWorkspaceRecoveryInProgress(requestCtx, key)
-		return nil, workspaceRecoveringError(wsid)
-	case errors.Is(err, errRecoveryLimit):
-		logWorkspaceRecoveryLimit(requestCtx, key, cap(m.workspaces.slots))
-		return nil, workspaceRecoveryLimitError(wsid)
+		return recoveredWS, nil
+	case errors.Is(err, errRecoveryInProgress), errors.Is(err, errRecoveryLimit):
+		return nil, coreutils.NewHTTPError(http.StatusServiceUnavailable, fmt.Errorf("workspace %d: %w", wsKey.wsid, err))
 	default:
-		return nil, workspaceRecoveryFailedError(wsid, err)
+		return nil, coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("workspace %d: %w", wsKey.wsid, err))
 	}
 }
 
@@ -457,9 +283,11 @@ func (m *workspaceManager) marshalJSON() ([]byte, error) {
 	return json.Marshal(workspaces)
 }
 
-func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, ap *appPartition, key workspaceKey) (*workspace, error) {
+func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, requestCtx context.Context, wsKey workspaceKey, ap *appPartition) (*workspace, error) {
+	recoveryCtx := newWSRecoveryCtx(requestCtx, wsKey)
+	logger.InfoCtx(recoveryCtx, "cp.workspace_recovery.start", "")
 	checkpoint, ok, err := cmdProc.checkpointStorage.GetWorkspaceCheckpoint(
-		ap.clusterAppID, key.wsid)
+		ap.clusterAppID, wsKey.wsid)
 	if err != nil {
 		return nil, err
 	}
@@ -474,8 +302,8 @@ func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, ap *appPartitio
 		lastRecordID   istructs.RecordID
 		hasRecordID    bool
 	)
-	cmdProc.hooks.wLogRead(key, startOffset, istructs.ReadToTheEnd)
-	err = ap.appStructs.Events().ReadWLog(vvmCtx, key.wsid, startOffset, istructs.ReadToTheEnd,
+	cmdProc.cmdProcHooks.wLogRead(wsKey, startOffset, istructs.ReadToTheEnd)
+	err = ap.appStructs.Events().ReadWLog(vvmCtx, wsKey.wsid, startOffset, istructs.ReadToTheEnd,
 		func(wlogOffset istructs.Offset, event istructs.IWLogEvent) error {
 			defer event.Release()
 			hasWLogEvent = true
@@ -487,6 +315,7 @@ func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, ap *appPartitio
 			return nil
 		})
 	if err != nil {
+		logger.ErrorCtx(recoveryCtx, "cp.workspace_recovery.readwlog.error", err)
 		return nil, err
 	}
 
@@ -500,8 +329,8 @@ func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, ap *appPartitio
 			rewindStart = rewindEnd - workspaceRecoveryRewindEvents
 		}
 		count := int(rewindEnd - rewindStart)
-		cmdProc.hooks.wLogRead(key, rewindStart, count)
-		err = ap.appStructs.Events().ReadWLog(vvmCtx, key.wsid, rewindStart, count,
+		cmdProc.cmdProcHooks.wLogRead(wsKey, rewindStart, count)
+		err = ap.appStructs.Events().ReadWLog(vvmCtx, wsKey.wsid, rewindStart, count,
 			func(_ istructs.Offset, event istructs.IWLogEvent) error {
 				defer event.Release()
 				if eventRecordID, ok := highestNewNonSingletonRecordID(event); ok {
@@ -518,6 +347,7 @@ func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, ap *appPartitio
 	if hasRecordID {
 		workspace.idGenerator.UpdateOnSync(lastRecordID)
 	}
+	logger.InfoCtx(recoveryCtx, "cp.workspace_recovery.complete", "nextWLogOffset ", workspace.NextWLogOffset, "lastRecordID ", lastRecordID)
 	return workspace, nil
 }
 
@@ -602,7 +432,13 @@ func highestNewNonSingletonRecordID(event istructs.IAbstractEvent) (istructs.Rec
 	return highest, highest != istructs.NullRecordID
 }
 
-func newRecoveryCtx(ctx context.Context, partID istructs.PartitionID) context.Context {
+func newWSRecoveryCtx(ctx context.Context, wsKey workspaceKey) context.Context {
+	return logger.WithContextAttrs(newPartRecoveryCtx(ctx, wsKey.partitionID), map[string]any{
+		logger.LogAttr_WSID: wsKey.wsid,
+	})
+}
+
+func newPartRecoveryCtx(ctx context.Context, partID istructs.PartitionID) context.Context {
 	return logger.WithContextAttrs(ctx, map[string]any{
 		logger.LogAttr_VApp:      sys.VApp_SysVoedger,
 		logger.LogAttr_Extension: "sys._Recovery",
@@ -610,12 +446,12 @@ func newRecoveryCtx(ctx context.Context, partID istructs.PartitionID) context.Co
 	})
 }
 
-func (cmdProc *cmdProc) recovery(vvmCtx context.Context, cmd *cmdWorkpiece) (ap *appPartition, err error) {
-	recoveryCtx := newRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID())
+func (cmdProc *cmdProc) recoverPartition(vvmCtx context.Context, cmd *cmdWorkpiece) (ap *appPartition, err error) {
+	recoveryCtx := newPartRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID())
 	logger.InfoCtx(recoveryCtx, "cp.partition_recovery.start", "")
 	key := partitionKey{appQName: cmd.cmdMes.AppQName(), partitionID: cmd.cmdMes.PartitionID()}
 	appID := cmd.appStructs.ClusterAppID()
-	ap = newAppPartition(cmdProc.numWSRecoverers, cmdProc.partitionManager.partitions.workers, cmdProc.workspaceRecoveryHooks)
+	ap = newAppPartition(cmdProc.numWSRecoverers, cmdProc.workspaceRecoveryHooks)
 	ap.clusterAppID = appID
 	ap.appStructs = cmd.appStructs
 	partitionCheckpoint, checkpointExists, err := cmdProc.checkpointStorage.GetPartitionCheckpoint(appID, key.partitionID)
@@ -644,7 +480,7 @@ func (cmdProc *cmdProc) recovery(vvmCtx context.Context, cmd *cmdWorkpiece) (ap 
 		return nil
 	}
 
-	cmdProc.hooks.pLogRead(key, startOffset, istructs.ReadToTheEnd)
+	cmdProc.cmdProcHooks.pLogRead(key, startOffset, istructs.ReadToTheEnd)
 	err = cmd.appStructs.Events().ReadPLog(vvmCtx, key.partitionID, startOffset, istructs.ReadToTheEnd, cb)
 	if err != nil {
 		logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.readplog.error", err)
@@ -683,7 +519,7 @@ func (cmdProc *cmdProc) recovery(vvmCtx context.Context, cmd *cmdWorkpiece) (ap 
 		// notest
 		return nil, err
 	}
-	logger.InfoCtx(recoveryCtx, "cp.partition_recovery.complete", "completed, nextPLogOffset ", ap.nextPLogOffset, ", workspaces ", string(workspaceStatesJSON))
+	logger.InfoCtx(recoveryCtx, "cp.partition_recovery.complete", "nextPLogOffset ", ap.nextPLogOffset, ", workspaces ", string(workspaceStatesJSON))
 	return ap, nil
 }
 
@@ -695,18 +531,7 @@ func getIDGenerator(_ context.Context, cmd *cmdWorkpiece) (err error) {
 	return nil
 }
 
-func (cmdProc *cmdProc) beforeStoreStage(cmd *cmdWorkpiece, stage commandStoreStage) error {
-	err := cmdProc.hooks.beforeCommandStoreStage(stage)
-	if err != nil {
-		cmd.appPartitionRestartScheduled = true
-	}
-	return err
-}
-
 func (cmdProc *cmdProc) putPLog(_ context.Context, cmd *cmdWorkpiece) (err error) {
-	if err = cmdProc.beforeStoreStage(cmd, commandStoreStagePLog); err != nil {
-		return err
-	}
 	if cmd.pLogEvent, err = cmd.appStructs.Events().PutPlog(cmd.rawEvent, nil, cmd.idGeneratorReporter); err != nil {
 		cmd.appPartitionRestartScheduled = true
 	} else {
@@ -889,15 +714,14 @@ func checkUnexpectedRequestBodyFields(_ context.Context, cmd *cmdWorkpiece) erro
 }
 
 func (cmdProc *cmdProc) getWorkspace(vvmCtx context.Context, cmd *cmdWorkpiece) (err error) {
-	wsid := cmd.cmdMes.WSID()
-	key := workspaceKey{
+	wsKey := workspaceKey{
 		partitionKey: partitionKey{appQName: cmd.cmdMes.AppQName(), partitionID: cmd.cmdMes.PartitionID()},
-		wsid:         wsid,
+		wsid:         cmd.cmdMes.WSID(),
 	}
 	ap := cmd.appPartition
-	cmd.workspace, err = ap.workspaces.getOrStart(vvmCtx, cmd.cmdMes.RequestCtx(), key,
+	cmd.workspace, err = ap.workspaces.getOrStart(vvmCtx, wsKey,
 		func(ctx context.Context, recoveryKey workspaceKey) (*workspace, error) {
-			return cmdProc.recoverWorkspace(ctx, ap, recoveryKey)
+			return cmdProc.recoverWorkspace(ctx, cmd.cmdMes.RequestCtx(), recoveryKey, ap)
 		})
 	return err
 }
@@ -1350,10 +1174,10 @@ func (idGen *implIDGeneratorReporter) NextID(rawID istructs.RecordID) (storageID
 }
 
 func nopRecoveryHooks[K comparable]() recoveryHooks[K] {
-	return normalizedRecoveryHooks(recoveryHooks[K]{})
+	return hooksOrNOP(recoveryHooks[K]{})
 }
 
-func normalizedRecoveryHooks[K comparable](hooks recoveryHooks[K]) recoveryHooks[K] {
+func hooksOrNOP[K comparable](hooks recoveryHooks[K]) recoveryHooks[K] {
 	if hooks.scheduled == nil {
 		hooks.scheduled = func(K) {}
 	}
@@ -1364,15 +1188,21 @@ func normalizedRecoveryHooks[K comparable](hooks recoveryHooks[K]) recoveryHooks
 		hooks.attemptCompleted = func(K, error) {}
 	}
 	return hooks
+}
 
+// commandProcessorHooks provides deterministic observation points for package tests.
+// Production command processors use nopCommandProcessorHooks().
+type commandProcessorHooks struct {
+	pLogRead func(partitionKey, istructs.Offset, int)
+	wLogRead func(workspaceKey, istructs.Offset, int)
 }
 
 func nopCommandProcessorHooks() *commandProcessorHooks {
-	return normalizedCommandProcessorHooks(nil)
+	return cmdProcHooksOrNOP(nil)
 
 }
 
-func normalizedCommandProcessorHooks(hooks *commandProcessorHooks) *commandProcessorHooks {
+func cmdProcHooksOrNOP(hooks *commandProcessorHooks) *commandProcessorHooks {
 	if hooks == nil {
 		hooks = &commandProcessorHooks{}
 	}
@@ -1381,9 +1211,6 @@ func normalizedCommandProcessorHooks(hooks *commandProcessorHooks) *commandProce
 	}
 	if hooks.wLogRead == nil {
 		hooks.wLogRead = func(workspaceKey, istructs.Offset, int) {}
-	}
-	if hooks.beforeCommandStoreStage == nil {
-		hooks.beforeCommandStoreStage = func(commandStoreStage) error { return nil }
 	}
 	return hooks
 }

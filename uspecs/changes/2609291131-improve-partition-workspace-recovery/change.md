@@ -25,6 +25,7 @@ In the production application-processing context:
 - After partition recovery, let the requesting command continue to the workspace stage, which starts workspace recovery on demand.
 - Recover a workspace by reading its WLog from its saved handled offset through the end. Use the final event to set the next WLog offset, and rewind in 10-event windows when needed to find the latest non-singleton record ID.
 - Return `503 Service Unavailable` while recovery of the requested partition or workspace is already running or if the partition already has `NumWSRecoverers` workspace recoveries running. Log a corresponding message for each case.
+- Emit partition recovery lifecycle logs with `vapp=sys/voedger`, `extension=sys._Recovery`, and `partid`; emit workspace recovery lifecycle logs with those attributes plus `wsid`.
 - Keep the default workspace-recovery limit at four per partition.
 
 ## Constraints
@@ -53,7 +54,9 @@ Decisions:
 - Determine `nextRecordID` only from newly allocated non-singleton CUD record IDs. Singleton IDs have a different scope and must not advance the workspace record-ID generator.
 - While scanning from `lastHandledWLogOffset` to the WLog end, retain the maximum non-singleton record ID from the latest event that contains one. If none is found, scan backward from `lastHandledWLogOffset` in non-overlapping 10-event windows until such an event is found or `FirstOffset` is reached.
 - If no newly allocated non-singleton CUD exists between `FirstOffset` and the WLog end, use `FirstUserRecordID` as `nextRecordID`. Otherwise, use the found event's maximum non-singleton record ID plus one. Backward scans do not change `nextWLogOffset`.
-- Log distinct messages when partition recovery is in progress, workspace recovery is in progress, or the workspace recovery limit prevents a goroutine from starting.
+- Log recovery admission and failure responses through `cp.error` with `partition <partitionID>:` or `workspace <wsid>:` prefixes.
+- Log partition recovery start, PLog-read failure, and completion with `vapp=sys/voedger`, `extension=sys._Recovery`, and `partid=<partitionID>`.
+- Log workspace recovery start, initial WLog suffix-read failure, and completion with the partition recovery attributes plus `wsid=<workspaceID>`.
 - Treat `NumWSRecoverers` as the exact upper bound. The default VVM configuration sets it to four; an explicit zero permits no workspace recovery and therefore yields `503` for an unrecovered workspace.
 - Keep partition and workspace recovery tied to the service context, ignore stale attempt completion after partition replacement, and join recovery goroutines during command-service shutdown.
 
@@ -69,6 +72,7 @@ References (internal):
 - [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
 - [istructs/events-types.go](../../../pkg/istructs/events-types.go)
 - [vvm/types.go](../../../pkg/vvm/types.go)
+- [recovery logging contract](../../specs/prod/apps/logging--td.md#command-processor)
 - [AIR-5009 recovery requirements](./issue-AIR-5009.md)
 
 References (external):
@@ -94,7 +98,12 @@ References (external):
   - verify one recovery attempt per WSID, `503` while it is running, and retained failure/retry behavior
   - verify that the concurrency limit admits at most `NumWSRecoverers`, returns `503` without queueing excess work, logs the limit condition, and permits a later retry after a slot is released
   - verify distinct log messages for partition-in-progress and workspace-in-progress responses
+  - verify that a partition recovery admission-limit result is translated to `503 Service Unavailable` rather than a panic
   - verify that a zero limit admits no workspace recovery
+
+- [x] create: [command/recover_manager_test.go](../../../pkg/processors/command/recover_manager_test.go)
+  - directly verify generic recovery-manager startup, ready lookup, duplicate suppression, retained failures, retries, admission limits, hooks, cancellation, reset, stale-completion rejection, recovered-value projection, and shutdown clearing
+  - relocate stale-completion coverage from the partition-manager integration-style test
 
 - [x] update: [command/checkpoints_test.go](../../../pkg/processors/command/checkpoints_test.go)
   - provide a thread-safe last-write-wins checkpoint test double using handled-offset values only
@@ -174,9 +183,13 @@ References (external):
   - ignore singleton IDs and retain `FirstUserRecordID` when the complete WLog contains no newly allocated non-singleton CUD
   - let the generic manager deduplicate attempts, enforce admission, run workers and hooks, retain failures, reject stale completions, publish results, and account for worker shutdown
   - expose the lifecycle through one generic `getOrStart` operation returning only the recovered value or an error, without a separate state enum or decision object
+  - inject the partition recovery function once into the partition manager instead of forwarding it through each partition lookup
   - keep recovery startup, logging, hooks, and HTTP error policy in the thin partition and workspace managers
   - reserve a slot before starting a goroutine and return `503` both when full and for an in-progress WSID
-  - log partition-in-progress, workspace-in-progress, and workspace-limit conditions separately
+  - translate a generic partition recovery-limit result to a logged `503 Service Unavailable` response rather than panicking
+  - prefix recovery admission and failure messages with the affected partition ID or workspace ID
+  - attach `vapp=sys/voedger`, `extension=sys._Recovery`, and `partid` to partition recovery lifecycle logs, and add `wsid` to workspace recovery lifecycle logs
+  - log workspace recovery start, initial WLog suffix-read failure, and completion using dedicated `cp.workspace_recovery.*` stages
   - remove recovery-time checkpoint writes and all persisted record-ID handling
 
 - [x] update: [command/provide.go](../../../pkg/processors/command/provide.go)
