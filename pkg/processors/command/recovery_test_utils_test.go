@@ -15,16 +15,26 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
-// logRead records one ReadPLog or ReadWLog call so tests can verify that
-// recovery starts at the persisted checkpoint and uses the expected range.
+// logRead turns one production log-reader call into a comparable test value:
+//
+//	ReadPLog/ReadWLog(offset, count) --> logRead{offset, count}
+//
+// Tests use the resulting sequence to prove that recovery starts at its
+// checkpoint, scans to the end, and rewinds in the expected windows.
 type logRead struct {
 	offset istructs.Offset
 	count  int
 }
 
-// recoveryTestReads collects log-read observations made by recovery goroutines.
-// Its lock lets a test safely inspect the observations while recovery is still
-// running, without adding synchronization to production log readers.
+// recoveryTestReads solves concurrent observation of recovery log reads:
+//
+//	recovery goroutine --record(key, read)--\
+//	                                          +--> mutex --> byKey[key] history
+//	test goroutine --------values(key)--------/                  |
+//	                                                             +--> copied snapshot
+//
+// The lock keeps test inspection race-free without adding synchronization to
+// production PLog or WLog readers.
 type recoveryTestReads[K comparable] struct {
 	mu    sync.Mutex
 	byKey map[K][]logRead
@@ -34,8 +44,8 @@ func newRecoveryTestReads[K comparable]() *recoveryTestReads[K] {
 	return &recoveryTestReads[K]{byKey: map[K][]logRead{}}
 }
 
-// record is installed as a command-processor hook and preserves the order in
-// which recovery reads a particular partition or workspace log.
+// record is the production hook at the write side of the observation flow:
+// Append order preserves the exact scan and rewind order for that key.
 func (r *recoveryTestReads[K]) record(key K, offset istructs.Offset, count int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -48,28 +58,37 @@ func (r *recoveryTestReads[K]) reset(key K) {
 	delete(r.byKey, key)
 }
 
-// values returns a snapshot rather than the stored slice, preventing test code
-// from racing with or mutating observations appended by a recovery goroutine.
+// values returns recorded log records snapshot
 func (r *recoveryTestReads[K]) values(key K) []logRead {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return append([]logRead(nil), r.byKey[key]...)
 }
 
-// recoveryAttempt is the test-side state of the latest scheduled recovery for
-// one key. The optional gate keeps the goroutine in progress, while done lets a
-// test wait for the manager to publish the final error deterministically.
+// recoveryAttempt makes one asynchronous recovery deterministic for a test:
+//
+//	test closes gate --> recovery may run --> manager publishes err --> close(done)
+//	        |                                                            |
+//	        +-- leave open to assert "in progress"                       +--> wait returns
+//
+// gate is optional. err initially carries an injected failure and is replaced
+// with the manager's final wrapped result when the attempt completes.
 type recoveryAttempt struct {
 	done chan struct{}
 	gate <-chan struct{}
 	err  error
 }
 
-// recoveryTestAttempts provides deterministic control over asynchronous
-// recoverManager attempts. Tests use it to hold an attempt open, inject a
-// failure, wait for completion, and prove that duplicate or over-limit requests
-// did not schedule another attempt. K allows the same control to serve both
-// partition and workspace recovery.
+// recoveryTestAttempts solves deterministic testing of asynchronous managers:
+//
+//	blockNext(key) ----> nextGates[key] ---\
+//	failNext(key, err) -> nextFailures[key] +--> scheduled(key) --> attempts[key]
+//	request --------------------------------/          |                 |
+//	                                                   +--> starts[key]  +--> wait(key)
+//
+// Pending controls are consumed by exactly one scheduled attempt. starts proves
+// that duplicate and over-limit requests did not launch work. K lets the same
+// mechanism control both partition and workspace recovery.
 type recoveryTestAttempts[K comparable] struct {
 	mu           sync.Mutex
 	attempts     map[K]*recoveryAttempt
@@ -95,9 +114,12 @@ func (c *recoveryTestAttempts[K]) hooks() recoveryHooks[K] {
 	}
 }
 
-// scheduled records an attempt after recoverManager has reserved a worker slot
-// but before it starts the goroutine. Consequently, starts counts actual
-// scheduled work and excludes requests rejected by the concurrency limit.
+// scheduled consumes controls only after recoverManager admits the work:
+//
+//	next gate/failure --> recoveryAttempt --> attempts[key]
+//	                                      \-> starts[key]++
+//
+// Requests rejected by the concurrency limit never reach this method.
 func (c *recoveryTestAttempts[K]) scheduled(key K) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -111,9 +133,13 @@ func (c *recoveryTestAttempts[K]) scheduled(key K) {
 	delete(c.nextFailures, key)
 }
 
-// beforeAttempt applies the gate and injected failure captured by scheduled.
-// Waiting on ctx as well as the gate ensures service shutdown can always release
-// a deliberately blocked test attempt.
+// beforeAttempt turns test controls into recovery behavior:
+//
+//	gate open   --> wait ----> gate closed --> injected error or nil
+//	ctx canceled -----------^---------------> context error
+//
+// Context participation lets service shutdown release a deliberately blocked
+// attempt.
 func (c *recoveryTestAttempts[K]) beforeAttempt(ctx context.Context, key K) error {
 	c.mu.Lock()
 	attempt := c.attempts[key]
@@ -128,8 +154,9 @@ func (c *recoveryTestAttempts[K]) beforeAttempt(ctx context.Context, key K) erro
 	return attempt.err
 }
 
-// attemptCompleted stores the manager's final, wrapped error and releases tests
-// waiting for the recorded attempt to finish.
+// attemptCompleted publishes the manager's final result to waiting tests:
+//
+//	final wrapped error --> attempt.err --> close(done) --> wait(key)
 func (c *recoveryTestAttempts[K]) attemptCompleted(key K, err error) {
 	c.mu.Lock()
 	attempt := c.attempts[key]
@@ -138,9 +165,12 @@ func (c *recoveryTestAttempts[K]) attemptCompleted(key K, err error) {
 	c.mu.Unlock()
 }
 
-// blockNext arranges for the next scheduled attempt for key to remain in
-// progress until the returned channel is closed. This makes in-progress and
-// concurrency-limit behavior observable without timing assumptions.
+// blockNext prepares a one-shot scheduling barrier:
+//
+//	blockNext(key) --> gate --> next scheduled attempt --> waits for close(gate)
+//
+// Holding the gate open makes in-progress and concurrency-limit assertions
+// independent of goroutine timing.
 func (c *recoveryTestAttempts[K]) blockNext(key K) chan struct{} {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -149,18 +179,21 @@ func (c *recoveryTestAttempts[K]) blockNext(key K) chan struct{} {
 	return gate
 }
 
-// failNext arranges for the next scheduled attempt for key to fail before its
-// real recovery function runs, allowing retry and retained-error behavior to be
-// tested independently of storage failures.
+// failNext prepares a one-shot failure before production recovery runs:
+//
+//	failNext(key, err) --> next scheduled attempt --> err --> retained failure
+//
+// This isolates retry tests from storage or log-reader failures.
 func (c *recoveryTestAttempts[K]) failNext(key K, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nextFailures[key] = err
 }
 
-// latest returns the most recently scheduled attempt for key. The retrying test
-// sender uses its presence to ensure there is known recovery work to wait for;
-// if no attempt exists, it preserves the original 503 response.
+// latest distinguishes a recoverable test 503 from an unrelated 503:
+//
+//	attempts[key] present --> caller may wait and retry
+//	attempts[key] absent  --> caller preserves the response
 func (c *recoveryTestAttempts[K]) latest(key K) (*recoveryAttempt, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -168,9 +201,11 @@ func (c *recoveryTestAttempts[K]) latest(key K) (*recoveryAttempt, bool) {
 	return attempt, ok
 }
 
-// wait blocks until the latest attempt completes and returns the same final
-// error observed by recoverManager. A missing attempt is reported immediately
-// so a test cannot silently wait for work that was never scheduled.
+// wait joins the latest known attempt without sleeps or polling:
+//
+//	attempt.done closed --> return attempt.err
+//	ctx canceled -------> return ctx.Err()
+//	no attempt ---------> return "not started"
 func (c *recoveryTestAttempts[K]) wait(ctx context.Context, key K) error {
 	attempt, ok := c.latest(key)
 	if !ok {
@@ -184,18 +219,25 @@ func (c *recoveryTestAttempts[K]) wait(ctx context.Context, key K) error {
 	}
 }
 
-// startCount reports how many attempts were actually scheduled for key. Tests
-// use it to verify request deduplication, retries, and concurrency-limit rejects.
+// startCount exposes admission as a stable assertion:
+//
+//	requests for key --> recoverManager --> scheduled calls --> starts[key]
+//
+// Deduplicated and concurrency-rejected requests do not increase the count.
 func (c *recoveryTestAttempts[K]) startCount(key K) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.starts[key]
 }
 
-// recoveryTestControl groups the four independent observations needed by
-// command recovery tests: partition attempts, workspace attempts, PLog reads,
-// and WLog reads. Keeping these concerns separate avoids workspace-only test
-// state leaking into the partition recovery fixture.
+// recoveryTestControl wires the four independent recovery test channels:
+//
+//	partition recoverManager --> partitions   command processor --> pLogReads
+//	workspace recoverManager --> workspaces   command processor --> wLogReads
+//
+// Keeping attempt control separate from read observation lets tests combine
+// only the signals they need without leaking workspace state into partition
+// assertions.
 type recoveryTestControl struct {
 	partitions *recoveryTestAttempts[partitionKey]
 	workspaces *recoveryTestAttempts[workspaceKey]
@@ -203,6 +245,9 @@ type recoveryTestControl struct {
 	wLogReads  *recoveryTestReads[workspaceKey]
 }
 
+// newRecoveryTestControl creates four empty, independently locked channels:
+//
+//	{partition attempts, workspace attempts, PLog reads, WLog reads}
 func newRecoveryTestControl() *recoveryTestControl {
 	return &recoveryTestControl{
 		partitions: newRecoveryTestAttempts[partitionKey](),
@@ -212,6 +257,13 @@ func newRecoveryTestControl() *recoveryTestControl {
 	}
 }
 
+// testHooks connects the aggregate control to both recovery managers and the
+// command processor:
+//
+//	partitions.hooks() --\
+//	workspaces.hooks() ---+--> test fixture injection
+//	pLogReads.record -----+
+//	wLogReads.record -----/
 func (c *recoveryTestControl) testHooks() (
 	partitionHooks recoveryHooks[partitionKey],
 	workspaceHooks recoveryHooks[workspaceKey],
@@ -234,9 +286,20 @@ type recoveryRetrySender struct {
 	keyForRequest func(bus.Request) (partitionKey, bool)
 }
 
-// SendRequest forwards the request until recovery no longer returns 503. Before
-// retrying it drains the response and waits for the known partition attempt, so
-// ordinary command tests do not race the initial asynchronous recovery.
+// SendRequest hides mandatory lazy partition recovery from unrelated tests:
+//
+//	request --> raw.SendRequest
+//	              |
+//	              +--> non-503/error/untracked request ----------> return response
+//	              |
+//	              +--> 503 + known partition attempt
+//	                         |
+//	                         +--> drain response --> wait(done) --> retry request
+//	                                                  |
+//	                                                  +--> failure/cancel --> return error
+//
+// Draining before waiting preserves the bus response lifecycle. Checking for a
+// recorded attempt prevents unrelated 503 responses from becoming retry loops.
 func (s *recoveryRetrySender) SendRequest(ctx context.Context, req bus.Request) (<-chan any, bus.ResponseMeta, *error, error) {
 	for {
 		responseCh, responseMeta, responseErr, err := s.raw.SendRequest(ctx, req)

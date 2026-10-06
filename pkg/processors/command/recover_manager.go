@@ -11,6 +11,54 @@ import (
 	"sync"
 )
 
+// recoverManager coordinates asynchronous recovery when many requests can ask
+// for the same key at once and recovery capacity is bounded:
+//
+//	request A --\
+//	request B ---+--> values[key] --> one recovery goroutine --> ready *T
+//	request C --/          |                 |
+//	                       |                 +--> retained failure --> one retry
+//	                       +--> recovering requests get "in progress"
+//
+//	new key --> reserve slot --> install state --> start goroutine
+//	            |
+//	            +-- no slot --> reject without creating an attempt
+//
+// The map deduplicates work per key, slots bound concurrent recoveries, and
+// workers let shutdown wait for every goroutine.
+type recoverManager[K comparable, T any] struct {
+	mu      sync.Mutex
+	values  map[K]*recoverableValue[T]
+	slots   chan struct{} // nil means unlimited recovery concurrency
+	workers *sync.WaitGroup
+	hooks   recoveryHooks[K]
+}
+
+// recoverableValue is the per-key state machine stored by recoverManager:
+//
+//	value == nil, recoveryErr == nil  --> recovering
+//	value == nil, recoveryErr != nil  --> failed; report error and start one retry
+//	value != nil, recoveryErr == nil  --> ready; all requests share the value
+//
+// Absence from the map is the fourth state: recovery has not started.
+type recoverableValue[T any] struct {
+	value       *T
+	recoveryErr error
+}
+
+type recoveryAttemptFunc[T any] func(context.Context) (*T, error)
+
+// newRecoveryAttemptFunc creates an attempt only after recoverManager has reserved a recovery slot.
+// This lets the caller synchronously transfer request-owned resources to the asynchronous attempt;
+// creating it eagerly could orphan those resources when no attempt is started.
+type newRecoveryAttemptFunc[T any] func() recoveryAttemptFunc[T]
+
+type recoveryHooks[K comparable] struct {
+	scheduled        func(K)
+	beforeAttempt    func(context.Context, K) error
+	attemptCompleted func(K, error)
+}
+
 func newRecoverManager[K comparable, T any](slots chan struct{}, hooks recoveryHooks[K]) *recoverManager[K, T] {
 	return &recoverManager[K, T]{
 		values:  map[K]*recoverableValue[T]{},

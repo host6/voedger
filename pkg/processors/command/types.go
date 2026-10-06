@@ -6,7 +6,6 @@ package commandprocessor
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -178,34 +177,38 @@ type workspace struct {
 	idGenerator    istructs.IIDGenerator
 }
 
-type recoverableValue[T any] struct {
-	value       *T
-	recoveryErr error
-}
-
-type recoveryAttemptFunc[T any] func(context.Context) (*T, error)
-
-// newRecoveryAttemptFunc creates an attempt only after recoverManager has reserved a recovery slot.
-// This lets the caller synchronously transfer request-owned resources to the asynchronous attempt;
-// creating it eagerly could orphan those resources when no attempt is started.
-type newRecoveryAttemptFunc[T any] func() recoveryAttemptFunc[T]
-
-type recoveryHooks[K comparable] struct {
-	scheduled        func(K)
-	beforeAttempt    func(context.Context, K) error
-	attemptCompleted func(K, error)
-}
-
-type recoverManager[K comparable, T any] struct {
-	mu      sync.Mutex
-	values  map[K]*recoverableValue[T]
-	slots   chan struct{} // nil means unlimited recovery concurrency
-	workers *sync.WaitGroup
-	hooks   recoveryHooks[K]
-}
-
+// workspaceManager keeps recovered and manages recovery of new workspaces inside one
+// recovered application partition:
+//
+//	appPartition
+//	     |
+//	     +--> workspaceManager
+//	              |
+//	              +--> WSID 10 --> recovering/failed/ready workspace
+//	              +--> WSID 20 --> recovering/failed/ready workspace
+//	              +--> WSID 30 --> rejected while all recovery slots are busy
+//
+// Its recoverManager deduplicates requests by workspaceKey and shares the
+// partition's bounded recovery slots, preventing one partition from starting
+// an unbounded number of workspace-recovery goroutines.
 type workspaceManager struct {
 	workspaces *recoverManager[workspaceKey, workspace]
+}
+
+// partitionManager keeps recovered and manages recovery of new partitions:
+//
+//	command requests
+//	      |
+//	      +--> (app A, partition 1) request 1 --\
+//	      +--> (app A, partition 1) request 2 ---+--> one recovery --> appPartition A/1
+//	      |                                                           |
+//	      |                                                           +--> workspaceManager (later)
+//	      +--> (app B, partition 1) -----------> separate recovery --> appPartition B/1
+//
+// partitionKey[appQName,partID]
+type partitionManager struct {
+	partitions  *recoverManager[partitionKey, appPartition]
+	recoverFunc recoverPartitionFunc
 }
 
 type appPartition struct {
@@ -213,11 +216,6 @@ type appPartition struct {
 	appStructs     istructs.IAppStructs
 	workspaces     *workspaceManager
 	nextPLogOffset istructs.Offset
-}
-
-type partitionManager struct {
-	partitions  *recoverManager[partitionKey, appPartition]
-	recoverFunc recoverPartitionFunc
 }
 
 type recoverPartitionFunc func(context.Context, *cmdWorkpiece) (*appPartition, error)
