@@ -221,31 +221,6 @@ func toRecoveryWorkpiece(cmd *cmdWorkpiece, key partitionKey) *cmdWorkpiece {
 	return recoveryCmd
 }
 
-func (m *partitionManager) getOrStart(vvmCtx context.Context, partKey partitionKey, cmd *cmdWorkpiece) (*appPartition, error) {
-	// attempt factory instead of attempt func because we need to detach the recoveryCmd only if recover will be started
-	// otherwise need to detach first, call getOrStart with attempt func that captured that recoveryCmd
-	// and, if the recovery will not be actually started (e.g. if in progress already)
-	// then after getOrStart do cmdWorkpiece.appPart=recoveryCmd.appPart again to keep cmdWorkpiece release frow correct
-	// need 3rd bool result from getOrStart showing whether recovery was actually started or not
-	// need additional strange `if` here
-	// factory of attempt funcs is much better
-	recoveredPartition, err := m.partitions.getOrStart(vvmCtx, partKey, func() recoveryAttemptFunc[appPartition] {
-		recoveryCmd := toRecoveryWorkpiece(cmd, partKey)
-		return func(ctx context.Context) (*appPartition, error) {
-			defer recoveryCmd.Release()
-			return m.recoverFunc(ctx, recoveryCmd)
-		}
-	})
-	switch {
-	case err == nil:
-		return recoveredPartition, nil
-	case errors.Is(err, errRecoveryInProgress), errors.Is(err, errRecoveryLimit):
-		return nil, coreutils.NewHTTPError(http.StatusServiceUnavailable, fmt.Errorf("partition %d: %w", partKey.partitionID, err))
-	default:
-		return nil, coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("partition %d: %w", partKey.partitionID, err))
-	}
-}
-
 // scheduleRecovery removes the current state so the next request starts a fresh recovery.
 func (m *partitionManager) scheduleRecovery(key partitionKey) {
 	m.partitions.reset(key)
@@ -255,22 +230,46 @@ func (m *partitionManager) shutdown() {
 	m.partitions.shutdown()
 }
 
+func (m *partitionManager) getOrStart(vvmCtx context.Context, partKey partitionKey, cmd *cmdWorkpiece) (*appPartition, error) {
+	// attempt factory instead of attempt func because we need to detach the recoveryCmd only if recover will be started
+	// otherwise need to detach first, call getOrStart with attempt func that captured that recoveryCmd
+	// and, if the recovery will not be actually started (e.g. if in progress already)
+	// then after getOrStart do cmdWorkpiece.appPart=recoveryCmd.appPart again to keep cmdWorkpiece release frow correct
+	// need 3rd bool result from getOrStart showing whether recovery was actually started or not
+	// need additional strange `if` here
+	// factory of attempt funcs is much better
+	return getOrStart(vvmCtx, m.partitions, partKey, fmt.Sprintf("partition %d", partKey.partitionID),
+		func() recoveryAttemptFunc[appPartition] {
+			recoveryCmd := toRecoveryWorkpiece(cmd, partKey)
+			return func(ctx context.Context) (*appPartition, error) {
+				defer recoveryCmd.Release()
+				return m.recoverFunc(ctx, recoveryCmd)
+			}
+		})
+}
+
 func (m *workspaceManager) getOrStart(vvmCtx context.Context, wsKey workspaceKey,
 	recoverWorkspace recoverWorkspaceFunc) (*workspace, error) {
 	// Supply a factory so the generic manager creates an attempt only after a workspace recovery
 	// slot is available; rejected and duplicate requests must not prepare unused attempts.
-	recoveredWS, err := m.workspaces.getOrStart(vvmCtx, wsKey, func() recoveryAttemptFunc[workspace] {
-		return func(ctx context.Context) (*workspace, error) {
-			return recoverWorkspace(ctx, wsKey)
-		}
-	})
+	return getOrStart(vvmCtx, m.workspaces, wsKey, fmt.Sprintf("workspace %d", wsKey.wsid),
+		func() recoveryAttemptFunc[workspace] {
+			return func(ctx context.Context) (*workspace, error) {
+				return recoverWorkspace(ctx, wsKey)
+			}
+		})
+}
+
+func getOrStart[K comparable, T any](vvmCtx context.Context, manager *recoverManager[K, T], key K,
+	errorSubject string, newAttempt newRecoveryAttemptFunc[T]) (*T, error) {
+	recovered, err := manager.getOrStart(vvmCtx, key, newAttempt)
 	switch {
 	case err == nil:
-		return recoveredWS, nil
+		return recovered, nil
 	case errors.Is(err, errRecoveryInProgress), errors.Is(err, errRecoveryLimit):
-		return nil, coreutils.NewHTTPError(http.StatusServiceUnavailable, fmt.Errorf("workspace %d: %w", wsKey.wsid, err))
+		return nil, coreutils.NewHTTPError(http.StatusServiceUnavailable, fmt.Errorf("%s: %w", errorSubject, err))
 	default:
-		return nil, coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("workspace %d: %w", wsKey.wsid, err))
+		return nil, coreutils.NewHTTPError(http.StatusInternalServerError, fmt.Errorf("%s: %w", errorSubject, err))
 	}
 }
 
