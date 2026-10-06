@@ -80,6 +80,12 @@ References (external):
 - [post-removal sequence-storage baseline in PR #4649](https://github.com/voedger/voedger/pull/4649)
 - [partition-recovery performance and shared-storage scope in AIR-4959](https://untill.atlassian.net/browse/AIR-4959)
 
+## Technical design
+
+- [x] update: [apps/logging--td.md](../../specs/prod/apps/logging--td.md)
+  - document: partition and workspace recovery admission and failure messages emitted through `cp.error`
+  - document: partition and workspace recovery lifecycle stages, context attributes, and completion messages
+
 ## Construction
 
 ### Tests
@@ -105,11 +111,17 @@ References (external):
   - directly verify generic recovery-manager startup, ready lookup, duplicate suppression, retained failures, retries, admission limits, hooks, cancellation, reset, stale-completion rejection, recovered-value projection, and shutdown clearing
   - relocate stale-completion coverage from the partition-manager integration-style test
 
-- [x] update: [command/checkpoints_test.go](../../../pkg/processors/command/checkpoints_test.go)
+- [x] create: [command/checkpoints_test.go](../../../pkg/processors/command/checkpoints_test.go)
   - provide a thread-safe last-write-wins checkpoint test double using handled-offset values only
+  - implement partition and workspace checkpoint reads, writes, forced setup, reset, and write-order observation for command recovery tests
 
-- [x] update: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
-  - add deterministic PLog/WLog read observations and independent partition/workspace recovery gates
+- [x] create: [command/recovery_test_utils_test.go](../../../pkg/processors/command/recovery_test_utils_test.go)
+  - centralize deterministic test support for asynchronous partition and workspace recovery
+  - provide recovery-attempt gates, injected failures, completion waits, and PLog/WLog read observations
+  - provide a retrying request sender for command tests whose subject is unrelated to lazy recovery
+
+- [x] delete: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
+  - replace the partition-only recovery test controls with the generic test-only utilities in `recovery_test_utils_test.go`
 
 - [x] update: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
   - verify exact single-field JSON values, missing and malformed values, and last-write-wins replacement
@@ -143,7 +155,7 @@ References (external):
 - [x] update: [storage/consts.go](../../../pkg/vvm/storage/consts.go)
   - retain the sequence-storage prefix values and identify their partition-offset and WSID clustering-column roles
 
-- [x] update: [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
+- [x] create: [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
   - store partition JSON under an application key with partition ID in the clustering columns
   - store workspace JSON under an application key with WSID in the clustering columns
   - encode only `lastHandledPLogOffset` or `lastHandledWLogOffset`, report missing values as absent, reject malformed values, and overwrite unconditionally
@@ -151,7 +163,7 @@ References (external):
 - [x] update: [storage/provide.go](../../../pkg/vvm/storage/provide.go)
   - construct the recovery-checkpoint adapter over shared system-VVM storage
 
-- [x] update: [checkpoints/checkpoints.go](../../../pkg/sys/checkpoints/checkpoints.go)
+- [x] create: [checkpoints/checkpoints.go](../../../pkg/sys/checkpoints/checkpoints.go)
   - define single-field partition and workspace handled-offset checkpoint contracts
   - register the built-in asynchronous projector and persist workspace before partition for each event
 
@@ -169,11 +181,18 @@ References (external):
 
 ### Command recovery
 
+- [x] update: [command/consts.go](../../../pkg/processors/command/consts.go)
+  - define shared errors for recovery-in-progress, concurrency-limit, and retained-failure outcomes
+
+- [x] create: [command/recover_manager.go](../../../pkg/processors/command/recover_manager.go)
+  - implement the generic keyed recovery lifecycle shared by partitions and workspaces
+  - reserve optional concurrency slots before creating attempts, retain failures for one reporting request, and publish successful recovered values
+  - reject stale completions after reset and join all workers before clearing state during shutdown
+
 - [x] update: [command/types.go](../../../pkg/processors/command/types.go)
-  - add a generic recovery manager that maintains absent, recovering, failed, and ready units in one synchronized map, using an embedded non-nil recovered value to represent readiness
-  - use the same manager for application partitions and for the per-partition workspace collection
-  - keep the shared application structures needed by asynchronous WLog recovery
-  - let each generic manager own its attempt hooks and recovery lifecycle while workspace managers share the service worker wait group
+  - define generic recovery values, attempts, hooks, and manager state for absent, recovering, failed, and ready units
+  - define partition and workspace keys and manager wrappers over the shared generic recovery manager
+  - retain application identity and structures in recovered partitions for asynchronous WLog recovery
 
 - [x] update: [command/impl.go](../../../pkg/processors/command/impl.go)
   - recover the partition with one inclusive PLog suffix scan and use only its final event
