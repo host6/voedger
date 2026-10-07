@@ -42,7 +42,7 @@ Decisions:
 - Store the partition checkpoint in `SeqStorage_Part_PLog_offset`, keyed by application, using the partition ID as the clustering column. The value is `{"lastHandledPLogOffset": <offset>}`.
 - Store all workspace checkpoints for an application in `SeqStorage_WS_sequences`, with the WSID encoded in the clustering columns and `{"lastHandledWLogOffset": <offset>}` as the value.
 - Do not store a record-ID high-water mark and do not extend `IIDGenerator` with a persisted-state accessor.
-- Use the built-in asynchronous recovery-checkpoint projector to save the current event's WLog offset first and its PLog offset second. This ordering prevents the partition checkpoint from covering an event whose workspace checkpoint has not been stored.
+- Use two built-in asynchronous recovery-checkpoint projectors. Save the current event's handled WLog offset for every event, and save its handled PLog offset for every 100th PLog event.
 - On the first request to an unrecovered partition, start only partition recovery and return the existing partition-recovering `503` response.
 - Start partition recovery at the persisted `lastHandledPLogOffset`, or `FirstOffset` when the value is absent or zero. Perform one inclusive `ReadPLog(startOffset, ReadToTheEnd)` and retain only the final event returned by the scan.
 - Set `nextPLogOffset = lastPLogEventOffset + 1` from that final event without comparing it with any earlier or persisted value. Reapply the final event and publish the recovered partition. Do not start workspace recovery from the partition-recovery goroutine.
@@ -90,9 +90,10 @@ References (external):
 
 ### Tests
 
-- [x] update: [checkpoints/checkpoints_test.go](../../../pkg/sys/checkpoints/checkpoints_test.go)
-  - verify that the projector stores the event's handled PLog and WLog offsets rather than next offsets
-  - verify workspace-before-partition write ordering and failure behavior
+- [x] create: [checkpoints/checkpoints_test.go](../../../pkg/sys/checkpoints/checkpoints_test.go)
+  - verify that the partition projector stores the handled PLog offset for every 100th event
+  - verify that the workspace projector stores the handled WLog offset for every event
+  - verify storage-error propagation and registration of both standard asynchronous projectors
 
 - [x] update: [command/impl_test.go](../../../pkg/processors/command/impl_test.go)
   - verify one inclusive PLog read from the saved handled offset to the end
@@ -123,15 +124,12 @@ References (external):
 - [x] delete: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
   - replace the partition-only recovery test controls with the generic test-only utilities in `recovery_test_utils_test.go`
 
-- [x] update: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
+- [x] create: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
   - verify exact single-field JSON values, missing and malformed values, and last-write-wins replacement
   - verify application/partition isolation and WSID clustering-column isolation
 
 - [x] update: [storage/consts_test.go](../../../pkg/vvm/storage/consts_test.go)
   - preserve fixed sequence-storage prefix values
-
-- [x] update: [istructsmem/idgenerator_test.go](../../../pkg/istructsmem/idgenerator_test.go)
-  - remove checkpoint-specific last-record-ID accessor coverage
 
 - [x] update: [actualizers/impl_helpers_test.go](../../../pkg/processors/actualizers/impl_helpers_test.go)
   - extend PLog event mocks with handling-partition and PLog-offset accessors used by the checkpoint projector
@@ -142,16 +140,13 @@ References (external):
 
 - [x] update: [vit/utils.go](../../../pkg/vit/utils.go)
   - retain the shared-storage two-VVM lifecycle helper used by the recovery integration test
-  - allow the second VVM run to use a separate setup configuration while preserving the first run's storage
+  - add lifecycle hooks that inspect stable shared storage after each VVM stops
 
 ### Checkpoint contracts and storage
 
 - [x] update: [istructs/events-types.go](../../../pkg/istructs/events-types.go)
   - expose handling partition and PLog offset on persisted PLog events for checkpoint projection
   - keep `IIDGenerator` free of checkpoint-specific record-ID accessors
-
-- [x] update: [istructsmem/idgenerator.go](../../../pkg/istructsmem/idgenerator.go)
-  - remove the last-record-ID accessor and its checkpoint-only helper plumbing
 
 - [x] update: [storage/consts.go](../../../pkg/vvm/storage/consts.go)
   - retain the sequence-storage prefix values and identify their partition-offset and WSID clustering-column roles
@@ -166,7 +161,8 @@ References (external):
 
 - [x] create: [checkpoints/checkpoints.go](../../../pkg/sys/checkpoints/checkpoints.go)
   - define single-field partition and workspace handled-offset checkpoint contracts
-  - register the built-in asynchronous projector and persist workspace before partition for each event
+  - register separate built-in asynchronous partition and workspace checkpoint projectors
+  - persist a workspace checkpoint for every event and a partition checkpoint for every 100th PLog event
 
 - [x] update: [parser/impl_analyse.go](../../../pkg/parser/impl_analyse.go)
   - resolve the built-in generic Command trigger used by the recovery-checkpoint projector
@@ -175,10 +171,13 @@ References (external):
   - map the generic Command trigger to command events
 
 - [x] update: [sys/sys.vsql](../../../pkg/sys/sys.vsql)
-  - declare the built-in recovery-checkpoint projector for command, CUD, and ODoc events
+  - declare both built-in recovery-checkpoint projectors for command, CUD, and ODoc events
+
+- [x] update: [pkg/sys/sys.vsql](../../../pkg/sys/it/testdata/apps/test2.app1/image/pkg/sys/sys.vsql)
+  - mirror both built-in recovery-checkpoint projector declarations in the generated integration-test schema
 
 - [x] update: [sys/sysprovide/provide.go](../../../pkg/sys/sysprovide/provide.go)
-  - register the checkpoint projector with stateless resources
+  - register both checkpoint projectors with stateless resources
 
 ### Command recovery
 
