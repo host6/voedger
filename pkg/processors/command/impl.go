@@ -451,6 +451,7 @@ func newPartRecoveryCtx(ctx context.Context, partID istructs.PartitionID) contex
 	})
 }
 
+// runs in goroutine by recoverManager
 func (cmdProc *cmdProc) recoverPartition(vvmCtx context.Context, cmd *cmdWorkpiece) (ap *appPartition, err error) {
 	recoveryCtx := newPartRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID())
 	logger.InfoCtx(recoveryCtx, "cp.partition_recovery.start", "")
@@ -459,22 +460,50 @@ func (cmdProc *cmdProc) recoverPartition(vvmCtx context.Context, cmd *cmdWorkpie
 	ap = newAppPartition(cmdProc.numWSRecoverers, cmdProc.workspaceRecoveryHooks)
 	ap.clusterAppID = appID
 	ap.appStructs = cmd.appStructs
-	partitionCheckpoint, checkpointExists, err := cmdProc.checkpointStorage.GetPartitionCheckpoint(appID, key.partitionID)
+
+	// get the offset to start from
+	startOffset, err := cmdProc.readPartitionCheckpoint(appID, key.partitionID)
 	if err != nil {
 		return nil, err
+	}
+
+	// read the last plog event
+	lastPLogEvent, lastPLogOffset, err := cmdProc.getLastPLogEvent(vvmCtx, recoveryCtx, key, cmd, ap, startOffset)
+	if err != nil {
+		return nil, err
+	}
+
+	// re-apply the last event
+	if lastPLogEvent != nil {
+		if err := cmdProc.reapplyLastPLogEvent(vvmCtx, recoveryCtx, cmd, lastPLogEvent, lastPLogOffset); err != nil {
+			return nil, err
+		}
+	}
+
+	workspaceStatesJSON, err := ap.workspaces.marshalJSON()
+	if err != nil {
+		// notest
+		return nil, err
+	}
+	logger.InfoCtx(recoveryCtx, "cp.partition_recovery.complete", "nextPLogOffset ", ap.nextPLogOffset, ", workspaces ", string(workspaceStatesJSON))
+	return ap, nil
+}
+
+func (cmdProc *cmdProc) readPartitionCheckpoint(appID istructs.ClusterAppID, partitionID istructs.PartitionID) (istructs.Offset, error) {
+	partitionCheckpoint, checkpointExists, err := cmdProc.checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
+	if err != nil {
+		return istructs.NullOffset, err
 	}
 	startOffset := istructs.FirstOffset
 	if checkpointExists && partitionCheckpoint.LastHandledPLogOffset >= istructs.FirstOffset {
 		startOffset = partitionCheckpoint.LastHandledPLogOffset
 	}
-	var lastPLogEvent istructs.IPLogEvent
-	var lastPLogOffset istructs.Offset
-	releaseLastPLogEvent := true
-	defer func() {
-		if releaseLastPLogEvent && lastPLogEvent != nil {
-			lastPLogEvent.Release()
-		}
-	}()
+	return startOffset, nil
+}
+
+func (cmdProc *cmdProc) getLastPLogEvent(vvmCtx context.Context, recoveryCtx context.Context, key partitionKey,
+	cmd *cmdWorkpiece, ap *appPartition, startOffset istructs.Offset) (lastPLogEvent istructs.IPLogEvent,
+	lastPLogOffset istructs.Offset, err error) {
 	cb := func(plogOffset istructs.Offset, event istructs.IPLogEvent) error {
 		ap.nextPLogOffset = plogOffset + 1
 		if lastPLogEvent != nil {
@@ -488,44 +517,40 @@ func (cmdProc *cmdProc) recoverPartition(vvmCtx context.Context, cmd *cmdWorkpie
 	cmdProc.cmdProcHooks.pLogRead(key, startOffset, istructs.ReadToTheEnd)
 	err = cmd.appStructs.Events().ReadPLog(vvmCtx, key.partitionID, startOffset, istructs.ReadToTheEnd, cb)
 	if err != nil {
+		if lastPLogEvent != nil {
+			lastPLogEvent.Release()
+		}
 		logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.readplog.error", err)
-		return nil, err
+		return nil, istructs.NullOffset, err
 	}
+	return lastPLogEvent, lastPLogOffset, nil
+}
 
-	if lastPLogEvent != nil {
-		// re-apply the last event
-		cmd.logCtx, err = processors.LogEventAndCUDs(recoveryCtx, lastPLogEvent, lastPLogOffset, cmd.appStructs.AppDef(), 0,
-			"cp.partition_recovery.reapply", nil, "")
-		if err != nil {
-			logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.logeventandcuds.error", err)
-			return nil, err
-		}
-		cmd.pLogEvent = lastPLogEvent
-		releaseLastPLogEvent = false
-		cmd.workspace = newRecoveredWorkspace()
-		cmd.workspace.NextWLogOffset = lastPLogEvent.WLogOffset()
-		cmd.reapplier = cmd.appStructs.GetEventReapplier(cmd.pLogEvent)
-		cmd.pLogOffset = lastPLogOffset // need to get PLogOffset in sync projectors on logging
-		if err := cmdProc.storeOp.DoSync(vvmCtx, cmd); err != nil {
-			logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.storeop.error", err)
-			return nil, err
-		}
-		cmd.pLogOffset = istructs.NullOffset
-		cmd.reapplier = nil
-		cmd.workspace = nil
-		cmd.pLogEvent = nil
-		cmd.logCtx = nil
-		lastPLogEvent.Release() // TODO: eliminate if there will be a better solution, see https://github.com/voedger/voedger/issues/1348
-		lastPLogEvent = nil
-	}
-
-	workspaceStatesJSON, err := ap.workspaces.marshalJSON()
+func (cmdProc *cmdProc) reapplyLastPLogEvent(vvmCtx context.Context, recoveryCtx context.Context,
+	cmd *cmdWorkpiece, lastPLogEvent istructs.IPLogEvent, lastPLogOffset istructs.Offset) (err error) {
+	cmd.logCtx, err = processors.LogEventAndCUDs(recoveryCtx, lastPLogEvent, lastPLogOffset, cmd.appStructs.AppDef(), 0,
+		"cp.partition_recovery.reapply", nil, "")
 	if err != nil {
-		// notest
-		return nil, err
+		lastPLogEvent.Release()
+		logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.logeventandcuds.error", err)
+		return err
 	}
-	logger.InfoCtx(recoveryCtx, "cp.partition_recovery.complete", "nextPLogOffset ", ap.nextPLogOffset, ", workspaces ", string(workspaceStatesJSON))
-	return ap, nil
+	cmd.pLogEvent = lastPLogEvent
+	cmd.workspace = newRecoveredWorkspace()
+	cmd.workspace.NextWLogOffset = lastPLogEvent.WLogOffset()
+	cmd.reapplier = cmd.appStructs.GetEventReapplier(cmd.pLogEvent)
+	cmd.pLogOffset = lastPLogOffset // need to get PLogOffset in sync projectors on logging
+	if err := cmdProc.storeOp.DoSync(vvmCtx, cmd); err != nil {
+		logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.storeop.error", err)
+		return err
+	}
+	cmd.pLogOffset = istructs.NullOffset
+	cmd.reapplier = nil
+	cmd.workspace = nil
+	cmd.pLogEvent = nil
+	cmd.logCtx = nil
+	lastPLogEvent.Release() // TODO: eliminate if there will be a better solution, see https://github.com/voedger/voedger/issues/1348
+	return nil
 }
 
 func getIDGenerator(_ context.Context, cmd *cmdWorkpiece) (err error) {
