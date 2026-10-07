@@ -289,6 +289,7 @@ func (m *workspaceManager) marshalJSON() ([]byte, error) {
 	return json.Marshal(workspaces)
 }
 
+// run in a goroutine by recoverManager
 func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, requestCtx context.Context, wsKey workspaceKey, ap *appPartition) (*workspace, error) {
 	recoveryCtx := newWSRecoveryCtx(requestCtx, wsKey)
 	logger.InfoCtx(recoveryCtx, "cp.workspace_recovery.start", "")
