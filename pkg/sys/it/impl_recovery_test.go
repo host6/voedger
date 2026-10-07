@@ -9,9 +9,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
-	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/istructs"
-	syscheckpoints "github.com/voedger/voedger/pkg/sys/checkpoints"
 	it "github.com/voedger/voedger/pkg/vit"
 	sys_test_template "github.com/voedger/voedger/pkg/vit/testdata"
 	vvmstorage "github.com/voedger/voedger/pkg/vvm/storage"
@@ -34,12 +32,9 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 
 	var (
 		wsid                istructs.WSID
-		partitionID         istructs.PartitionID
 		firstVVMWLogOffset  istructs.Offset
 		lastPersistedID     istructs.RecordID
 		secondVVMWLogOffset istructs.Offset
-		partitionBefore     syscheckpoints.PartitionCheckpoint
-		workspaceBefore     syscheckpoints.WorkspaceCheckpoint
 	)
 	appID := istructs.ClusterApps[appQName]
 
@@ -48,8 +43,6 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			require := require.New(t)
 			ws := vit.WS(appQName, "test_ws")
 			wsid = ws.WSID
-			partitionID = coreutils.AppPartitionID(wsid, istructs.NumAppPartitions(vit.NumCommandProcessors))
-
 			resp := vit.PostWS(ws, "c.sys.CUD", cudBody)
 			require.Len(resp.NewIDs, 3)
 			lastPersistedID = resp.NewIDs["3"]
@@ -64,12 +57,7 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(
 				storage.AppStorage(t, istructs.AppQName_sys_vvm))
 
-			var ok bool
-			var err error
-			partitionBefore, ok, err = checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
-			require.NoError(err)
-			require.True(ok)
-			workspaceBefore, ok, err = checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
+			workspaceBefore, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
 			require.NoError(err)
 			require.True(ok)
 			require.Equal(firstVVMWLogOffset, workspaceBefore.LastHandledWLogOffset)
@@ -88,10 +76,6 @@ func TestCorrectIDsIssueAfterRecovery(t *testing.T) {
 			require := require.New(t)
 			checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(
 				storage.AppStorage(t, istructs.AppQName_sys_vvm))
-			partitionAfterHandoff, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
-			require.NoError(err)
-			require.True(ok)
-			require.Greater(partitionAfterHandoff.LastHandledPLogOffset, partitionBefore.LastHandledPLogOffset)
 			workspaceAfterHandoff, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
 			require.NoError(err)
 			require.True(ok)

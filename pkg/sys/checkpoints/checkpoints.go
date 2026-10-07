@@ -11,7 +11,12 @@ import (
 	"github.com/voedger/voedger/pkg/istructsmem"
 )
 
-var QNameProjectorRecoveryCheckpoint = appdef.NewQName(appdef.SysPackage, "ProjectorRecoveryCheckpoint")
+const partitionCheckpointEventInterval istructs.Offset = 100
+
+var (
+	QNameProjectorPartitionRecoveryCheckpoint = appdef.NewQName(appdef.SysPackage, "ProjectorPartitionRecoveryCheckpoint")
+	QNameProjectorWorkspaceRecoveryCheckpoint = appdef.NewQName(appdef.SysPackage, "ProjectorWorkspaceRecoveryCheckpoint")
+)
 
 type PartitionCheckpoint struct {
 	LastHandledPLogOffset istructs.Offset `json:"lastHandledPLogOffset"`
@@ -28,29 +33,35 @@ type IRecoveryCheckpointStorage interface {
 	PutWorkspaceCheckpoint(appID istructs.ClusterAppID, wsid istructs.WSID, checkpoint WorkspaceCheckpoint) error
 }
 
-// Provide registers recovery checkpointing as a regular built-in asynchronous
-// projector. Its lifecycle, PLog position, retries, and shutdown are therefore
-// managed by the standard actualizer infrastructure.
+// Provide registers one asynchronous projector per sequence storage.
 func Provide(resources istructsmem.IStatelessResources, storage IRecoveryCheckpointStorage) {
-	resources.AddProjectors(appdef.SysPackagePath, istructs.Projector{
-		Name: QNameProjectorRecoveryCheckpoint,
-		Func: recoveryCheckpointProjector(storage),
-	})
+	resources.AddProjectors(appdef.SysPackagePath,
+		istructs.Projector{
+			Name: QNameProjectorPartitionRecoveryCheckpoint,
+			Func: partitionRecoveryCheckpointProjector(storage),
+		},
+		istructs.Projector{
+			Name: QNameProjectorWorkspaceRecoveryCheckpoint,
+			Func: workspaceRecoveryCheckpointProjector(storage),
+		},
+	)
 }
 
-func recoveryCheckpointProjector(storage IRecoveryCheckpointStorage) func(istructs.IPLogEvent, istructs.IState, istructs.IIntents) error {
+func partitionRecoveryCheckpointProjector(storage IRecoveryCheckpointStorage) func(istructs.IPLogEvent, istructs.IState, istructs.IIntents) error {
 	return func(event istructs.IPLogEvent, state istructs.IState, _ istructs.IIntents) error {
-		appID := state.AppStructs().ClusterAppID()
-
-		// The partition checkpoint is a durability barrier. Persist the workspace
-		// offset covered by this event before allowing recovery to skip it.
-		if err := storage.PutWorkspaceCheckpoint(appID, event.Workspace(), WorkspaceCheckpoint{
-			LastHandledWLogOffset: event.WLogOffset(),
-		}); err != nil {
-			return err
+		if (event.PLogOffset()-istructs.FirstOffset+1)%partitionCheckpointEventInterval != 0 {
+			return nil
 		}
-		return storage.PutPartitionCheckpoint(appID, event.HandlingPartition(), PartitionCheckpoint{
+		return storage.PutPartitionCheckpoint(state.AppStructs().ClusterAppID(), event.HandlingPartition(), PartitionCheckpoint{
 			LastHandledPLogOffset: event.PLogOffset(),
+		})
+	}
+}
+
+func workspaceRecoveryCheckpointProjector(storage IRecoveryCheckpointStorage) func(istructs.IPLogEvent, istructs.IState, istructs.IIntents) error {
+	return func(event istructs.IPLogEvent, state istructs.IState, _ istructs.IIntents) error {
+		return storage.PutWorkspaceCheckpoint(state.AppStructs().ClusterAppID(), event.Workspace(), WorkspaceCheckpoint{
+			LastHandledWLogOffset: event.WLogOffset(),
 		})
 	}
 }

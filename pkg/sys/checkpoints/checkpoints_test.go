@@ -15,62 +15,88 @@ import (
 	"github.com/voedger/voedger/pkg/istructsmem"
 )
 
-func TestRecoveryCheckpointProjector(t *testing.T) {
+func TestPartitionRecoveryCheckpointProjectorWritesEachHundredthEvent(t *testing.T) {
 	require := require.New(t)
 	storage := &testCheckpointStorage{}
-	projector := recoveryCheckpointProjector(storage)
+	projector := partitionRecoveryCheckpointProjector(storage)
+	state := &testState{appStructs: &testAppStructs{clusterAppID: 7}}
 	event := &testPLogEvent{
 		partition:  4,
-		pLogOffset: 10,
+		pLogOffset: 99,
+	}
+
+	require.NoError(projector(event, state, nil))
+	require.Empty(storage.calls)
+
+	event.pLogOffset = 100
+	require.NoError(projector(event, state, nil))
+	require.Equal([]string{"partition"}, storage.calls)
+	require.Equal(istructs.ClusterAppID(7), storage.appID)
+	require.Equal(istructs.PartitionID(4), storage.partitionID)
+	require.Equal(PartitionCheckpoint{LastHandledPLogOffset: 100}, storage.partition)
+
+	event.pLogOffset = 101
+	require.NoError(projector(event, state, nil))
+	require.Equal([]string{"partition"}, storage.calls)
+
+	event.pLogOffset = 200
+	require.NoError(projector(event, state, nil))
+	require.Equal([]string{"partition", "partition"}, storage.calls)
+	require.Equal(PartitionCheckpoint{LastHandledPLogOffset: 200}, storage.partition)
+}
+
+func TestWorkspaceRecoveryCheckpointProjectorWritesEachEvent(t *testing.T) {
+	require := require.New(t)
+	storage := &testCheckpointStorage{}
+	projector := workspaceRecoveryCheckpointProjector(storage)
+	state := &testState{appStructs: &testAppStructs{clusterAppID: 7}}
+	event := &testPLogEvent{
 		wsid:       5,
 		wLogOffset: 20,
 	}
-	state := &testState{appStructs: &testAppStructs{
-		clusterAppID: 7,
-	}}
 
 	require.NoError(projector(event, state, nil))
-	require.Equal([]string{"workspace", "partition"}, storage.calls)
+	require.Equal([]string{"workspace"}, storage.calls)
 	require.Equal(istructs.ClusterAppID(7), storage.appID)
 	require.Equal(istructs.WSID(5), storage.wsid)
 	require.Equal(WorkspaceCheckpoint{LastHandledWLogOffset: 20}, storage.workspace)
-	require.Equal(istructs.PartitionID(4), storage.partitionID)
-	require.Equal(PartitionCheckpoint{LastHandledPLogOffset: 10}, storage.partition)
+
+	event.wsid = 6
+	event.wLogOffset = 1
+	require.NoError(projector(event, state, nil))
+	require.Equal([]string{"workspace", "workspace"}, storage.calls)
+	require.Equal(istructs.WSID(6), storage.wsid)
+	require.Equal(WorkspaceCheckpoint{LastHandledWLogOffset: 1}, storage.workspace)
 }
 
-func TestRecoveryCheckpointProjectorDoesNotAdvancePartitionWhenWorkspaceWriteFails(t *testing.T) {
+func TestRecoveryCheckpointProjectorsReturnStorageErrors(t *testing.T) {
 	require := require.New(t)
-	injectedErr := errors.New("injected workspace checkpoint failure")
-	storage := &testCheckpointStorage{workspaceErr: injectedErr}
-	projector := recoveryCheckpointProjector(storage)
-	event := &testPLogEvent{
-		partition:  4,
-		pLogOffset: 10,
-		wsid:       5,
-		wLogOffset: 20,
-	}
-	state := &testState{appStructs: &testAppStructs{
-		clusterAppID: 7,
-	}}
+	partitionErr := errors.New("injected partition checkpoint failure")
+	workspaceErr := errors.New("injected workspace checkpoint failure")
+	storage := &testCheckpointStorage{partitionErr: partitionErr, workspaceErr: workspaceErr}
+	state := &testState{appStructs: &testAppStructs{clusterAppID: 7}}
+	event := &testPLogEvent{pLogOffset: 100}
 
-	require.ErrorIs(projector(event, state, nil), injectedErr)
-	require.Equal([]string{"workspace"}, storage.calls)
+	require.ErrorIs(partitionRecoveryCheckpointProjector(storage)(event, state, nil), partitionErr)
+	require.ErrorIs(workspaceRecoveryCheckpointProjector(storage)(event, state, nil), workspaceErr)
 }
 
-func TestProvideRegistersStandardAsyncProjector(t *testing.T) {
+func TestProvideRegistersTwoStandardAsyncProjectors(t *testing.T) {
 	require := require.New(t)
 	resources := istructsmem.NewStatelessResources()
 	storage := &testCheckpointStorage{}
 	Provide(resources, storage)
 
-	found := false
+	found := map[appdef.QName]bool{}
 	resources.Projectors(func(path string, projector istructs.Projector) bool {
 		require.Equal(appdef.SysPackagePath, path)
-		require.Equal(QNameProjectorRecoveryCheckpoint, projector.Name)
-		found = true
+		found[projector.Name] = true
 		return true
 	})
-	require.True(found)
+	require.Equal(map[appdef.QName]bool{
+		QNameProjectorPartitionRecoveryCheckpoint: true,
+		QNameProjectorWorkspaceRecoveryCheckpoint: true,
+	}, found)
 }
 
 type testCheckpointStorage struct {
