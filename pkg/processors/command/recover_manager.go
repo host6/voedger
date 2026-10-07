@@ -115,41 +115,39 @@ func (m *recoverManager[K, T]) reserveSlot() bool {
 	}
 }
 
-func (m *recoverManager[K, T]) startRecover(vvmCtx context.Context, key K, value *recoverableValue[T],
-	attempt recoveryAttemptFunc[T]) {
+func (m *recoverManager[K, T]) startRecover(vvmCtx context.Context, key K, value *recoverableValue[T], attempt recoveryAttemptFunc[T]) {
 	m.workers.Add(1)
 	m.hooks.scheduled(key)
 	go m.recover(vvmCtx, key, value, attempt)
 }
 
-func (m *recoverManager[K, T]) recover(vvmCtx context.Context, key K, value *recoverableValue[T],
-	attempt recoveryAttemptFunc[T]) {
+// calls hooks around the attempt
+func (m *recoverManager[K, T]) recover(vvmCtx context.Context, key K, value *recoverableValue[T], attempt recoveryAttemptFunc[T]) {
 	defer m.workers.Done()
-	var (
-		recovered *T
-		err       error
-	)
-	err = m.hooks.beforeAttempt(vvmCtx, key)
+	var recovered *T
+	err := m.hooks.beforeAttempt(vvmCtx, key)
 	if err == nil {
 		recovered, err = attempt(vvmCtx)
 	}
 	if err != nil {
 		err = fmt.Errorf("%w: %w", errRecoveryFailed, err)
 	}
-	m.complete(key, value, recovered, err)
+	m.complete(value, recovered, err)
 	m.hooks.attemptCompleted(key, err)
 }
 
-func (m *recoverManager[K, T]) complete(key K, value *recoverableValue[T], recovered *T, err error) {
+//	attempt result --> captured state --> ready or failed
+//	               +------------------> release recovery slot
+//
+// A reset may detach the state from the map, but cannot make this pointer refer
+// to a newer attempt's state.
+func (m *recoverManager[K, T]) complete(value *recoverableValue[T], recovered *T, err error) {
 	m.mu.Lock()
-	if m.values[key] == value {
-		if err == nil {
-			value.value = recovered
-			value.recoveryErr = nil
-		} else {
-			value.value = nil
-			value.recoveryErr = err
-		}
+	value.recoveryErr = err
+	if err == nil {
+		value.value = recovered
+	} else {
+		value.value = nil
 	}
 	m.mu.Unlock()
 	if m.slots != nil {

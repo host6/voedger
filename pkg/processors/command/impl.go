@@ -231,14 +231,22 @@ func (m *partitionManager) shutdown() {
 }
 
 func (m *partitionManager) getOrStart(vvmCtx context.Context, partKey partitionKey, cmd *cmdWorkpiece) (*appPartition, error) {
-	// attempt factory instead of attempt func because we need to detach the recoveryCmd only if recover will be started
-	// otherwise need to detach first, call getOrStart with attempt func that captured that recoveryCmd
-	// and, if the recovery will not be actually started (e.g. if in progress already)
-	// then after getOrStart do cmdWorkpiece.appPart=recoveryCmd.appPart again to keep cmdWorkpiece release frow correct
-	// need 3rd bool result from getOrStart showing whether recovery was actually started or not
-	// need additional strange `if` here
-	// factory of attempt funcs is much better
 	return getOrStart(vvmCtx, m.partitions, partKey, fmt.Sprintf("partition %d", partKey.partitionID),
+		// Why `func return func` here?
+		// Because recoveryCmd should be detached only if the attempt is actually going to be made
+		//
+		//	recover in getOrStart()
+		//	    |
+		//	    +--> rejected due of in progress / limit --> factory is not called
+		//	    |                                            cmd keeps appPart ownership
+		//	    |
+		//	    +--> admitted --> factory() --> recoveryCmd detached and takes appPart ownership
+		//	                                      |
+		//	                                      +--> attempt(ctx) --> recoveryCmd.Release()
+		//
+		// Passing recoveryAttemptFunc directly would require creating recoveryCmd and
+		// detaching cmd.appPart before admission. A rejected request would then need to
+		// undo that ownership transfer or risk releasing or orphaning appPart.
 		func() recoveryAttemptFunc[appPartition] {
 			recoveryCmd := toRecoveryWorkpiece(cmd, partKey)
 			return func(ctx context.Context) (*appPartition, error) {
@@ -284,8 +292,7 @@ func (m *workspaceManager) marshalJSON() ([]byte, error) {
 func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, requestCtx context.Context, wsKey workspaceKey, ap *appPartition) (*workspace, error) {
 	recoveryCtx := newWSRecoveryCtx(requestCtx, wsKey)
 	logger.InfoCtx(recoveryCtx, "cp.workspace_recovery.start", "")
-	checkpoint, ok, err := cmdProc.checkpointStorage.GetWorkspaceCheckpoint(
-		ap.clusterAppID, wsKey.wsid)
+	checkpoint, ok, err := cmdProc.checkpointStorage.GetWorkspaceCheckpoint(ap.clusterAppID, wsKey.wsid)
 	if err != nil {
 		return nil, err
 	}
