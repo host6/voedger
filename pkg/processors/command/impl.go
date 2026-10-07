@@ -175,6 +175,16 @@ func newAppPartition(numWSRecoverers uint, workspaceRecoveryHooks recoveryHooks[
 	}
 }
 
+func newPartitionManager(hooks recoveryHooks[partitionKey], recoverFunc recoverPartitionFunc) *partitionManager {
+	return &partitionManager{
+		partitions: newRecoverManager[partitionKey, appPartition](
+			nil,
+			hooks,
+		),
+		recoverFunc: recoverFunc,
+	}
+}
+
 func newWorkspaceManager(numRecoverers uint, hooks recoveryHooks[workspaceKey]) *workspaceManager {
 	return &workspaceManager{
 		workspaces: newRecoverManager[workspaceKey, workspace](
@@ -425,8 +435,6 @@ func (cmdProc *cmdProc) getHostState(_ context.Context, cmd *cmdWorkpiece) (err 
 	cmd.eca.Intents = cmd.hostState.state
 	return nil
 }
-
-const workspaceRecoveryRewindEvents istructs.Offset = 10
 
 func highestNewNonSingletonRecordID(event istructs.IAbstractEvent) (istructs.RecordID, bool) {
 	var highest istructs.RecordID
@@ -1219,13 +1227,6 @@ func hooksOrNOP[K comparable](hooks recoveryHooks[K]) recoveryHooks[K] {
 		hooks.attemptCompleted = func(K, error) {}
 	}
 	return hooks
-}
-
-// commandProcessorHooks provides deterministic observation points for package tests.
-// Production command processors use nopCommandProcessorHooks().
-type commandProcessorHooks struct {
-	pLogRead func(partitionKey, istructs.Offset, int)
-	wLogRead func(workspaceKey, istructs.Offset, int)
 }
 
 func nopCommandProcessorHooks() *commandProcessorHooks {

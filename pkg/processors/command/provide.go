@@ -36,15 +36,6 @@ type cmdProc struct {
 	cmdProcHooks           *commandProcessorHooks
 }
 
-func newPartitionManager(hooks recoveryHooks[partitionKey], recoverFunc recoverPartitionFunc) *partitionManager {
-	return &partitionManager{
-		partitions: newRecoverManager[partitionKey, appPartition](
-			nil,
-			hooks,
-		),
-		recoverFunc: recoverFunc,
-	}
-}
 
 // syncActualizerFactory is a factory(partitionID) that returns a fork operator with a sync actualizer per each application. Inside of an each actualizer - projectors for each application
 func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,

@@ -8,6 +8,7 @@ import (
 	"errors"
 
 	"github.com/voedger/voedger/pkg/appdef"
+	"github.com/voedger/voedger/pkg/istructs"
 )
 
 var (
@@ -19,5 +20,6 @@ var (
 )
 
 const (
-	args = "args"
+	args                                          = "args"
+	workspaceRecoveryRewindEvents istructs.Offset = 10
 )

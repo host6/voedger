@@ -220,3 +220,10 @@ type appPartition struct {
 
 type recoverPartitionFunc func(context.Context, *cmdWorkpiece) (*appPartition, error)
 type recoverWorkspaceFunc func(context.Context, workspaceKey) (*workspace, error)
+
+// commandProcessorHooks provides deterministic observation points for package tests.
+// Production command processors use nopCommandProcessorHooks().
+type commandProcessorHooks struct {
+	pLogRead func(partitionKey, istructs.Offset, int)
+	wLogRead func(workspaceKey, istructs.Offset, int)
+}
