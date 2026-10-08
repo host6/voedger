@@ -17,7 +17,6 @@ import (
 	"github.com/voedger/voedger/pkg/appdef/sys"
 	log "github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/testingu/require"
-	"github.com/voedger/voedger/pkg/isequencer"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -57,16 +56,14 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 		// gets event builder
 		bld := app.Events().GetSyncRawEventBuilder(
 			istructs.SyncRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: test.partition,
-					PLogOffset:        test.plogOfs,
-					Workspace:         test.workspace,
-					WLogOffset:        test.wlogOfs,
-					QName:             test.saleCmdName,
-					RegisteredAt:      test.registeredTime,
-				},
-				Device:   test.device,
-				SyncedAt: test.syncTime,
+				HandlingPartition: test.partition,
+				PLogOffset:        test.plogOfs,
+				Workspace:         test.workspace,
+				WLogOffset:        test.wlogOfs,
+				QName:             test.saleCmdName,
+				RegisteredAt:      test.registeredTime,
+				Device:            test.device,
+				SyncedAt:          test.syncTime,
 			})
 
 		t.Run("make command object", func(t *testing.T) {
@@ -358,14 +355,12 @@ func testEventBuilderCore(t *testing.T, cachedPLog bool) {
 		// gets event builder
 		bld := app.Events().GetNewRawEventBuilder(
 			istructs.NewRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: test.partition,
-					PLogOffset:        test.plogOfs + 1,
-					Workspace:         test.workspace,
-					WLogOffset:        test.wlogOfs + 1,
-					QName:             test.changeCmdName,
-					RegisteredAt:      test.registeredTime + 1,
-				},
+				HandlingPartition: test.partition,
+				PLogOffset:        test.plogOfs + 1,
+				Workspace:         test.workspace,
+				WLogOffset:        test.wlogOfs + 1,
+				QName:             test.changeCmdName,
+				RegisteredAt:      test.registeredTime + 1,
 			})
 
 		t.Run("test build CUDs", func(t *testing.T) {
@@ -657,7 +652,7 @@ func Test_EventUpdateRawCud(t *testing.T) {
 		testCount
 	)
 
-	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	ws := istructs.WSID(1)
 
@@ -676,14 +671,12 @@ func Test_EventUpdateRawCud(t *testing.T) {
 		t.Run("should be ok to create CDoc", func(t *testing.T) {
 			bld := app.Events().GetNewRawEventBuilder(
 				istructs.NewRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						HandlingPartition: 1,
-						PLogOffset:        istructs.Offset(100500 + test),
-						Workspace:         ws,
-						WLogOffset:        istructs.Offset(100500 + test),
-						QName:             istructs.QNameCommandCUD, // sys.CUD
-						RegisteredAt:      1,
-					},
+					HandlingPartition: 1,
+					PLogOffset:        istructs.Offset(100500 + test),
+					Workspace:         ws,
+					WLogOffset:        istructs.Offset(100500 + test),
+					QName:             istructs.QNameCommandCUD, // sys.CUD
+					RegisteredAt:      1,
 				})
 
 			create := bld.CUDBuilder().Create(docName)
@@ -717,14 +710,12 @@ func Test_EventUpdateRawCud(t *testing.T) {
 		t.Run("should be ok to update CDoc", func(t *testing.T) {
 			bld := app.Events().GetNewRawEventBuilder(
 				istructs.NewRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						HandlingPartition: 1,
-						PLogOffset:        istructs.Offset(100501 + test),
-						Workspace:         ws,
-						WLogOffset:        istructs.Offset(100501 + test),
-						QName:             istructs.QNameCommandCUD, // sys.CUD
-						RegisteredAt:      1,
-					},
+					HandlingPartition: 1,
+					PLogOffset:        istructs.Offset(100501 + test),
+					Workspace:         ws,
+					WLogOffset:        istructs.Offset(100501 + test),
+					QName:             istructs.QNameCommandCUD, // sys.CUD
+					RegisteredAt:      1,
 				})
 
 			create := bld.CUDBuilder().Create(recName)
@@ -831,7 +822,7 @@ func Test_UpdateCorrupted(t *testing.T) {
 		return cfgs
 	}()
 
-	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -839,14 +830,12 @@ func Test_UpdateCorrupted(t *testing.T) {
 	t.Run("should be ok to put new sys.CUD event", func(t *testing.T) {
 		bld := app.Events().GetNewRawEventBuilder(
 			istructs.NewRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: 1,
-					PLogOffset:        100500,
-					Workspace:         1,
-					WLogOffset:        100500,
-					QName:             istructs.QNameCommandCUD, // sys.CUD
-					RegisteredAt:      1,
-				},
+				HandlingPartition: 1,
+				PLogOffset:        100500,
+				Workspace:         1,
+				WLogOffset:        100500,
+				QName:             istructs.QNameCommandCUD, // sys.CUD
+				RegisteredAt:      1,
 			})
 
 		cud := bld.CUDBuilder().Create(docName)
@@ -893,15 +882,13 @@ func Test_UpdateCorrupted(t *testing.T) {
 	t.Run("should be ok to update corrupted event", func(t *testing.T) {
 		bld := app.Events().GetSyncRawEventBuilder(
 			istructs.SyncRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					EventBytes:        utils.CopyBytes(origEventBytes),
-					HandlingPartition: 1,
-					PLogOffset:        100500,
-					Workspace:         1,
-					WLogOffset:        100500,
-					QName:             istructs.QNameForCorruptedData, // sys.Corrupted
-					RegisteredAt:      1,
-				},
+				EventBytes:        utils.CopyBytes(origEventBytes),
+				HandlingPartition: 1,
+				PLogOffset:        100500,
+				Workspace:         1,
+				WLogOffset:        100500,
+				QName:             istructs.QNameForCorruptedData, // sys.Corrupted
+				RegisteredAt:      1,
 			})
 
 		rawEvent, err := bld.BuildRawEvent()
@@ -968,7 +955,7 @@ func Test_BuildPLogEvent(t *testing.T) {
 		return cfgs
 	}()
 
-	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -976,14 +963,12 @@ func Test_BuildPLogEvent(t *testing.T) {
 	t.Run("should be ok to put new sys.CUD event", func(t *testing.T) {
 		bld := app.Events().GetNewRawEventBuilder(
 			istructs.NewRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: 1,
-					PLogOffset:        100500,
-					Workspace:         1,
-					WLogOffset:        100500,
-					QName:             istructs.QNameCommandCUD, // sys.CUD
-					RegisteredAt:      1,
-				},
+				HandlingPartition: 1,
+				PLogOffset:        100500,
+				Workspace:         1,
+				WLogOffset:        100500,
+				QName:             istructs.QNameCommandCUD, // sys.CUD
+				RegisteredAt:      1,
 			})
 
 		cud := bld.CUDBuilder().Create(docName)
@@ -1030,15 +1015,13 @@ func Test_BuildPLogEvent(t *testing.T) {
 	t.Run("should be ok to build PLog corrupted event", func(t *testing.T) {
 		bld := app.Events().GetSyncRawEventBuilder(
 			istructs.SyncRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					EventBytes:        utils.CopyBytes(origEventBytes),
-					HandlingPartition: 1,
-					PLogOffset:        istructs.NullOffset,
-					Workspace:         1,
-					WLogOffset:        100500,
-					QName:             istructs.QNameForCorruptedData, // sys.Corrupted
-					RegisteredAt:      1,
-				},
+				EventBytes:        utils.CopyBytes(origEventBytes),
+				HandlingPartition: 1,
+				PLogOffset:        istructs.NullOffset,
+				Workspace:         1,
+				WLogOffset:        100500,
+				QName:             istructs.QNameForCorruptedData, // sys.Corrupted
+				RegisteredAt:      1,
 			})
 
 		rawEvent, err := bld.BuildRawEvent()
@@ -1083,15 +1066,13 @@ func Test_BuildPLogEvent(t *testing.T) {
 		t.Run("should panic if not sys.Corrupted raw event", func(t *testing.T) {
 			bld := app.Events().GetSyncRawEventBuilder(
 				istructs.SyncRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						EventBytes:        utils.CopyBytes(origEventBytes),
-						HandlingPartition: 1,
-						PLogOffset:        istructs.NullOffset,
-						Workspace:         1,
-						WLogOffset:        100500,
-						QName:             istructs.QNameCommandCUD, // <- error here
-						RegisteredAt:      1,
-					},
+					EventBytes:        utils.CopyBytes(origEventBytes),
+					HandlingPartition: 1,
+					PLogOffset:        istructs.NullOffset,
+					Workspace:         1,
+					WLogOffset:        100500,
+					QName:             istructs.QNameCommandCUD, // <- error here
+					RegisteredAt:      1,
 				})
 
 			cud := bld.CUDBuilder().Create(docName)
@@ -1112,15 +1093,13 @@ func Test_BuildPLogEvent(t *testing.T) {
 		t.Run("should panic if not null PLog offset", func(t *testing.T) {
 			bld := app.Events().GetSyncRawEventBuilder(
 				istructs.SyncRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						EventBytes:        utils.CopyBytes(origEventBytes),
-						HandlingPartition: 1,
-						PLogOffset:        100501, // <- error here
-						Workspace:         1,
-						WLogOffset:        100500,
-						QName:             istructs.QNameForCorruptedData,
-						RegisteredAt:      1,
-					},
+					EventBytes:        utils.CopyBytes(origEventBytes),
+					HandlingPartition: 1,
+					PLogOffset:        100501, // <- error here
+					Workspace:         1,
+					WLogOffset:        100500,
+					QName:             istructs.QNameForCorruptedData,
+					RegisteredAt:      1,
 				})
 
 			cud := bld.CUDBuilder().Create(docName)
@@ -1173,7 +1152,7 @@ func Test_SingletonCDocEvent(t *testing.T) {
 		return cfgs
 	}()
 
-	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -1191,14 +1170,12 @@ func Test_SingletonCDocEvent(t *testing.T) {
 	t.Run("should be ok to create singleton CDoc", func(t *testing.T) {
 		bld := app.Events().GetNewRawEventBuilder(
 			istructs.NewRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: 1,
-					PLogOffset:        100500,
-					Workspace:         1,
-					WLogOffset:        100500,
-					QName:             istructs.QNameCommandCUD, // sys.CUD
-					RegisteredAt:      1,
-				},
+				HandlingPartition: 1,
+				PLogOffset:        100500,
+				Workspace:         1,
+				WLogOffset:        100500,
+				QName:             istructs.QNameCommandCUD, // sys.CUD
+				RegisteredAt:      1,
 			})
 
 		cud := bld.CUDBuilder().Create(docName)
@@ -1258,14 +1235,12 @@ func Test_SingletonCDocEvent(t *testing.T) {
 	t.Run("must fail to attempt singleton CDoc recreation", func(t *testing.T) {
 		bld := app.Events().GetNewRawEventBuilder(
 			istructs.NewRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: 1,
-					PLogOffset:        100501,
-					Workspace:         1,
-					WLogOffset:        100501,
-					QName:             istructs.QNameCommandCUD, // sys.CUD
-					RegisteredAt:      1,
-				},
+				HandlingPartition: 1,
+				PLogOffset:        100501,
+				Workspace:         1,
+				WLogOffset:        100501,
+				QName:             istructs.QNameCommandCUD, // sys.CUD
+				RegisteredAt:      1,
 			})
 
 		cud := bld.CUDBuilder().Create(docName)
@@ -1293,14 +1268,12 @@ func Test_SingletonCDocEvent(t *testing.T) {
 	t.Run("must fail to repeatedly create singleton CDoc", func(t *testing.T) {
 		bld := app.Events().GetNewRawEventBuilder(
 			istructs.NewRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: 1,
-					PLogOffset:        100501,
-					Workspace:         1,
-					WLogOffset:        100501,
-					QName:             istructs.QNameCommandCUD, // sys.CUD
-					RegisteredAt:      1,
-				},
+				HandlingPartition: 1,
+				PLogOffset:        100501,
+				Workspace:         1,
+				WLogOffset:        100501,
+				QName:             istructs.QNameCommandCUD, // sys.CUD
+				RegisteredAt:      1,
 			})
 
 		for i := 1; i <= 2; i++ {
@@ -1318,14 +1291,12 @@ func Test_SingletonCDocEvent(t *testing.T) {
 	t.Run("should be ok to update singleton CDoc", func(t *testing.T) {
 		bld := app.Events().GetNewRawEventBuilder(
 			istructs.NewRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: 1,
-					PLogOffset:        100502,
-					Workspace:         1,
-					WLogOffset:        100502,
-					QName:             istructs.QNameCommandCUD, // sys.CUD
-					RegisteredAt:      2,
-				},
+				HandlingPartition: 1,
+				PLogOffset:        100502,
+				Workspace:         1,
+				WLogOffset:        100502,
+				QName:             istructs.QNameCommandCUD, // sys.CUD
+				RegisteredAt:      2,
 			})
 
 		cud := bld.CUDBuilder().Update(
@@ -1392,16 +1363,14 @@ func TestEventBuild_Error(t *testing.T) {
 	eventBuilder := func(cmd appdef.QName) istructs.IRawEventBuilder {
 		return app.Events().GetSyncRawEventBuilder(
 			istructs.SyncRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: test.partition,
-					PLogOffset:        test.plogOfs,
-					Workspace:         test.workspace,
-					WLogOffset:        test.wlogOfs,
-					QName:             cmd,
-					RegisteredAt:      test.registeredTime,
-				},
-				Device:   test.device,
-				SyncedAt: test.syncTime,
+				HandlingPartition: test.partition,
+				PLogOffset:        test.plogOfs,
+				Workspace:         test.workspace,
+				WLogOffset:        test.wlogOfs,
+				QName:             cmd,
+				RegisteredAt:      test.registeredTime,
+				Device:            test.device,
+				SyncedAt:          test.syncTime,
 			})
 	}
 
@@ -1700,16 +1669,14 @@ func Test_IEventsGetORec(t *testing.T) {
 		t.Run("Should be ok to build raw event", func(t *testing.T) {
 			bld := app.Events().GetSyncRawEventBuilder(
 				istructs.SyncRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						HandlingPartition: test.partition,
-						PLogOffset:        test.plogOfs,
-						Workspace:         test.workspace,
-						WLogOffset:        test.wlogOfs,
-						QName:             test.saleCmdName,
-						RegisteredAt:      test.registeredTime,
-					},
-					Device:   test.device,
-					SyncedAt: test.syncTime,
+					HandlingPartition: test.partition,
+					PLogOffset:        test.plogOfs,
+					Workspace:         test.workspace,
+					WLogOffset:        test.wlogOfs,
+					QName:             test.saleCmdName,
+					RegisteredAt:      test.registeredTime,
+					Device:            test.device,
+					SyncedAt:          test.syncTime,
 				})
 
 			test.fillTestObject(bld.ArgumentObjectBuilder())
@@ -2007,7 +1974,7 @@ func Test_LoadStoreErrEvent_Bytes(t *testing.T) {
 	require := require.New(t)
 	test := newTest()
 
-	provider := Provide(test.AppConfigs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(test.AppConfigs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	app, err := provider.BuiltIn(test.appName)
 	require.NoError(err)
@@ -2022,17 +1989,15 @@ func Test_LoadStoreErrEvent_Bytes(t *testing.T) {
 		t.Run("load/store bad command name error event", func(t *testing.T) {
 			bld := app.Events().GetSyncRawEventBuilder(
 				istructs.SyncRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						EventBytes:        eventBytes,
-						HandlingPartition: test.partition,
-						PLogOffset:        test.plogOfs,
-						Workspace:         test.workspace,
-						WLogOffset:        test.wlogOfs,
-						QName:             eventName[i],
-						RegisteredAt:      test.registeredTime,
-					},
-					Device:   test.device,
-					SyncedAt: test.syncTime,
+					EventBytes:        eventBytes,
+					HandlingPartition: test.partition,
+					PLogOffset:        test.plogOfs,
+					Workspace:         test.workspace,
+					WLogOffset:        test.wlogOfs,
+					QName:             eventName[i],
+					RegisteredAt:      test.registeredTime,
+					Device:            test.device,
+					SyncedAt:          test.syncTime,
 				})
 			rawEvent, buildErr := bld.BuildRawEvent()
 			require.Error(buildErr)

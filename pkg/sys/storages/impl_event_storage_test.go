@@ -13,7 +13,6 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appdef/builder"
 	"github.com/voedger/voedger/pkg/goutils/testingu"
-	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	istorageimpl "github.com/voedger/voedger/pkg/istorage/provider"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -53,12 +52,10 @@ func TestEventStorage_Get(t *testing.T) {
 	tQname := appdef.NewQName("main", "t1")
 
 	reb := app.Events().GetNewRawEventBuilder(istructs.NewRawEventBuilderParams{
-		GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-			Workspace:         wsid,
-			HandlingPartition: partitionNr,
-			PLogOffset:        offset,
-			QName:             testQName,
-		},
+		Workspace:         wsid,
+		HandlingPartition: partitionNr,
+		PLogOffset:        offset,
+		QName:             testQName,
 	})
 	argb := reb.ArgumentObjectBuilder()
 	argb.PutInt32("i", 1)
@@ -172,7 +169,7 @@ func appStructs(appdefSQL string, prepareAppCfg appCfgCallback) istructs.IAppStr
 		cfgs,
 		payloads.ProvideIAppTokensFactory(itokensjwt.TestTokensJWT()),
 		storageProvider,
-		isequencer.SequencesTrustLevel_0,
+		istructs.SequencesTrustLevel_0,
 		nil,
 	)
 	structs, err := prov.BuiltIn(appName)

@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appdef/builder"
-	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
@@ -105,7 +104,7 @@ func bench_BuildRawEvent(b *testing.B, numOfIntFields int) {
 		cfg.Resources.Add(NewCommandFunction(cmdQName, NullCommandExec))
 	}
 
-	provider := Provide(configs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(configs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	appStructs, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -116,16 +115,14 @@ func bench_BuildRawEvent(b *testing.B, numOfIntFields int) {
 
 		bld := appStructs.Events().GetSyncRawEventBuilder(
 			istructs.SyncRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: 55,
-					PLogOffset:        10000,
-					Workspace:         1234,
-					WLogOffset:        1000,
-					QName:             cmdQName,
-					RegisteredAt:      100500,
-				},
-				Device:   762,
-				SyncedAt: 1005001,
+				HandlingPartition: 55,
+				PLogOffset:        10000,
+				Workspace:         1234,
+				WLogOffset:        1000,
+				QName:             cmdQName,
+				RegisteredAt:      100500,
+				Device:            762,
+				SyncedAt:          1005001,
 			})
 
 		cmd := bld.ArgumentObjectBuilder()

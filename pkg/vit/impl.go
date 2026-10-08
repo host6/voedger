@@ -28,7 +28,6 @@ import (
 	"github.com/voedger/voedger/pkg/goutils/testingu"
 	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iblobstorage"
-	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/itokensjwt"
 	"github.com/voedger/voedger/pkg/parser"
 	"github.com/wneessen/go-mail"
@@ -94,7 +93,7 @@ func newVit(tb testing.TB, vitCfg *VITConfig, useCas bool, vvmLaunchOnly bool) *
 	cfg.MetricsServicePort = 0
 	cfg.AdminPort = 0
 
-	cfg.SequencesTrustLevel = isequencer.SequencesTrustLevel_0
+	cfg.SequencesTrustLevel = istructs.SequencesTrustLevel_0
 
 	cfg.Time = testingu.MockTime
 	cfg.SchemasCache = nonTestAppsSchemasCache
@@ -364,11 +363,9 @@ func (vit *VIT) GetSystemPrincipal(appQName appdef.AppQName) *Principal {
 		prn = &Principal{
 			Token:       sysToken,
 			ProfileWSID: istructs.NullWSID,
-			Login: Login{
-				Name:        "___sys",
-				AppQName:    appQName,
-				subjectKind: istructs.SubjectKind_User,
-			},
+			Name:        "___sys",
+			AppQName:    appQName,
+			subjectKind: istructs.SubjectKind_User,
 		}
 		appPrincipals["___sys"] = prn
 	}
@@ -412,13 +409,11 @@ func (vit *VIT) UploadBLOB(appQName appdef.AppQName, wsid istructs.WSID, name st
 	ownerRecord appdef.QName, ownerRecordField appdef.FieldName, opts ...httpu.ReqOptFunc) (blobID istructs.RecordID) {
 	vit.T.Helper()
 	blobReader := iblobstorage.BLOBReader{
-		DescrType: iblobstorage.DescrType{
-			Name:             name,
-			ContentType:      contentType,
-			OwnerRecord:      ownerRecord,
-			OwnerRecordField: ownerRecordField,
-		},
-		ReadCloser: io.NopCloser(bytes.NewReader(content)),
+		Name:             name,
+		ContentType:      contentType,
+		OwnerRecord:      ownerRecord,
+		OwnerRecordField: ownerRecordField,
+		ReadCloser:       io.NopCloser(bytes.NewReader(content)),
 	}
 	o := []httpu.ReqOptFunc{createVITOpts(), httpu.WithRetryPolicy(vitHTTPClientRetryPolicy...)}
 	o = append(o, opts...)
@@ -449,11 +444,9 @@ func (vit *VIT) UploadTempBLOB(appQName appdef.AppQName, wsid istructs.WSID, nam
 	opts ...httpu.ReqOptFunc) (blobSUUID iblobstorage.SUUID) {
 	vit.T.Helper()
 	blobReader := iblobstorage.BLOBReader{
-		DescrType: iblobstorage.DescrType{
-			Name:        name,
-			ContentType: contentType,
-		},
-		ReadCloser: io.NopCloser(bytes.NewReader(content)),
+		Name:        name,
+		ContentType: contentType,
+		ReadCloser:  io.NopCloser(bytes.NewReader(content)),
 	}
 	o := []httpu.ReqOptFunc{createVITOpts(), httpu.WithRetryPolicy(vitHTTPClientRetryPolicy...)}
 	o = append(o, opts...)

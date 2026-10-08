@@ -14,7 +14,6 @@ import (
 	"github.com/voedger/voedger/pkg/appdef/builder"
 	"github.com/voedger/voedger/pkg/appdef/constraints"
 	"github.com/voedger/voedger/pkg/goutils/testingu/require"
-	"github.com/voedger/voedger/pkg/isequencer"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -60,7 +59,7 @@ func Test_ValidEventArgs(t *testing.T) {
 	cfg := cfgs.AddBuiltInAppConfig(appName, adb)
 	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -68,14 +67,12 @@ func Test_ValidEventArgs(t *testing.T) {
 	t.Run("error if event name is not a command or odoc", func(t *testing.T) {
 		b := app.Events().GetNewRawEventBuilder(
 			istructs.NewRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: 25,
-					PLogOffset:        100500,
-					Workspace:         1,
-					WLogOffset:        1050,
-					QName:             objName, // <- error here
-					RegisteredAt:      123456789,
-				}})
+				HandlingPartition: 25,
+				PLogOffset:        100500,
+				Workspace:         1,
+				WLogOffset:        1050,
+				QName:             objName, // <- error here
+				RegisteredAt:      123456789})
 
 		_, err := b.BuildRawEvent()
 		require.Error(err, require.Is(ErrNameNotFoundError), require.Has(objName))
@@ -86,28 +83,24 @@ func Test_ValidEventArgs(t *testing.T) {
 		if sync {
 			b = app.Events().GetSyncRawEventBuilder(
 				istructs.SyncRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						HandlingPartition: 25,
-						PLogOffset:        100500,
-						Workspace:         1,
-						WLogOffset:        1050,
-						QName:             docName,
-						RegisteredAt:      123456789,
-					},
-					Device:   1,
-					SyncedAt: 123456789,
+					HandlingPartition: 25,
+					PLogOffset:        100500,
+					Workspace:         1,
+					WLogOffset:        1050,
+					QName:             docName,
+					RegisteredAt:      123456789,
+					Device:            1,
+					SyncedAt:          123456789,
 				})
 		} else {
 			b = app.Events().GetNewRawEventBuilder(
 				istructs.NewRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						HandlingPartition: 25,
-						PLogOffset:        100500,
-						Workspace:         1,
-						WLogOffset:        1050,
-						QName:             docName,
-						RegisteredAt:      123456789,
-					},
+					HandlingPartition: 25,
+					PLogOffset:        100500,
+					Workspace:         1,
+					WLogOffset:        1050,
+					QName:             docName,
+					RegisteredAt:      123456789,
 				})
 		}
 		return b
@@ -359,7 +352,7 @@ func Test_ValidSysCudEvent(t *testing.T) {
 	cfg := cfgs.AddBuiltInAppConfig(appName, adb)
 	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -369,28 +362,24 @@ func Test_ValidSysCudEvent(t *testing.T) {
 		if sync {
 			b = app.Events().GetSyncRawEventBuilder(
 				istructs.SyncRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						HandlingPartition: 25,
-						PLogOffset:        100500,
-						Workspace:         1,
-						WLogOffset:        1050,
-						QName:             istructs.QNameCommandCUD,
-						RegisteredAt:      123456789,
-					},
-					Device:   1,
-					SyncedAt: 123456789,
+					HandlingPartition: 25,
+					PLogOffset:        100500,
+					Workspace:         1,
+					WLogOffset:        1050,
+					QName:             istructs.QNameCommandCUD,
+					RegisteredAt:      123456789,
+					Device:            1,
+					SyncedAt:          123456789,
 				})
 		} else {
 			b = app.Events().GetNewRawEventBuilder(
 				istructs.NewRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						HandlingPartition: 25,
-						PLogOffset:        100500,
-						Workspace:         1,
-						WLogOffset:        1050,
-						QName:             istructs.QNameCommandCUD,
-						RegisteredAt:      123456789,
-					},
+					HandlingPartition: 25,
+					PLogOffset:        100500,
+					Workspace:         1,
+					WLogOffset:        1050,
+					QName:             istructs.QNameCommandCUD,
+					RegisteredAt:      123456789,
 				})
 		}
 		return b
@@ -588,7 +577,7 @@ func Test_ValidCommandEvent(t *testing.T) {
 	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 	cfg.Resources.Add(NewCommandFunction(cmdName, NullCommandExec))
 
-	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -598,28 +587,24 @@ func Test_ValidCommandEvent(t *testing.T) {
 		if sync {
 			b = app.Events().GetSyncRawEventBuilder(
 				istructs.SyncRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						HandlingPartition: 25,
-						PLogOffset:        100500,
-						Workspace:         1,
-						WLogOffset:        1050,
-						QName:             cmdName,
-						RegisteredAt:      123456789,
-					},
-					Device:   1,
-					SyncedAt: 123456789,
+					HandlingPartition: 25,
+					PLogOffset:        100500,
+					Workspace:         1,
+					WLogOffset:        1050,
+					QName:             cmdName,
+					RegisteredAt:      123456789,
+					Device:            1,
+					SyncedAt:          123456789,
 				})
 		} else {
 			b = app.Events().GetNewRawEventBuilder(
 				istructs.NewRawEventBuilderParams{
-					GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-						HandlingPartition: 25,
-						PLogOffset:        100500,
-						Workspace:         1,
-						WLogOffset:        1050,
-						QName:             cmdName,
-						RegisteredAt:      123456789,
-					},
+					HandlingPartition: 25,
+					PLogOffset:        100500,
+					Workspace:         1,
+					WLogOffset:        1050,
+					QName:             cmdName,
+					RegisteredAt:      123456789,
 				})
 		}
 		return b
@@ -711,7 +696,7 @@ func Test_IObjectBuilderBuild(t *testing.T) {
 	cfg := cfgs.AddBuiltInAppConfig(appName, adb)
 	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	provider := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 
 	app, err := provider.BuiltIn(appName)
 	require.NoError(err)
@@ -719,16 +704,14 @@ func Test_IObjectBuilderBuild(t *testing.T) {
 	eventBuilder := func() istructs.IRawEventBuilder {
 		return app.Events().GetSyncRawEventBuilder(
 			istructs.SyncRawEventBuilderParams{
-				GenericRawEventBuilderParams: istructs.GenericRawEventBuilderParams{
-					HandlingPartition: 25,
-					PLogOffset:        100500,
-					Workspace:         1,
-					WLogOffset:        1050,
-					QName:             docName,
-					RegisteredAt:      123456789,
-				},
-				Device:   1,
-				SyncedAt: 123456789,
+				HandlingPartition: 25,
+				PLogOffset:        100500,
+				Workspace:         1,
+				WLogOffset:        1050,
+				QName:             docName,
+				RegisteredAt:      123456789,
+				Device:            1,
+				SyncedAt:          123456789,
 			})
 	}
 
@@ -798,7 +781,7 @@ func Test_VerifiedFields(t *testing.T) {
 	email := "test@test.io"
 
 	tokens := testTokensFactory().New(test.appName)
-	asp := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	asp := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 	_, err := asp.BuiltIn(test.appName) // need to set cfg.app because IAppTokens are taken from cfg.app
 	require.NoError(err)
 
@@ -992,7 +975,7 @@ func Test_CharsFieldRestricts(t *testing.T) {
 	cfg := cfgs.AddBuiltInAppConfig(test.appName, adb)
 	cfg.SetNumAppWorkspaces(istructs.DefaultNumAppWorkspaces)
 
-	asp := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), isequencer.SequencesTrustLevel_0, nil)
+	asp := Provide(cfgs, testTokensFactory(), simpleStorageProvider(), istructs.SequencesTrustLevel_0, nil)
 	_, err := asp.BuiltIn(test.appName)
 	require.NoError(err)
 
