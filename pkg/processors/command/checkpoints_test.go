@@ -20,7 +20,9 @@ const (
 )
 
 // testCheckpointStorage is a thread-safe, last-write-wins implementation of
-// the recovery storage contract used by command recovery tests.
+// the recovery storage contract used by command recovery tests. Partition
+// values carry LastPLogOffset; workspace values carry
+// LastWLogOffsetWithNewRecordIDs.
 type testCheckpointStorage struct {
 	mu         sync.Mutex
 	partitions map[[2]uint64]checkpoints.PartitionCheckpoint

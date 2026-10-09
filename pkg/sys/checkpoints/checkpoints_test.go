@@ -15,10 +15,10 @@ import (
 	"github.com/voedger/voedger/pkg/istructsmem"
 )
 
-func TestPartitionRecoveryCheckpointProjectorWritesEachHundredthEvent(t *testing.T) {
+func TestRecoveryCheckpointProjectorWritesPLogOffsetEachHundredthEvent(t *testing.T) {
 	require := require.New(t)
 	storage := &testCheckpointStorage{}
-	projector := partitionRecoveryCheckpointProjector(storage)
+	projector := recoveryCheckpointProjector(storage)
 	state := &testState{appStructs: &testAppStructs{clusterAppID: 7}}
 	event := &testPLogEvent{
 		partition:  4,
@@ -33,7 +33,7 @@ func TestPartitionRecoveryCheckpointProjectorWritesEachHundredthEvent(t *testing
 	require.Equal([]string{"partition"}, storage.calls)
 	require.Equal(istructs.ClusterAppID(7), storage.appID)
 	require.Equal(istructs.PartitionID(4), storage.partitionID)
-	require.Equal(PartitionCheckpoint{LastHandledPLogOffset: 100}, storage.partition)
+	require.Equal(PartitionCheckpoint{LastPLogOffset: 100}, storage.partition)
 
 	event.pLogOffset = 101
 	require.NoError(projector(event, state, nil))
@@ -42,34 +42,51 @@ func TestPartitionRecoveryCheckpointProjectorWritesEachHundredthEvent(t *testing
 	event.pLogOffset = 200
 	require.NoError(projector(event, state, nil))
 	require.Equal([]string{"partition", "partition"}, storage.calls)
-	require.Equal(PartitionCheckpoint{LastHandledPLogOffset: 200}, storage.partition)
+	require.Equal(PartitionCheckpoint{LastPLogOffset: 200}, storage.partition)
 }
 
-func TestWorkspaceRecoveryCheckpointProjectorWritesEachEvent(t *testing.T) {
+func TestRecoveryCheckpointProjectorWritesOnlyIDBearingWLogOffsets(t *testing.T) {
 	require := require.New(t)
 	storage := &testCheckpointStorage{}
-	projector := workspaceRecoveryCheckpointProjector(storage)
+	projector := recoveryCheckpointProjector(storage)
 	state := &testState{appStructs: &testAppStructs{clusterAppID: 7}}
 	event := &testPLogEvent{
+		pLogOffset: 1,
 		wsid:       5,
 		wLogOffset: 20,
+		cuds: []testCUDRow{
+			{id: istructs.FirstSingletonID, isNew: true},
+			{id: istructs.FirstUserRecordID, isNew: false},
+		},
 	}
 
+	require.NoError(projector(event, state, nil))
+	require.Empty(storage.calls)
+
+	event.cuds = append(event.cuds, testCUDRow{id: istructs.FirstUserRecordID, isNew: true})
 	require.NoError(projector(event, state, nil))
 	require.Equal([]string{"workspace"}, storage.calls)
 	require.Equal(istructs.ClusterAppID(7), storage.appID)
 	require.Equal(istructs.WSID(5), storage.wsid)
-	require.Equal(WorkspaceCheckpoint{LastHandledWLogOffset: 20}, storage.workspace)
+	require.Equal(WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 20}, storage.workspace)
 
+	event.pLogOffset = 2
 	event.wsid = 6
-	event.wLogOffset = 1
+	event.wLogOffset = 21
+	event.cuds = nil
+	require.NoError(projector(event, state, nil))
+	require.Equal([]string{"workspace"}, storage.calls)
+
+	event.pLogOffset = 3
+	event.wLogOffset = 22
+	event.cuds = []testCUDRow{{id: istructs.FirstUserRecordID + 1, isNew: true}}
 	require.NoError(projector(event, state, nil))
 	require.Equal([]string{"workspace", "workspace"}, storage.calls)
 	require.Equal(istructs.WSID(6), storage.wsid)
-	require.Equal(WorkspaceCheckpoint{LastHandledWLogOffset: 1}, storage.workspace)
+	require.Equal(WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 22}, storage.workspace)
 }
 
-func TestRecoveryCheckpointProjectorsReturnStorageErrors(t *testing.T) {
+func TestRecoveryCheckpointProjectorReturnsStorageErrors(t *testing.T) {
 	require := require.New(t)
 	partitionErr := errors.New("injected partition checkpoint failure")
 	workspaceErr := errors.New("injected workspace checkpoint failure")
@@ -77,11 +94,15 @@ func TestRecoveryCheckpointProjectorsReturnStorageErrors(t *testing.T) {
 	state := &testState{appStructs: &testAppStructs{clusterAppID: 7}}
 	event := &testPLogEvent{pLogOffset: 100}
 
-	require.ErrorIs(partitionRecoveryCheckpointProjector(storage)(event, state, nil), partitionErr)
-	require.ErrorIs(workspaceRecoveryCheckpointProjector(storage)(event, state, nil), workspaceErr)
+	require.ErrorIs(recoveryCheckpointProjector(storage)(event, state, nil), partitionErr)
+
+	event.pLogOffset = 101
+	event.wLogOffset = 10
+	event.cuds = []testCUDRow{{id: istructs.FirstUserRecordID, isNew: true}}
+	require.ErrorIs(recoveryCheckpointProjector(storage)(event, state, nil), workspaceErr)
 }
 
-func TestProvideRegistersTwoStandardAsyncProjectors(t *testing.T) {
+func TestProvideRegistersOneStandardAsyncProjector(t *testing.T) {
 	require := require.New(t)
 	resources := istructsmem.NewStatelessResources()
 	storage := &testCheckpointStorage{}
@@ -93,10 +114,7 @@ func TestProvideRegistersTwoStandardAsyncProjectors(t *testing.T) {
 		found[projector.Name] = true
 		return true
 	})
-	require.Equal(map[appdef.QName]bool{
-		QNameProjectorPartitionRecoveryCheckpoint: true,
-		QNameProjectorWorkspaceRecoveryCheckpoint: true,
-	}, found)
+	require.Equal(map[appdef.QName]bool{QNameProjectorRecoveryCheckpoint: true}, found)
 }
 
 type testCheckpointStorage struct {
@@ -154,9 +172,26 @@ type testPLogEvent struct {
 	pLogOffset istructs.Offset
 	wsid       istructs.WSID
 	wLogOffset istructs.Offset
+	cuds       []testCUDRow
 }
 
 func (e *testPLogEvent) HandlingPartition() istructs.PartitionID { return e.partition }
 func (e *testPLogEvent) PLogOffset() istructs.Offset             { return e.pLogOffset }
 func (e *testPLogEvent) Workspace() istructs.WSID                { return e.wsid }
 func (e *testPLogEvent) WLogOffset() istructs.Offset             { return e.wLogOffset }
+func (e *testPLogEvent) CUDs(cb func(istructs.ICUDRow) bool) {
+	for i := range e.cuds {
+		if !cb(&e.cuds[i]) {
+			return
+		}
+	}
+}
+
+type testCUDRow struct {
+	istructs.ICUDRow
+	id    istructs.RecordID
+	isNew bool
+}
+
+func (r *testCUDRow) ID() istructs.RecordID { return r.id }
+func (r *testCUDRow) IsNew() bool           { return r.isNew }

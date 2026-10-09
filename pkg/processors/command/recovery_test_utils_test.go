@@ -20,7 +20,7 @@ import (
 //	ReadPLog/ReadWLog(offset, count) --> logRead{offset, count}
 //
 // Tests use the resulting sequence to prove that recovery starts at its
-// checkpoint, scans to the end, and rewinds in the expected windows.
+// checkpoint and performs one inclusive scan to the end.
 type logRead struct {
 	offset istructs.Offset
 	count  int
@@ -45,7 +45,7 @@ func newRecoveryTestReads[K comparable]() *recoveryTestReads[K] {
 }
 
 // record is the production hook at the write side of the observation flow:
-// Append order preserves the exact scan and rewind order for that key.
+// Append order preserves the exact log-read order for that key.
 func (r *recoveryTestReads[K]) record(key K, offset istructs.Offset, count int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()

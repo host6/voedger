@@ -25,7 +25,7 @@ func NewAppTTLStorage(sysVVMStorage ISysVvmStorage, clusterAppID istructs.Cluste
 }
 
 func NewRecoveryCheckpointStorage(sysVVMStorage ISysVvmStorage) checkpoints.IRecoveryCheckpointStorage {
-	return &implRecoveryCheckpointStorage{
+	return &implCheckpointStorage{
 		sysVVMStorage: sysVVMStorage,
 	}
 }

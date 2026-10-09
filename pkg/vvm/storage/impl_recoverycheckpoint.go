@@ -8,63 +8,42 @@ package storage
 import (
 	"encoding/binary"
 	"encoding/json"
-	"errors"
 	"fmt"
 
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/sys/checkpoints"
 )
 
-const (
-	partitionRecoveryCheckpointPKeySize  = 4 + 4
-	partitionRecoveryCheckpointCColsSize = 2
-	workspaceRecoveryCheckpointPKeySize  = 4 + 4
-	workspaceRecoveryCheckpointCColsSize = 8
-)
-
-const (
-	jsonFieldLastHandledPLogOffset = "lastHandledPLogOffset"
-	jsonFieldLastHandledWLogOffset = "lastHandledWLogOffset"
-)
-
-type implRecoveryCheckpointStorage struct {
+type implCheckpointStorage struct {
 	sysVVMStorage ISysVvmStorage
 }
 
-func (s *implRecoveryCheckpointStorage) GetPartitionCheckpoint(appID istructs.ClusterAppID,
-	partitionID istructs.PartitionID) (checkpoints.PartitionCheckpoint, bool, error) {
-	data, ok, err := s.get(partitionRecoveryCheckpointPKey(appID), partitionRecoveryCheckpointCCols(partitionID))
+func (s *implCheckpointStorage) GetPartitionCheckpoint(appID istructs.ClusterAppID, partitionID istructs.PartitionID) (checkpoints.PartitionCheckpoint, bool, error) {
+	data, ok, err := s.get(partitionCheckpointPKey(appID, partitionID), checkpointCCols)
 	if err != nil {
-		return checkpoints.PartitionCheckpoint{}, false,
-			fmt.Errorf("get partition recovery checkpoint: %w", err)
+		return checkpoints.PartitionCheckpoint{}, false, fmt.Errorf("get partition recovery checkpoint: %w", err)
 	}
 	if !ok {
 		return checkpoints.PartitionCheckpoint{}, false, nil
 	}
 	checkpoint, _, err := decodePartitionCheckpoint(data)
 	if err != nil {
-		return checkpoints.PartitionCheckpoint{}, false,
-			fmt.Errorf("decode partition recovery checkpoint: %w", err)
+		return checkpoints.PartitionCheckpoint{}, false, fmt.Errorf("decode partition recovery checkpoint: %w", err)
 	}
 	return checkpoint, true, nil
 }
 
-func (s *implRecoveryCheckpointStorage) PutPartitionCheckpoint(appID istructs.ClusterAppID,
-	partitionID istructs.PartitionID, checkpoint checkpoints.PartitionCheckpoint) error {
-	pKey := partitionRecoveryCheckpointPKey(appID)
-	data, err := encodePartitionCheckpoint(checkpoint)
-	if err != nil {
-		return fmt.Errorf("encode partition recovery checkpoint: %w", err)
-	}
-	if err := s.sysVVMStorage.Put(pKey, partitionRecoveryCheckpointCCols(partitionID), data); err != nil {
+func (s *implCheckpointStorage) PutPartitionCheckpoint(appID istructs.ClusterAppID, partitionID istructs.PartitionID, checkpoint checkpoints.PartitionCheckpoint) error {
+	pKey := partitionCheckpointPKey(appID, partitionID)
+	value := fmt.Sprintf(`{"%s":%d}`, jsonFieldLastPLogOffset, checkpoint.LastPLogOffset)
+	if err := s.sysVVMStorage.Put(pKey, checkpointCCols, []byte(value)); err != nil {
 		return fmt.Errorf("put partition recovery checkpoint: %w", err)
 	}
 	return nil
 }
 
-func (s *implRecoveryCheckpointStorage) GetWorkspaceCheckpoint(appID istructs.ClusterAppID,
-	wsid istructs.WSID) (checkpoints.WorkspaceCheckpoint, bool, error) {
-	data, ok, err := s.get(workspaceRecoveryCheckpointPKey(appID), workspaceRecoveryCheckpointCCols(wsid))
+func (s *implCheckpointStorage) GetWorkspaceCheckpoint(appID istructs.ClusterAppID, wsid istructs.WSID) (checkpoints.WorkspaceCheckpoint, bool, error) {
+	data, ok, err := s.get(workspaceCheckpointPKey(appID, wsid), checkpointCCols)
 	if err != nil {
 		return checkpoints.WorkspaceCheckpoint{}, false,
 			fmt.Errorf("get workspace recovery checkpoint: %w", err)
@@ -80,82 +59,57 @@ func (s *implRecoveryCheckpointStorage) GetWorkspaceCheckpoint(appID istructs.Cl
 	return checkpoint, true, nil
 }
 
-func (s *implRecoveryCheckpointStorage) PutWorkspaceCheckpoint(appID istructs.ClusterAppID,
+func (s *implCheckpointStorage) PutWorkspaceCheckpoint(appID istructs.ClusterAppID,
 	wsid istructs.WSID, checkpoint checkpoints.WorkspaceCheckpoint) error {
-	pKey := workspaceRecoveryCheckpointPKey(appID)
-	data, err := encodeWorkspaceCheckpoint(checkpoint)
-	if err != nil {
-		return fmt.Errorf("encode workspace recovery checkpoint: %w", err)
-	}
-	if err := s.sysVVMStorage.Put(pKey, workspaceRecoveryCheckpointCCols(wsid), data); err != nil {
+	pKey := workspaceCheckpointPKey(appID, wsid)
+	value := fmt.Sprintf(`{"%s":%d}`, jsonFieldLastWLogOffsetWithNewRecordIDs, checkpoint.LastWLogOffsetWithNewRecordIDs)
+	if err := s.sysVVMStorage.Put(pKey, checkpointCCols, []byte(value)); err != nil {
 		return fmt.Errorf("put workspace recovery checkpoint: %w", err)
 	}
 	return nil
 }
 
-func (s *implRecoveryCheckpointStorage) get(pKey, cCols []byte) ([]byte, bool, error) {
+func (s *implCheckpointStorage) get(pKey, cCols []byte) ([]byte, bool, error) {
 	var data []byte
 	ok, err := s.sysVVMStorage.Get(pKey, cCols, &data)
 	return data, ok, err
 }
 
-func partitionRecoveryCheckpointPKey(appID istructs.ClusterAppID) []byte {
-	pKey := make([]byte, 0, partitionRecoveryCheckpointPKeySize)
+func partitionCheckpointPKey(appID istructs.ClusterAppID, partitionID istructs.PartitionID) []byte {
+	pKey := make([]byte, 0, partitionCheckpointPKeySize)
 	pKey = binary.BigEndian.AppendUint32(pKey, pKeyPrefix_SeqStorage_Part)
-	return binary.BigEndian.AppendUint32(pKey, appID)
+	pKey = binary.BigEndian.AppendUint32(pKey, appID)
+	return binary.BigEndian.AppendUint16(pKey, uint16(partitionID))
 }
 
-func partitionRecoveryCheckpointCCols(partitionID istructs.PartitionID) []byte {
-	cCols := make([]byte, 0, partitionRecoveryCheckpointCColsSize)
-	return binary.BigEndian.AppendUint16(cCols, uint16(partitionID))
-}
-
-func workspaceRecoveryCheckpointPKey(appID istructs.ClusterAppID) []byte {
-	pKey := make([]byte, 0, workspaceRecoveryCheckpointPKeySize)
+func workspaceCheckpointPKey(appID istructs.ClusterAppID, wsid istructs.WSID) []byte {
+	pKey := make([]byte, 0, workspaceCheckpointPKeySize)
 	pKey = binary.BigEndian.AppendUint32(pKey, pKeyPrefix_SeqStorage_WS)
-	return binary.BigEndian.AppendUint32(pKey, appID)
+	pKey = binary.BigEndian.AppendUint32(pKey, appID)
+	return binary.BigEndian.AppendUint64(pKey, uint64(wsid))
 }
 
-func workspaceRecoveryCheckpointCCols(wsid istructs.WSID) []byte {
-	cCols := make([]byte, 0, workspaceRecoveryCheckpointCColsSize)
-	return binary.BigEndian.AppendUint64(cCols, uint64(wsid))
-}
-
-func decodePartitionCheckpoint(data []byte) (checkpoints.PartitionCheckpoint, map[string]json.RawMessage, error) {
-	fields, err := decodeCheckpointObject(data)
+func decodePartitionCheckpoint(data []byte) (partCheckpoint checkpoints.PartitionCheckpoint, fields map[string]json.RawMessage, err error) {
+	err = json.Unmarshal(data, &fields)
 	if err != nil {
 		return checkpoints.PartitionCheckpoint{}, nil, err
 	}
-	lastHandledPLogOffset, err := decodeRequiredJSONField[istructs.Offset](fields, jsonFieldLastHandledPLogOffset)
+	lastPLogOffset, err := decodeRequiredJSONField[istructs.Offset](fields, jsonFieldLastPLogOffset)
 	if err != nil {
 		return checkpoints.PartitionCheckpoint{}, nil, err
 	}
-	return checkpoints.PartitionCheckpoint{LastHandledPLogOffset: lastHandledPLogOffset}, fields, nil
+	return checkpoints.PartitionCheckpoint{LastPLogOffset: lastPLogOffset}, fields, nil
 }
 
-func decodeWorkspaceCheckpoint(data []byte) (checkpoints.WorkspaceCheckpoint, map[string]json.RawMessage, error) {
-	fields, err := decodeCheckpointObject(data)
+func decodeWorkspaceCheckpoint(data []byte) (wsCheckpoint checkpoints.WorkspaceCheckpoint, fields map[string]json.RawMessage, err error) {
+	if err = json.Unmarshal(data, &fields); err != nil {
+		return checkpoints.WorkspaceCheckpoint{}, nil, err
+	}
+	lastWLogOffsetWithNewRecordIDs, err := decodeRequiredJSONField[istructs.Offset](fields, jsonFieldLastWLogOffsetWithNewRecordIDs)
 	if err != nil {
 		return checkpoints.WorkspaceCheckpoint{}, nil, err
 	}
-	lastHandledWLogOffset, err := decodeRequiredJSONField[istructs.Offset](fields, jsonFieldLastHandledWLogOffset)
-	if err != nil {
-		return checkpoints.WorkspaceCheckpoint{}, nil, err
-	}
-	return checkpoints.WorkspaceCheckpoint{
-		LastHandledWLogOffset: lastHandledWLogOffset,
-	}, fields, nil
-}
-
-func decodeCheckpointObject(data []byte) (map[string]json.RawMessage, error) {
-	fields := map[string]json.RawMessage{}
-	if err := json.Unmarshal(data, &fields); err != nil {
-		return nil, err
-	}
-	if fields == nil {
-		return nil, errors.New("recovery checkpoint must be a JSON object")
-	}
-	return fields, nil
+	return checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: lastWLogOffsetWithNewRecordIDs}, fields, nil
 }
 
 func decodeRequiredJSONField[T ~uint64](fields map[string]json.RawMessage, name string) (T, error) {
@@ -170,10 +124,3 @@ func decodeRequiredJSONField[T ~uint64](fields map[string]json.RawMessage, name 
 	return value, nil
 }
 
-func encodePartitionCheckpoint(checkpoint checkpoints.PartitionCheckpoint) ([]byte, error) {
-	return json.Marshal(checkpoint)
-}
-
-func encodeWorkspaceCheckpoint(checkpoint checkpoints.WorkspaceCheckpoint) ([]byte, error) {
-	return json.Marshal(checkpoint)
-}

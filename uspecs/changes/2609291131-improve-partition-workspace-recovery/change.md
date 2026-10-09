@@ -14,51 +14,71 @@ Refs:
 
 ## Why
 
-Partition and workspace sequence state must survive a VVM restart without rebuilding every counter from the complete PLog. Durable handled-offset checkpoints let recovery scan only the log suffix that can contain newer events, while bounded on-demand workspace recovery prevents one partition from creating an unlimited number of recovery goroutines.
+Partition and workspace sequence state must survive a VVM restart without rebuilding every counter from the complete PLog. Durable log checkpoints let recovery scan only the suffix that can contain newer events, while bounded on-demand workspace recovery prevents one partition from creating an unlimited number of recovery goroutines.
 
 ## What
 
 In the production application-processing context:
 
-- Store only the last handled log offset in each recovery checkpoint. Do not persist record IDs.
+- Store only the last handled PLog offset in the partition checkpoint.
+- Store only the offset of the latest WLog event that allocated non-singleton record IDs in the workspace checkpoint. Do not persist the last WLog offset or record IDs themselves.
 - Recover a partition by reading the PLog from its saved handled offset through the end, using the final event to set the next PLog offset, and reapplying that final event.
 - After partition recovery, let the requesting command continue to the workspace stage, which starts workspace recovery on demand.
-- Recover a workspace by reading its WLog from its saved handled offset through the end. Use the final event to set the next WLog offset, and rewind in 10-event windows when needed to find the latest non-singleton record ID.
+- Recover a workspace by reading its WLog from the saved ID-bearing event offset through the end. Use the actual final event to set the next WLog offset and the latest non-singleton record ID encountered in that suffix to restore allocation.
+- If a PLog is empty, start its next offset at `FirstOffset`. If a WLog is empty, start its next offset at `FirstOffset` and its next record ID at `FirstUserRecordID`.
 - Return `503 Service Unavailable` while recovery of the requested partition or workspace is already running or if the partition already has `NumWSRecoverers` workspace recoveries running. Log a corresponding message for each case.
 - Emit partition recovery lifecycle logs with `vapp=sys/voedger`, `extension=sys._Recovery`, and `partid`; emit workspace recovery lifecycle logs with those attributes plus `wsid`.
 - Keep the default workspace-recovery limit at four per partition.
-
-## Constraints
-
-- Do not modify any documentation changed by [PR #4651](https://github.com/voedger/voedger/pull/4651) in this pull request. Update that documentation in a separate follow-up pull request after all related pull requests are approved.
-- Design and implement against the expected result of [PR #4649](https://github.com/voedger/voedger/pull/4649): the currently unused `isequencer` implementation is removed, while the sequence trust-level constants retained in `pkg/isequencer/consts.go` remain available.
 
 ## How
 
 Decisions:
 
 - Retain one service-scoped recovery lifecycle per application partition and add a per-partition, on-demand workspace recovery lifecycle.
-- Store checkpoint values as JSON objects with exactly one field: `lastHandledWLogOffset` and `lastHandledPLogOffset` for workspace and PLog storage respectively.
-- Store the partition checkpoint in `SeqStorage_Part_PLog_offset`, keyed by application, using the partition ID as the clustering column. The value is `{"lastHandledPLogOffset": <offset>}`.
-- Store all workspace checkpoints for an application in `SeqStorage_WS_sequences`, with the WSID encoded in the clustering columns and `{"lastHandledWLogOffset": <offset>}` as the value.
+- Store the partition checkpoint as `{"lastPLogOffset": <offset>}` and store no other PLog checkpoint state.
+- Store the workspace checkpoint as `{"lastWLogOffsetWithNewRecordIDs": <offset>}`. The offset identifies the latest checkpointed event that allocated non-singleton record IDs; it is zero when no such event is known.
+- Do not use partition IDs or WSIDs as clustering columns. Append the partition ID or WSID, respectively, to the existing checkpoint partition key and use the fixed singleton clustering column `[]byte{1}` for every checkpoint record. Ok to make many small partitions.
 - Do not store a record-ID high-water mark and do not extend `IIDGenerator` with a persisted-state accessor.
-- Use two built-in asynchronous recovery-checkpoint projectors. Save the current event's handled WLog offset for every event, and save its handled PLog offset for every 100th PLog event.
+- Use one built-in asynchronous projector, `ProjectorRecoveryCheckpoint`, for both checkpoint types. Write the current WLog offset only when the event allocates non-singleton record IDs. When `PLogOffset % 100 == 0`, save the current PLog offset.
 - On the first request to an unrecovered partition, start only partition recovery and return the existing partition-recovering `503` response.
-- Start partition recovery at the persisted `lastHandledPLogOffset`, or `FirstOffset` when the value is absent or zero. Perform one inclusive `ReadPLog(startOffset, ReadToTheEnd)` and retain only the final event returned by the scan.
-- Set `nextPLogOffset = lastPLogEventOffset + 1` from that final event without comparing it with any earlier or persisted value. Reapply the final event and publish the recovered partition. Do not start workspace recovery from the partition-recovery goroutine.
+- Start partition recovery at the persisted `lastPLogOffset`, or `FirstOffset` when the value is absent or zero. Perform one inclusive `ReadPLog(startOffset, ReadToTheEnd)` and retain only the final event returned by the scan.
+- If the PLog scan is empty, set `nextPLogOffset = FirstOffset` and publish the recovered partition without reapplying an event. Otherwise, set `nextPLogOffset = lastPLogEventOffset + 1`, reapply that final event, and publish the recovered partition. Do not start workspace recovery from the partition-recovery goroutine.
 - Start workspace recovery from the workspace command-processing stage when a subsequent request reaches the recovered partition.
 - Admit a workspace recovery only after reserving one of the partition's `NumWSRecoverers` slots. If no slot is available, return `503`, log that the workspace recovery limit was reached, and create neither recovery state nor a waiting goroutine. A later request may try again.
 - Deduplicate by WSID. A request for a workspace whose goroutine is still running returns `503`; a completed workspace is admitted immediately. Preserve the existing retained-error/report-and-retry lifecycle for failed recovery attempts.
-- Start workspace recovery at the workspace's persisted `lastHandledWLogOffset`, or `FirstOffset` when the value is absent or zero. Perform one inclusive `ReadWLog(startOffset, ReadToTheEnd)` and retain the final event offset.
-- Set `nextWLogOffset = lastWLogEventOffset + 1` from the final WLog event without comparing it with any earlier or persisted value.
+- Start workspace recovery at the workspace's persisted `lastWLogOffsetWithNewRecordIDs`, or `FirstOffset` when the value is absent or zero. Perform one inclusive `ReadWLog(startOffset, ReadToTheEnd)` and retain the final event offset.
+- If the WLog scan is empty, set `nextWLogOffset = FirstOffset` and `nextRecordID = FirstUserRecordID`. Otherwise, set `nextWLogOffset = lastWLogEventOffset + 1` from the actual final event without comparing it with the checkpoint.
 - Determine `nextRecordID` only from newly allocated non-singleton CUD record IDs. Singleton IDs have a different scope and must not advance the workspace record-ID generator.
-- While scanning from `lastHandledWLogOffset` to the WLog end, retain the maximum non-singleton record ID from the latest event that contains one. If none is found, scan backward from `lastHandledWLogOffset` in non-overlapping 10-event windows until such an event is found or `FirstOffset` is reached.
-- If no newly allocated non-singleton CUD exists between `FirstOffset` and the WLog end, use `FirstUserRecordID` as `nextRecordID`. Otherwise, use the found event's maximum non-singleton record ID plus one. Backward scans do not change `nextWLogOffset`.
+- While scanning from `lastWLogOffsetWithNewRecordIDs` to the WLog end, retain the maximum non-singleton record ID from the latest event that contains one. The stored offset is only the inclusive scan start, never proof that its event is still the latest ID-bearing event or the WLog tail.
+- If the complete scanned suffix provides no newly allocated non-singleton record ID, use `FirstUserRecordID` as `nextRecordID`. Otherwise, use the latest found event's maximum non-singleton record ID plus one.
 - Log recovery admission and failure responses through `cp.error` with `partition <partitionID>:` or `workspace <wsid>:` prefixes.
 - Log partition recovery start, PLog-read failure, and completion with `vapp=sys/voedger`, `extension=sys._Recovery`, and `partid=<partitionID>`.
 - Log workspace recovery start, initial WLog suffix-read failure, and completion with the partition recovery attributes plus `wsid=<workspaceID>`.
 - Treat `NumWSRecoverers` as the exact upper bound. The default VVM configuration sets it to four; an explicit zero permits no workspace recovery and therefore yields `503` for an unrecovered workspace.
 - Keep partition and workspace recovery tied to the service context, ignore stale attempt completion after partition replacement, and join recovery goroutines during command-service shutdown.
+
+Do not store the last WLog offset alongside the ID-bearing offset. The ID-bearing checkpoint can lag: another ID-bearing event and arbitrary later events may already exist when the VVM stops. Treating the checkpoint as authoritative would restore stale sequence state. Reading from that checkpoint through the WLog end always discovers the actual tail and any later allocation, so storing the tail separately would duplicate data that recovery must verify anyway.
+
+```text
+              contains new IDs            contains new IDs
+                 1001..1003                  1004..1006
+                      |        no new IDs         |                          no new IDs
+                      v             v             v                               v
+WLog: ... ---------- 41 ---------- 42 ---------- 43 ---------------------------- 44 ---------- END
+                      ^                           ^                               ^
+                      |                           |                               |
+             stored checkpoint = 41        actual lastRecordID=1006        actual last WLog offset = 44
+             scan starts here; it is       computed nextRecordID=1007      nextWLogOffset = 45
+             not the point of truth                                               |
+                      |                                                           |
+                      |<--------------- ReadWLog(41, ReadToTheEnd) -------------->|
+
+Latest ID-bearing event found by the scan = 43
+nextRecordID = max(1004..1006) + 1 = 1007
+
+Empty PLog: START -> END    nextPLogOffset = FirstOffset
+Empty WLog: START -> END    nextWLogOffset = FirstOffset, nextRecordID = FirstUserRecordID
+```
 
 Out of scope:
 
@@ -91,17 +111,19 @@ References (external):
 ### Tests
 
 - [x] create: [checkpoints/checkpoints_test.go](../../../pkg/sys/checkpoints/checkpoints_test.go)
-  - verify that the partition projector stores the handled PLog offset for every 100th event
-  - verify that the workspace projector stores the handled WLog offset for every event
-  - verify storage-error propagation and registration of both standard asynchronous projectors
+  - verify that one projector stores `lastPLogOffset` when `PLogOffset % 100 == 0`
+  - verify that an event allocating non-singleton record IDs stores `lastWLogOffsetWithNewRecordIDs`, while singleton, existing-record, and CUD-free events do not write a workspace checkpoint
+  - verify storage-error propagation and registration of the single standard asynchronous projector
 
 - [x] update: [command/impl_test.go](../../../pkg/processors/command/impl_test.go)
-  - verify one inclusive PLog read from the saved handled offset to the end
+  - verify one inclusive PLog read from the saved `lastPLogOffset` to the end
   - verify that partition recovery does not start workspace recovery and that a subsequent request starts it from the command stage
-  - verify one inclusive WLog read from the workspace's saved handled offset to the end
+  - verify one inclusive WLog read from the workspace's saved `lastWLogOffsetWithNewRecordIDs` to the end
   - verify that the final WLog event determines the next WLog offset
-  - verify that singleton-only and CUD-free tails rewind in 10-event windows to find the latest non-singleton record ID
+  - verify that a later ID-bearing event in the scanned suffix, rather than the stored checkpoint event, determines the next record ID
+  - verify that singleton-only and CUD-free events after the checkpoint still contribute to the actual WLog tail
   - verify that a history without non-singleton CUDs starts allocation at `FirstUserRecordID`
+  - verify that empty PLog and WLog scans start offsets at `FirstOffset` and an empty WLog starts record allocation at `FirstUserRecordID`
   - verify one recovery attempt per WSID, `503` while it is running, and retained failure/retry behavior
   - verify that the concurrency limit admits at most `NumWSRecoverers`, returns `503` without queueing excess work, logs the limit condition, and permits a later retry after a slot is released
   - verify distinct log messages for partition-in-progress and workspace-in-progress responses
@@ -113,20 +135,20 @@ References (external):
   - relocate stale-completion coverage from the partition-manager integration-style test
 
 - [x] create: [command/checkpoints_test.go](../../../pkg/processors/command/checkpoints_test.go)
-  - provide a thread-safe last-write-wins checkpoint test double using handled-offset values only
+  - provide a thread-safe last-write-wins checkpoint test double using `lastPLogOffset` and `lastWLogOffsetWithNewRecordIDs`
   - implement partition and workspace checkpoint reads, writes, forced setup, reset, and write-order observation for command recovery tests
 
 - [x] create: [command/recovery_test_utils_test.go](../../../pkg/processors/command/recovery_test_utils_test.go)
   - centralize deterministic test support for asynchronous partition and workspace recovery
-  - provide recovery-attempt gates, injected failures, completion waits, and PLog/WLog read observations
+  - provide recovery-attempt gates, injected failures, completion waits, and inclusive suffix PLog/WLog read observations
   - provide a retrying request sender for command tests whose subject is unrelated to lazy recovery
 
 - [x] delete: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
   - replace the partition-only recovery test controls with the generic test-only utilities in `recovery_test_utils_test.go`
 
 - [x] create: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
-  - verify exact single-field JSON values, missing and malformed values, and last-write-wins replacement
-  - verify application/partition isolation and WSID clustering-column isolation
+  - verify single-field PLog and WLog JSON values named `lastPLogOffset` and `lastWLogOffsetWithNewRecordIDs`, including missing and malformed values and last-write-wins replacement
+  - verify application/partition/workspace isolation through partition-key suffixes and the fixed singleton clustering column `[]byte{1}`
 
 - [x] update: [storage/consts_test.go](../../../pkg/vvm/storage/consts_test.go)
   - preserve fixed sequence-storage prefix values
@@ -135,8 +157,10 @@ References (external):
   - extend PLog event mocks with handling-partition and PLog-offset accessors used by the checkpoint projector
 
 - [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
-  - verify handled-offset checkpoint values across sequential VVM instances sharing storage
-  - verify WLog offset and record-ID continuity when record IDs are reconstructed from WLog CUDs
+  - verify `lastWLogOffsetWithNewRecordIDs` across sequential VVM instances sharing storage
+  - verify through the next successful CUD response that restart preserves each workspace's next WLog offset and record ID
+  - verify through the next successful CUD response that a singleton tail advances the WLog offset but not the record ID
+  - verify through the next successful CUD response that a tail event for another workspace in the same partition does not advance the first workspace's WLog offset or record ID
 
 - [x] update: [vit/utils.go](../../../pkg/vit/utils.go)
   - retain the shared-storage two-VVM lifecycle helper used by the recovery integration test
@@ -149,20 +173,20 @@ References (external):
   - keep `IIDGenerator` free of checkpoint-specific record-ID accessors
 
 - [x] update: [storage/consts.go](../../../pkg/vvm/storage/consts.go)
-  - retain the sequence-storage prefix values and identify their partition-offset and WSID clustering-column roles
+  - retain the sequence-storage prefix values and document partition ID and WSID as partition-key suffixes rather than clustering columns
 
 - [x] create: [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
-  - store partition JSON under an application key with partition ID in the clustering columns
-  - store workspace JSON under an application key with WSID in the clustering columns
-  - encode only `lastHandledPLogOffset` or `lastHandledWLogOffset`, report missing values as absent, reject malformed values, and overwrite unconditionally
+  - append partition ID or WSID to the corresponding application partition key and use `[]byte{1}` as the clustering column
+  - encode only `lastPLogOffset` for PLog checkpoints and only `lastWLogOffsetWithNewRecordIDs` for WLog checkpoints
+  - report missing values as absent, reject malformed values, and overwrite unconditionally
 
 - [x] update: [storage/provide.go](../../../pkg/vvm/storage/provide.go)
   - construct the recovery-checkpoint adapter over shared system-VVM storage
 
-- [x] create: [checkpoints/checkpoints.go](../../../pkg/sys/checkpoints/checkpoints.go)
-  - define single-field partition and workspace handled-offset checkpoint contracts
-  - register separate built-in asynchronous partition and workspace checkpoint projectors
-  - persist a workspace checkpoint for every event and a partition checkpoint for every 100th PLog event
+- [ ] create: [checkpoints/checkpoints.go](../../../pkg/sys/checkpoints/checkpoints.go)
+  - define a PLog checkpoint containing only `lastPLogOffset` and a WLog checkpoint containing only `lastWLogOffsetWithNewRecordIDs`
+  - register one built-in asynchronous recovery-checkpoint projector
+  - persist the WLog offset only for non-singleton allocations and persist the PLog offset when `PLogOffset % 100 == 0`
 
 - [x] update: [parser/impl_analyse.go](../../../pkg/parser/impl_analyse.go)
   - resolve the built-in generic Command trigger used by the recovery-checkpoint projector
@@ -170,14 +194,14 @@ References (external):
 - [x] update: [parser/impl_build.go](../../../pkg/parser/impl_build.go)
   - map the generic Command trigger to command events
 
-- [x] update: [sys/sys.vsql](../../../pkg/sys/sys.vsql)
-  - declare both built-in recovery-checkpoint projectors for command, CUD, and ODoc events
+- [ ] update: [sys/sys.vsql](../../../pkg/sys/sys.vsql)
+  - replace both built-in recovery-checkpoint declarations with one projector for command, CUD, and ODoc events
 
-- [x] update: [pkg/sys/sys.vsql](../../../pkg/sys/it/testdata/apps/test2.app1/image/pkg/sys/sys.vsql)
-  - mirror both built-in recovery-checkpoint projector declarations in the generated integration-test schema
+- [ ] update: [pkg/sys/sys.vsql](../../../pkg/sys/it/testdata/apps/test2.app1/image/pkg/sys/sys.vsql)
+  - mirror the single built-in recovery-checkpoint projector declaration in the generated integration-test schema
 
-- [x] update: [sys/sysprovide/provide.go](../../../pkg/sys/sysprovide/provide.go)
-  - register both checkpoint projectors with stateless resources
+- [ ] update: [sys/sysprovide/provide.go](../../../pkg/sys/sysprovide/provide.go)
+  - register the single checkpoint projector with stateless resources
 
 ### Command recovery
 
@@ -194,11 +218,12 @@ References (external):
   - define partition and workspace keys and manager wrappers over the shared generic recovery manager
   - retain application identity and structures in recovered partitions for asynchronous WLog recovery
 
-- [x] update: [command/impl.go](../../../pkg/processors/command/impl.go)
+- [ ] update: [command/impl.go](../../../pkg/processors/command/impl.go)
   - recover the partition with one inclusive PLog suffix scan and use only its final event
   - publish the recovered partition without starting workspace recovery from the partition-recovery goroutine
   - start workspace recovery on demand from the command pipeline's workspace stage
-  - recover the WLog end offset with one inclusive suffix scan and rewind in 10-event windows when no non-singleton CUD ID is found
+  - recover the WLog end offset and latest non-singleton record ID with one inclusive scan from `lastWLogOffsetWithNewRecordIDs` through the actual tail
+  - initialize empty PLog and WLog offsets with `FirstOffset` and an empty WLog record-ID generator with `FirstUserRecordID`
   - ignore singleton IDs and retain `FirstUserRecordID` when the complete WLog contains no newly allocated non-singleton CUD
   - let the generic manager deduplicate attempts, enforce admission, run workers and hooks, retain failures, reject stale completions, publish results, and account for worker shutdown
   - expose the lifecycle through one generic `getOrStart` operation returning only the recovered value or an error, without a separate state enum or decision object

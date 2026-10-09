@@ -357,41 +357,13 @@ func TestRecoveryOnSyncProjectorError(t *testing.T) {
 }
 
 func TestPartitionRecovery(t *testing.T) {
-	t.Run("restores offsets and IDs across restarts", func(t *testing.T) {
+	t.Run("logs recovery lifecycle", func(t *testing.T) {
 		require := require.New(t)
-
 		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
-
-		cudQName := appdef.NewQName(appdef.SysPackage, "CUD")
-		app := setUp(t, func(wsb appdef.IWorkspaceBuilder, cfg *istructsmem.AppConfigType) {
-			wsb.AddCRecord(testCRecord)
-			wsb.AddCDoc(testCDoc).AddContainer("TestCRecord", testCRecord, 0, 1)
-			wsb.AddWDoc(testWDoc)
-			wsb.AddCommand(cudQName)
-			wsb.AddRole(iauthnz.QNameRoleAuthenticatedUser)
-			wsb.AddRole(iauthnz.QNameRoleEveryone)
-			wsb.AddRole(iauthnz.QNameRoleSystem)
-			cfg.Resources.Add(istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec))
-		})
+		app := setUpRecoveryTestApp(t)
 		defer tearDown(app)
 
-		cmdCUD := istructsmem.NewCommandFunction(cudQName, istructsmem.NullCommandExec)
-		app.cfg.Resources.Add(cmdCUD)
-
-		respData := sendCUD(t, 1, app)
-		require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
-		require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
-		logCap.Reset()
-		restartCmdProc(&app)
 		require.NoError(triggerAndWaitForRecovery(t, app, 1))
-		respData = sendCUD(t, 1, app)
-		require.Equal(3, int(respData["CurrentWLogOffset"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+3, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+4, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+5, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
 
 		logCap.HasLine(
 			"stage=cp.partition_recovery.start",
@@ -404,25 +376,6 @@ func TestPartitionRecovery(t *testing.T) {
 			"extension=sys._Recovery",
 			"partid=1",
 		)
-
-		restartCmdProc(&app)
-		require.NoError(triggerAndWaitForRecovery(t, app, 2))
-		respData = sendCUD(t, 2, app)
-		require.Equal(2, int(respData["CurrentWLogOffset"].(float64)))
-		require.Equal(istructs.FirstUserRecordID, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+1, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+2, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
-		restartCmdProc(&app)
-		require.NoError(triggerAndWaitForRecovery(t, app, 1))
-		respData = sendCUD(t, 1, app)
-		require.Equal(4, int(respData["CurrentWLogOffset"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+6, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["1"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+7, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["2"].(float64)))
-		require.Equal(istructs.FirstUserRecordID+8, istructs.RecordID(respData["NewIDs"].(map[string]interface{})["3"].(float64)))
-
-		app.cancel()
-		<-app.done
 	})
 
 	t.Run("partition recovery limit returns service unavailable", func(t *testing.T) {
@@ -633,6 +586,7 @@ func TestRecordIDsRecovery(t *testing.T) {
 				key := recoveryKeyForWSID(1)
 				if checkpointState == "zero" {
 					storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, checkpoints.PartitionCheckpoint{})
+					storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{})
 				}
 				app.recovery.pLogReads.reset(key)
 
@@ -648,25 +602,26 @@ func TestRecordIDsRecovery(t *testing.T) {
 		}
 	})
 
-	t.Run("saved offsets are read inclusively to the end", func(t *testing.T) {
+	t.Run("checkpoint offsets are inclusive scan starts, not points of truth", func(t *testing.T) {
 		require := require.New(t)
 		storage := newTestCheckpointStorage()
 		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
 		defer tearDown(app)
 
-		var previous map[string]interface{}
+		responses := make([]map[string]interface{}, 0, 3)
 		for range 3 {
-			previous = sendCUD(t, 1, app)
+			responses = append(responses, sendCUD(t, 1, app))
 		}
+		previous := responses[len(responses)-1]
 		key := recoveryKeyForWSID(1)
 		workspaceKey := recoveryWorkspaceKey(1)
 		lastPLogOffset := nextPLogOffsetForTest(t, app.appStructs, key.partitionID) - 1
 		savedPLogOffset := lastPLogOffset - 1
-		savedWLogOffset := istructs.Offset(previous["CurrentWLogOffset"].(float64)) - 1
+		savedWLogOffset := istructs.Offset(responses[0]["CurrentWLogOffset"].(float64))
 		storage.forceWorkspace(app.appStructs.ClusterAppID(), 1,
-			checkpoints.WorkspaceCheckpoint{LastHandledWLogOffset: savedWLogOffset})
+			checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: savedWLogOffset})
 		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID,
-			checkpoints.PartitionCheckpoint{LastHandledPLogOffset: savedPLogOffset})
+			checkpoints.PartitionCheckpoint{LastPLogOffset: savedPLogOffset})
 		restartCmdProc(&app)
 		app.recovery.pLogReads.reset(key)
 		app.recovery.wLogReads.reset(workspaceKey)
@@ -696,11 +651,11 @@ func TestRecordIDsRecovery(t *testing.T) {
 		workspaceKey := recoveryWorkspaceKey(1)
 		savedWLogOffset := istructs.Offset(previous["CurrentWLogOffset"].(float64))
 		storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{
-			LastHandledWLogOffset: savedWLogOffset,
+			LastWLogOffsetWithNewRecordIDs: savedWLogOffset,
 		})
 		savedPLogOffset := nextPLogOffsetForTest(t, app.appStructs, key.partitionID) - 1
 		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, checkpoints.PartitionCheckpoint{
-			LastHandledPLogOffset: savedPLogOffset,
+			LastPLogOffset: savedPLogOffset,
 		})
 		restartCmdProc(&app)
 		app.recovery.pLogReads.reset(key)
@@ -720,43 +675,43 @@ func TestRecordIDsRecovery(t *testing.T) {
 		)
 	})
 
-	t.Run("singleton-only tail rewinds for a non-singleton record ID", func(t *testing.T) {
+	t.Run("non-ID events after the checkpoint determine the actual WLog tail", func(t *testing.T) {
 		require := require.New(t)
 		storage := newTestCheckpointStorage()
 		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
 		defer tearDown(app)
 
 		previous := sendCUD(t, 1, app)
-		singletonEvent := sendCUDWithBody(t, 1, app, `{"cuds":[
+		savedWLogOffset := istructs.Offset(previous["CurrentWLogOffset"].(float64))
+		sendCUDWithBody(t, 1, app, `{"cuds":[
 			{"fields":{"sys.ID":1,"sys.QName":"test.TestSingleton"}}
 		]}`)
-		lastHandledWLogOffset := istructs.Offset(singletonEvent["CurrentWLogOffset"].(float64))
+		lastEvent := sendNoCUDCommand(t, 1, app)
+		lastWLogOffset := istructs.Offset(lastEvent["CurrentWLogOffset"].(float64))
 		partitionKey := recoveryKeyForWSID(1)
 		workspaceKey := recoveryWorkspaceKey(1)
 		storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{
-			LastHandledWLogOffset: lastHandledWLogOffset,
+			LastWLogOffsetWithNewRecordIDs: savedWLogOffset,
 		})
 		storage.forcePartition(app.appStructs.ClusterAppID(), partitionKey.partitionID, checkpoints.PartitionCheckpoint{
-			LastHandledPLogOffset: nextPLogOffsetForTest(t, app.appStructs, partitionKey.partitionID) - 1,
+			LastPLogOffset: nextPLogOffsetForTest(t, app.appStructs, partitionKey.partitionID) - 1,
 		})
 
 		restartCmdProc(&app)
 		app.recovery.wLogReads.reset(workspaceKey)
 		require.NoError(triggerAndWaitForWorkspaceRecovery(t, app, 1))
-		require.Equal([]logRead{
-			{offset: lastHandledWLogOffset, count: istructs.ReadToTheEnd},
-			{offset: istructs.FirstOffset, count: int(lastHandledWLogOffset - istructs.FirstOffset)},
-		}, app.recovery.wLogReads.values(workspaceKey))
+		require.Equal([]logRead{{offset: savedWLogOffset, count: istructs.ReadToTheEnd}},
+			app.recovery.wLogReads.values(workspaceKey))
 
 		response := sendCUD(t, 1, app)
-		require.Equal(int(lastHandledWLogOffset+1), int(response["CurrentWLogOffset"].(float64)))
+		require.Equal(int(lastWLogOffset+1), int(response["CurrentWLogOffset"].(float64)))
 		require.Equal(
 			istructs.RecordID(previous["NewIDs"].(map[string]interface{})["3"].(float64))+1,
 			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)),
 		)
 	})
 
-	t.Run("CUD-free history rewinds to the first offset and uses the first record ID", func(t *testing.T) {
+	t.Run("CUD-free history scans once from the first offset and uses the first record ID", func(t *testing.T) {
 		require := require.New(t)
 		storage := newTestCheckpointStorage()
 		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
@@ -768,35 +723,22 @@ func TestRecordIDsRecovery(t *testing.T) {
 		for range 12 {
 			lastEvent = sendNoCUDCommand(t, 1, app)
 		}
-		lastHandledWLogOffset := istructs.Offset(lastEvent["CurrentWLogOffset"].(float64))
+		lastWLogOffset := istructs.Offset(lastEvent["CurrentWLogOffset"].(float64))
 		partitionKey := recoveryKeyForWSID(1)
 		workspaceKey := recoveryWorkspaceKey(1)
-		storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{
-			LastHandledWLogOffset: lastHandledWLogOffset,
-		})
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{})
 		storage.forcePartition(app.appStructs.ClusterAppID(), partitionKey.partitionID, checkpoints.PartitionCheckpoint{
-			LastHandledPLogOffset: nextPLogOffsetForTest(t, app.appStructs, partitionKey.partitionID) - 1,
+			LastPLogOffset: nextPLogOffsetForTest(t, app.appStructs, partitionKey.partitionID) - 1,
 		})
 
 		restartCmdProc(&app)
 		app.recovery.wLogReads.reset(workspaceKey)
 		require.NoError(triggerAndWaitForWorkspaceRecovery(t, app, 1))
-		expectedReads := []logRead{{offset: lastHandledWLogOffset, count: istructs.ReadToTheEnd}}
-		for rewindEnd := lastHandledWLogOffset; rewindEnd > istructs.FirstOffset; {
-			rewindStart := istructs.FirstOffset
-			if rewindEnd > istructs.FirstOffset+workspaceRecoveryRewindEvents {
-				rewindStart = rewindEnd - workspaceRecoveryRewindEvents
-			}
-			expectedReads = append(expectedReads, logRead{
-				offset: rewindStart,
-				count:  int(rewindEnd - rewindStart),
-			})
-			rewindEnd = rewindStart
-		}
-		require.Equal(expectedReads, app.recovery.wLogReads.values(workspaceKey))
+		require.Equal([]logRead{{offset: istructs.FirstOffset, count: istructs.ReadToTheEnd}},
+			app.recovery.wLogReads.values(workspaceKey))
 
 		response := sendCUD(t, 1, app)
-		require.Equal(int(lastHandledWLogOffset+1), int(response["CurrentWLogOffset"].(float64)))
+		require.Equal(int(lastWLogOffset+1), int(response["CurrentWLogOffset"].(float64)))
 		require.Equal(istructs.FirstUserRecordID,
 			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)))
 	})
@@ -922,11 +864,9 @@ func setWorkspaceRecoveryApp(t *testing.T, workers uint, lazyWSIDs ...istructs.W
 	partitionID := coreutils.AppPartitionID(99, testAppPartCount)
 	nextPLogOffset := nextPLogOffsetForTest(t, app.appStructs, partitionID)
 	storage.forcePartition(app.appStructs.ClusterAppID(), partitionID,
-		checkpoints.PartitionCheckpoint{LastHandledPLogOffset: nextPLogOffset - 1})
+		checkpoints.PartitionCheckpoint{LastPLogOffset: nextPLogOffset - 1})
 	for _, wsid := range lazyWSIDs {
-		storage.forceWorkspace(app.appStructs.ClusterAppID(), wsid, checkpoints.WorkspaceCheckpoint{
-			LastHandledWLogOffset: istructs.FirstOffset,
-		})
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), wsid, checkpoints.WorkspaceCheckpoint{})
 	}
 
 	require.NoError(triggerAndWaitForRecovery(t, app, 99))
