@@ -18,9 +18,9 @@ import (
 	"github.com/voedger/voedger/pkg/sys/checkpoints"
 )
 
-func Testcheckpointstorage(t *testing.T) {
+func TestRecoveryCheckpointStorage(t *testing.T) {
 	require := require.New(t)
-	sysVVMStorage, checkpoints := newcheckpointstorageForTest(t)
+	sysVVMStorage, checkpointStorage := newRecoveryCheckpointStorageForTest(t)
 
 	const (
 		appID       = istructs.ClusterAppID(101)
@@ -29,12 +29,12 @@ func Testcheckpointstorage(t *testing.T) {
 	)
 
 	t.Run("no checkpoints", func(t *testing.T) {
-		partition, ok, err := checkpoints.GetPartitionCheckpoint(appID, partitionID)
+		partition, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
 		require.NoError(err)
 		require.False(ok)
 		require.Zero(partition)
 
-		workspace, ok, err := checkpoints.GetWorkspaceCheckpoint(appID, wsid)
+		workspace, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
 		require.NoError(err)
 		require.False(ok)
 		require.Zero(workspace)
@@ -44,15 +44,15 @@ func Testcheckpointstorage(t *testing.T) {
 		partition := checkpoints.PartitionCheckpoint{LastPLogOffset: 42}
 		workspace := checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 43}
 
-		require.NoError(checkpoints.PutPartitionCheckpoint(appID, partitionID, partition))
-		require.NoError(checkpoints.PutWorkspaceCheckpoint(appID, wsid, workspace))
+		require.NoError(checkpointStorage.PutPartitionCheckpoint(appID, partitionID, partition))
+		require.NoError(checkpointStorage.PutWorkspaceCheckpoint(appID, wsid, workspace))
 
-		actualPartition, ok, err := checkpoints.GetPartitionCheckpoint(appID, partitionID)
+		actualPartition, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
 		require.NoError(err)
 		require.True(ok)
 		require.Equal(partition, actualPartition)
 
-		actualWorkspace, ok, err := checkpoints.GetWorkspaceCheckpoint(appID, wsid)
+		actualWorkspace, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
 		require.NoError(err)
 		require.True(ok)
 		require.Equal(workspace, actualWorkspace)
@@ -75,11 +75,11 @@ func Testcheckpointstorage(t *testing.T) {
 				{appID: 201, partitionID: 2, offset: 13},
 			}
 			for _, tc := range partitionCases {
-				require.NoError(checkpoints.PutPartitionCheckpoint(tc.appID, tc.partitionID,
+				require.NoError(checkpointStorage.PutPartitionCheckpoint(tc.appID, tc.partitionID,
 					checkpoints.PartitionCheckpoint{LastPLogOffset: tc.offset}))
 			}
 			for _, tc := range partitionCases {
-				actual, ok, err := checkpoints.GetPartitionCheckpoint(tc.appID, tc.partitionID)
+				actual, ok, err := checkpointStorage.GetPartitionCheckpoint(tc.appID, tc.partitionID)
 				require.NoError(err)
 				require.True(ok)
 				require.Equal(tc.offset, actual.LastPLogOffset)
@@ -100,11 +100,11 @@ func Testcheckpointstorage(t *testing.T) {
 				{appID: 201, wsid: 2, offset: 23},
 			}
 			for _, tc := range workspaceCases {
-				require.NoError(checkpoints.PutWorkspaceCheckpoint(tc.appID, tc.wsid,
+				require.NoError(checkpointStorage.PutWorkspaceCheckpoint(tc.appID, tc.wsid,
 					checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: tc.offset}))
 			}
 			for _, tc := range workspaceCases {
-				actual, ok, err := checkpoints.GetWorkspaceCheckpoint(tc.appID, tc.wsid)
+				actual, ok, err := checkpointStorage.GetWorkspaceCheckpoint(tc.appID, tc.wsid)
 				require.NoError(err)
 				require.True(ok)
 				require.Equal(tc.offset, actual.LastWLogOffsetWithNewRecordIDs)
@@ -123,19 +123,19 @@ func Testcheckpointstorage(t *testing.T) {
 		require.NoError(sysVVMStorage.Put(workspaceCheckpointPKeyForTest(appID, malformedWSID),
 			checkpointCColsForTest(), []byte(`{"other":1}`)))
 
-		_, ok, err := checkpoints.GetPartitionCheckpoint(appID, malformedPartitionID)
+		_, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, malformedPartitionID)
 		require.Error(err)
 		require.False(ok)
 
-		_, ok, err = checkpoints.GetWorkspaceCheckpoint(appID, malformedWSID)
+		_, ok, err = checkpointStorage.GetWorkspaceCheckpoint(appID, malformedWSID)
 		require.Error(err)
 		require.False(ok)
 	})
 }
 
-func TestcheckpointstorageUsesLastWriteWins(t *testing.T) {
+func TestRecoveryCheckpointStorageUsesLastWriteWins(t *testing.T) {
 	require := require.New(t)
-	_, checkpoints := newcheckpointstorageForTest(t)
+	_, checkpointStorage := newRecoveryCheckpointStorageForTest(t)
 
 	const (
 		appID       = istructs.ClusterAppID(301)
@@ -143,22 +143,22 @@ func TestcheckpointstorageUsesLastWriteWins(t *testing.T) {
 		wsid        = istructs.WSID(3001)
 	)
 
-	require.NoError(checkpoints.PutPartitionCheckpoint(appID, partitionID,
+	require.NoError(checkpointStorage.PutPartitionCheckpoint(appID, partitionID,
 		checkpoints.PartitionCheckpoint{LastPLogOffset: 200}))
-	require.NoError(checkpoints.PutWorkspaceCheckpoint(appID, wsid,
+	require.NoError(checkpointStorage.PutWorkspaceCheckpoint(appID, wsid,
 		checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 50}))
 
 	partition := checkpoints.PartitionCheckpoint{LastPLogOffset: 100}
 	workspace := checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 40}
-	require.NoError(checkpoints.PutPartitionCheckpoint(appID, partitionID, partition))
-	require.NoError(checkpoints.PutWorkspaceCheckpoint(appID, wsid, workspace))
+	require.NoError(checkpointStorage.PutPartitionCheckpoint(appID, partitionID, partition))
+	require.NoError(checkpointStorage.PutWorkspaceCheckpoint(appID, wsid, workspace))
 
-	actualPartition, ok, err := checkpoints.GetPartitionCheckpoint(appID, partitionID)
+	actualPartition, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
 	require.NoError(err)
 	require.True(ok)
 	require.Equal(partition, actualPartition)
 
-	actualWorkspace, ok, err := checkpoints.GetWorkspaceCheckpoint(appID, wsid)
+	actualWorkspace, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
 	require.NoError(err)
 	require.True(ok)
 	require.Equal(workspace, actualWorkspace)
@@ -192,10 +192,10 @@ func assertCheckpointJSON(t *testing.T, storage ISysVvmStorage, pKey, cCols []by
 	require.Equal(expected, actual)
 }
 
-func newcheckpointstorageForTest(t *testing.T) (ISysVvmStorage, checkpoints.Icheckpointstorage) {
+func newRecoveryCheckpointStorageForTest(t *testing.T) (ISysVvmStorage, checkpoints.IRecoveryCheckpointStorage) {
 	t.Helper()
 	appStorageProvider := provider.Provide(mem.Provide(testingu.MockTime))
 	sysVVMStorage, err := appStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
 	require.NoError(t, err)
-	return sysVVMStorage, Newcheckpointstorage(sysVVMStorage)
+	return sysVVMStorage, NewRecoveryCheckpointStorage(sysVVMStorage)
 }
