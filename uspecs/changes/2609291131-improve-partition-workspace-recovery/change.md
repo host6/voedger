@@ -146,9 +146,10 @@ References (external):
 - [x] delete: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
   - replace the partition-only recovery test controls with the generic test-only utilities in `recovery_test_utils_test.go`
 
-- [x] create: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
+- [ ] create: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
   - verify single-field PLog and WLog JSON values named `lastPLogOffset` and `lastWLogOffsetWithNewRecordIDs`, including missing and malformed values and last-write-wins replacement
   - verify application/partition/workspace isolation through partition-key suffixes and the fixed singleton clustering column `[]byte{1}`
+  - construct the test subject through `NewRecoveryCheckpointStorage` and the `IRecoveryCheckpointStorage` contract so the storage tests compile
 
 - [x] update: [storage/consts_test.go](../../../pkg/vvm/storage/consts_test.go)
   - preserve fixed sequence-storage prefix values
