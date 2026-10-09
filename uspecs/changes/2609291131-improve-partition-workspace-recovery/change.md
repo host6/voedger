@@ -88,7 +88,9 @@ References (internal):
 
 - [command/impl.go](../../../pkg/processors/command/impl.go)
 - [command/provide.go](../../../pkg/processors/command/provide.go)
-- [sys/checkpoints/checkpoints.go](../../../pkg/sys/checkpoints/checkpoints.go)
+- [checkpoint contracts](../../../pkg/sys/checkpoints/types.go)
+- [checkpoint projector](../../../pkg/sys/checkpoints/impl.go)
+- [checkpoint registration](../../../pkg/sys/checkpoints/provide.go)
 - [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
 - [istructs/events-types.go](../../../pkg/istructs/events-types.go)
 - [vvm/types.go](../../../pkg/vvm/types.go)
@@ -110,7 +112,7 @@ References (external):
 
 ### Tests
 
-- [x] create: [checkpoints/checkpoints_test.go](../../../pkg/sys/checkpoints/checkpoints_test.go)
+- [x] create: [checkpoints/impl_test.go](../../../pkg/sys/checkpoints/impl_test.go)
   - verify that one projector stores `lastPLogOffset` when `PLogOffset % 100 == 0`
   - verify that an event allocating non-singleton record IDs stores `lastWLogOffsetWithNewRecordIDs`, while singleton, existing-record, and CUD-free events do not write a workspace checkpoint
   - verify storage-error propagation and registration of the single standard asynchronous projector
@@ -146,10 +148,11 @@ References (external):
 - [x] delete: [command/test_utils.go](../../../pkg/processors/command/test_utils.go)
   - replace the partition-only recovery test controls with the generic test-only utilities in `recovery_test_utils_test.go`
 
-- [x] create: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
+- [ ] create: [storage/impl_recoverycheckpoint_test.go](../../../pkg/vvm/storage/impl_recoverycheckpoint_test.go)
   - verify single-field PLog and WLog JSON values named `lastPLogOffset` and `lastWLogOffsetWithNewRecordIDs`, including missing and malformed values and last-write-wins replacement
   - verify application/partition/workspace isolation through partition-key suffixes and the fixed singleton clustering column `[]byte{1}`
   - construct the test subject through `NewRecoveryCheckpointStorage` and the `IRecoveryCheckpointStorage` contract so the storage tests compile
+  - compare decoded JSON numbers using the representation returned by `encoding/json` so the isolation cases pass
 
 - [x] update: [storage/consts_test.go](../../../pkg/vvm/storage/consts_test.go)
   - preserve fixed sequence-storage prefix values
@@ -184,10 +187,19 @@ References (external):
 - [x] update: [storage/provide.go](../../../pkg/vvm/storage/provide.go)
   - construct the recovery-checkpoint adapter over shared system-VVM storage
 
-- [x] create: [checkpoints/checkpoints.go](../../../pkg/sys/checkpoints/checkpoints.go)
+- [x] create: [checkpoints/consts.go](../../../pkg/sys/checkpoints/consts.go)
+  - define the 100-event partition-checkpoint interval and `ProjectorRecoveryCheckpoint` QName
+
+- [x] create: [checkpoints/types.go](../../../pkg/sys/checkpoints/types.go)
   - define a PLog checkpoint containing only `lastPLogOffset` and a WLog checkpoint containing only `lastWLogOffsetWithNewRecordIDs`
-  - register one built-in asynchronous recovery-checkpoint projector
+  - define the partition and workspace checkpoint storage contract
+
+- [x] create: [checkpoints/impl.go](../../../pkg/sys/checkpoints/impl.go)
+  - implement one recovery-checkpoint projector for both checkpoint types
   - persist the WLog offset only for non-singleton allocations and persist the PLog offset when `PLogOffset % 100 == 0`
+
+- [x] create: [checkpoints/provide.go](../../../pkg/sys/checkpoints/provide.go)
+  - register the single built-in asynchronous recovery-checkpoint projector with stateless resources
 
 - [x] update: [parser/impl_analyse.go](../../../pkg/parser/impl_analyse.go)
   - resolve the built-in generic Command trigger used by the recovery-checkpoint projector
