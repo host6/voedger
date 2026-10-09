@@ -308,63 +308,64 @@ func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, requestCtx cont
 		return nil, err
 	}
 	startOffset := istructs.FirstOffset
-	if ok && checkpoint.LastHandledWLogOffset >= istructs.FirstOffset {
-		startOffset = checkpoint.LastHandledWLogOffset
+	validateCheckpoint := ok && checkpoint.LastWLogOffsetWithNewRecordIDs >= istructs.FirstOffset
+	if validateCheckpoint {
+		startOffset = checkpoint.LastWLogOffsetWithNewRecordIDs
 	}
 
-	var (
-		lastWLogOffset istructs.Offset
-		hasWLogEvent   bool
-		lastRecordID   istructs.RecordID
-		hasRecordID    bool
-	)
-	cmdProc.cmdProcHooks.wLogRead(wsKey, startOffset, istructs.ReadToTheEnd)
-	err = ap.appStructs.Events().ReadWLog(vvmCtx, wsKey.wsid, startOffset, istructs.ReadToTheEnd,
-		func(wlogOffset istructs.Offset, event istructs.IWLogEvent) error {
-			defer event.Release()
-			hasWLogEvent = true
-			lastWLogOffset = wlogOffset
-			if eventRecordID, ok := highestNewNonSingletonRecordID(event); ok {
-				lastRecordID = eventRecordID
-				hasRecordID = true
-			}
-			return nil
-		})
+	lastWLogOffset, lastRecordID, checkpointValid, err := cmdProc.scanWLog(
+		vvmCtx, wsKey, ap, startOffset, validateCheckpoint)
+	if errors.Is(err, errInvalidRecoveryCheckpoint) {
+		err = nil
+		checkpointValid = false
+	}
 	if err != nil {
 		logger.ErrorCtx(recoveryCtx, "cp.workspace_recovery.readwlog.error", err)
 		return nil, err
 	}
-
-	workspace := newRecoveredWorkspace()
-	if hasWLogEvent {
-		workspace.NextWLogOffset = lastWLogOffset + 1
-	}
-	for rewindEnd := startOffset; !hasRecordID && rewindEnd > istructs.FirstOffset; {
-		rewindStart := istructs.FirstOffset
-		if rewindEnd > istructs.FirstOffset+workspaceRecoveryRewindEvents {
-			rewindStart = rewindEnd - workspaceRecoveryRewindEvents
-		}
-		count := int(rewindEnd - rewindStart)
-		cmdProc.cmdProcHooks.wLogRead(wsKey, rewindStart, count)
-		err = ap.appStructs.Events().ReadWLog(vvmCtx, wsKey.wsid, rewindStart, count,
-			func(_ istructs.Offset, event istructs.IWLogEvent) error {
-				defer event.Release()
-				if eventRecordID, ok := highestNewNonSingletonRecordID(event); ok {
-					lastRecordID = eventRecordID
-					hasRecordID = true
-				}
-				return nil
-			})
+	if validateCheckpoint && !checkpointValid {
+		logger.ErrorCtx(recoveryCtx, "cp.workspace_recovery.checkpoint.invalid", fmt.Sprintf(
+			"stored WLog offset %d does not identify an ID-bearing event; retrying from FirstOffset %d",
+			startOffset, istructs.FirstOffset))
+		lastWLogOffset, lastRecordID, _, err = cmdProc.scanWLog(
+			vvmCtx, wsKey, ap, istructs.FirstOffset, false)
 		if err != nil {
+			logger.ErrorCtx(recoveryCtx, "cp.workspace_recovery.readwlog.error", err)
 			return nil, err
 		}
-		rewindEnd = rewindStart
 	}
-	if hasRecordID {
+
+	workspace := newRecoveredWorkspace()
+	workspace.NextWLogOffset = lastWLogOffset + 1
+	if lastRecordID > istructs.NullRecordID {
 		workspace.idGenerator.UpdateOnSync(lastRecordID)
 	}
-	logger.InfoCtx(recoveryCtx, "cp.workspace_recovery.complete", "nextWLogOffset ", workspace.NextWLogOffset, "lastRecordID ", lastRecordID)
+	logger.InfoCtx(recoveryCtx, "cp.workspace_recovery.complete", "nextWLogOffset ", workspace.NextWLogOffset, ", lastRecordID ", lastRecordID)
 	return workspace, nil
+}
+
+func (cmdProc *cmdProc) scanWLog(vvmCtx context.Context, wsKey workspaceKey, ap *appPartition,
+	startOffset istructs.Offset, validateCheckpoint bool) (lastWLogOffset istructs.Offset,
+	lastRecordID istructs.RecordID, checkpointValid bool, err error) {
+	checkpointValid = !validateCheckpoint
+	cmdProc.cmdProcHooks.onWLogRead(wsKey, startOffset, istructs.ReadToTheEnd)
+	err = ap.appStructs.Events().ReadWLog(vvmCtx, wsKey.wsid, startOffset, istructs.ReadToTheEnd,
+		func(wlogOffset istructs.Offset, event istructs.IWLogEvent) error {
+			defer event.Release()
+			eventRecordID := highestNewNonSingletonRecordID(event)
+			if !checkpointValid {
+				if wlogOffset != startOffset || eventRecordID == istructs.NullRecordID {
+					return errInvalidRecoveryCheckpoint
+				}
+				checkpointValid = true
+			}
+			lastWLogOffset = wlogOffset
+			if eventRecordID != istructs.NullRecordID {
+				lastRecordID = eventRecordID
+			}
+			return nil
+		})
+	return lastWLogOffset, lastRecordID, checkpointValid, err
 }
 
 func getIWorkspace(_ context.Context, cmd *cmdWorkpiece) (err error) {
@@ -434,14 +435,13 @@ func (cmdProc *cmdProc) getHostState(_ context.Context, cmd *cmdWorkpiece) (err 
 	return nil
 }
 
-func highestNewNonSingletonRecordID(event istructs.IAbstractEvent) (istructs.RecordID, bool) {
-	var highest istructs.RecordID
+func highestNewNonSingletonRecordID(event istructs.IAbstractEvent) (highest istructs.RecordID) {
 	for rec := range event.CUDs {
 		if rec.IsNew() && rec.ID() >= istructs.FirstUserRecordID && rec.ID() > highest {
 			highest = rec.ID()
 		}
 	}
-	return highest, highest != istructs.NullRecordID
+	return highest
 }
 
 func newWSRecoveryCtx(ctx context.Context, wsKey workspaceKey) context.Context {
@@ -458,6 +458,8 @@ func newPartRecoveryCtx(ctx context.Context, partID istructs.PartitionID) contex
 	})
 }
 
+var errInvalidRecoveryCheckpoint = errors.New("invalid recovery checkpoint")
+
 // runs in goroutine by recoverManager
 func (cmdProc *cmdProc) recoverPartition(vvmCtx context.Context, cmd *cmdWorkpiece) (ap *appPartition, err error) {
 	recoveryCtx := newPartRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID())
@@ -469,15 +471,31 @@ func (cmdProc *cmdProc) recoverPartition(vvmCtx context.Context, cmd *cmdWorkpie
 	ap.appStructs = cmd.appStructs
 
 	// get the offset to start from
-	startOffset, err := cmdProc.readPartitionCheckpoint(appID, key.partitionID)
+	startOffset, validateCheckpoint, err := cmdProc.readPartitionCheckpoint(appID, key.partitionID)
 	if err != nil {
 		return nil, err
 	}
 
 	// read the last plog event
-	lastPLogEvent, lastPLogOffset, err := cmdProc.getLastPLogEvent(vvmCtx, recoveryCtx, key, cmd, ap, startOffset)
+	lastPLogEvent, lastPLogOffset, checkpointValid, err := cmdProc.getLastPLogEvent(
+		vvmCtx, recoveryCtx, key, cmd, ap, startOffset, validateCheckpoint)
+	if errors.Is(err, errInvalidRecoveryCheckpoint) {
+		err = nil
+		checkpointValid = false
+	}
 	if err != nil {
 		return nil, err
+	}
+	if validateCheckpoint && !checkpointValid {
+		logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.checkpoint.invalid", fmt.Sprintf(
+			"stored PLog offset %d does not identify an existing event; retrying from FirstOffset %d",
+			startOffset, istructs.FirstOffset))
+		ap.nextPLogOffset = istructs.FirstOffset
+		lastPLogEvent, lastPLogOffset, _, err = cmdProc.getLastPLogEvent(
+			vvmCtx, recoveryCtx, key, cmd, ap, istructs.FirstOffset, false)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// re-apply the last event
@@ -496,22 +514,33 @@ func (cmdProc *cmdProc) recoverPartition(vvmCtx context.Context, cmd *cmdWorkpie
 	return ap, nil
 }
 
-func (cmdProc *cmdProc) readPartitionCheckpoint(appID istructs.ClusterAppID, partitionID istructs.PartitionID) (istructs.Offset, error) {
+func (cmdProc *cmdProc) readPartitionCheckpoint(appID istructs.ClusterAppID,
+	partitionID istructs.PartitionID) (startOffset istructs.Offset, validateCheckpoint bool, err error) {
 	partitionCheckpoint, checkpointExists, err := cmdProc.checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
 	if err != nil {
-		return istructs.NullOffset, err
+		return istructs.NullOffset, false, err
 	}
-	startOffset := istructs.FirstOffset
-	if checkpointExists && partitionCheckpoint.LastHandledPLogOffset >= istructs.FirstOffset {
-		startOffset = partitionCheckpoint.LastHandledPLogOffset
+	startOffset = istructs.FirstOffset
+	validateCheckpoint = checkpointExists && partitionCheckpoint.LastPLogOffset >= istructs.FirstOffset
+	if validateCheckpoint {
+		startOffset = partitionCheckpoint.LastPLogOffset
 	}
-	return startOffset, nil
+	return startOffset, validateCheckpoint, nil
 }
 
 func (cmdProc *cmdProc) getLastPLogEvent(vvmCtx context.Context, recoveryCtx context.Context, key partitionKey,
-	cmd *cmdWorkpiece, ap *appPartition, startOffset istructs.Offset) (lastPLogEvent istructs.IPLogEvent,
-	lastPLogOffset istructs.Offset, err error) {
+	cmd *cmdWorkpiece, ap *appPartition, startOffset istructs.Offset,
+	validateCheckpoint bool) (lastPLogEvent istructs.IPLogEvent,
+	lastPLogOffset istructs.Offset, checkpointValid bool, err error) {
+	checkpointValid = !validateCheckpoint
 	cb := func(plogOffset istructs.Offset, event istructs.IPLogEvent) error {
+		if !checkpointValid {
+			if plogOffset != startOffset {
+				event.Release()
+				return errInvalidRecoveryCheckpoint
+			}
+			checkpointValid = true
+		}
 		ap.nextPLogOffset = plogOffset + 1
 		if lastPLogEvent != nil {
 			lastPLogEvent.Release()
@@ -521,16 +550,18 @@ func (cmdProc *cmdProc) getLastPLogEvent(vvmCtx context.Context, recoveryCtx con
 		return nil
 	}
 
-	cmdProc.cmdProcHooks.pLogRead(key, startOffset, istructs.ReadToTheEnd)
+	cmdProc.cmdProcHooks.onPLogRead(key, startOffset, istructs.ReadToTheEnd)
 	err = cmd.appStructs.Events().ReadPLog(vvmCtx, key.partitionID, startOffset, istructs.ReadToTheEnd, cb)
 	if err != nil {
 		if lastPLogEvent != nil {
 			lastPLogEvent.Release()
 		}
-		logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.readplog.error", err)
-		return nil, istructs.NullOffset, err
+		if !errors.Is(err, errInvalidRecoveryCheckpoint) {
+			logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.readplog.error", err)
+		}
+		return nil, istructs.NullOffset, checkpointValid, err
 	}
-	return lastPLogEvent, lastPLogOffset, nil
+	return lastPLogEvent, lastPLogOffset, checkpointValid, nil
 }
 
 func (cmdProc *cmdProc) reapplyLastPLogEvent(vvmCtx context.Context, recoveryCtx context.Context,
@@ -1232,11 +1263,11 @@ func cmdProcHooksOrNOP(hooks *commandProcessorHooks) *commandProcessorHooks {
 	if hooks == nil {
 		hooks = &commandProcessorHooks{}
 	}
-	if hooks.pLogRead == nil {
-		hooks.pLogRead = func(partitionKey, istructs.Offset, int) {}
+	if hooks.onPLogRead == nil {
+		hooks.onPLogRead = func(partitionKey, istructs.Offset, int) {}
 	}
-	if hooks.wLogRead == nil {
-		hooks.wLogRead = func(workspaceKey, istructs.Offset, int) {}
+	if hooks.onWLogRead == nil {
+		hooks.onWLogRead = func(workspaceKey, istructs.Offset, int) {}
 	}
 	return hooks
 }

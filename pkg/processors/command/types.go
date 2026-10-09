@@ -224,6 +224,6 @@ type recoverWorkspaceFunc func(context.Context, workspaceKey) (*workspace, error
 // commandProcessorHooks provides deterministic observation points for package tests.
 // Production command processors use nopCommandProcessorHooks().
 type commandProcessorHooks struct {
-	pLogRead func(partitionKey, istructs.Offset, int)
-	wLogRead func(workspaceKey, istructs.Offset, int)
+	onPLogRead func(partitionKey, istructs.Offset, int)
+	onWLogRead func(workspaceKey, istructs.Offset, int)
 }

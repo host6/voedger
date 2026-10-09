@@ -579,22 +579,30 @@ func TestRecordIDsRecovery(t *testing.T) {
 		for _, checkpointState := range []string{"missing", "zero"} {
 			t.Run(checkpointState, func(t *testing.T) {
 				require := require.New(t)
+				logCap := logger.StartCapture(t, logger.LogLevelVerbose)
 				storage := newTestCheckpointStorage()
 				app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
 				defer tearDown(app)
 
 				key := recoveryKeyForWSID(1)
+				workspaceKey := recoveryWorkspaceKey(1)
 				if checkpointState == "zero" {
 					storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, checkpoints.PartitionCheckpoint{})
 					storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{})
 				}
 				app.recovery.pLogReads.reset(key)
+				app.recovery.wLogReads.reset(workspaceKey)
+				logCap.Reset()
 
 				response := sendCUD(t, 1, app)
 				reads := app.recovery.pLogReads.values(key)
 				require.Len(reads, 1)
 				require.Equal(istructs.FirstOffset, reads[0].offset)
 				require.Equal(istructs.ReadToTheEnd, reads[0].count)
+				require.Equal([]logRead{{offset: istructs.FirstOffset, count: istructs.ReadToTheEnd}},
+					app.recovery.wLogReads.values(workspaceKey))
+				logCap.NotContains("cp.partition_recovery.checkpoint.invalid",
+					"cp.workspace_recovery.checkpoint.invalid")
 				require.Equal(2, int(response["CurrentWLogOffset"].(float64)))
 				require.Equal(istructs.FirstUserRecordID,
 					istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)))
@@ -642,6 +650,7 @@ func TestRecordIDsRecovery(t *testing.T) {
 
 	t.Run("the last events set the next offsets and record ID", func(t *testing.T) {
 		require := require.New(t)
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
 		storage := newTestCheckpointStorage()
 		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
 		defer tearDown(app)
@@ -660,12 +669,15 @@ func TestRecordIDsRecovery(t *testing.T) {
 		restartCmdProc(&app)
 		app.recovery.pLogReads.reset(key)
 		app.recovery.wLogReads.reset(workspaceKey)
+		logCap.Reset()
 
 		require.NoError(triggerAndWaitForWorkspaceRecovery(t, app, 1))
 		require.Equal([]logRead{{offset: savedPLogOffset, count: istructs.ReadToTheEnd}},
 			app.recovery.pLogReads.values(key))
 		require.Equal([]logRead{{offset: savedWLogOffset, count: istructs.ReadToTheEnd}},
 			app.recovery.wLogReads.values(workspaceKey))
+		logCap.NotContains("cp.partition_recovery.checkpoint.invalid",
+			"cp.workspace_recovery.checkpoint.invalid")
 
 		response := sendCUD(t, 1, app)
 		require.Equal(int(previous["CurrentWLogOffset"].(float64))+1, int(response["CurrentWLogOffset"].(float64)))
@@ -765,6 +777,239 @@ func TestRecordIDsRecovery(t *testing.T) {
 
 		close(gate)
 		require.NoError(app.recovery.workspaces.wait(app.ctx, workspaceKey))
+	})
+
+	t.Run("partition checkpoint beyond the actual tail falls back to the first offset", func(t *testing.T) {
+		require := require.New(t)
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		storage := newTestCheckpointStorage()
+		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+		defer tearDown(app)
+
+		previous := sendCUD(t, 1, app)
+		key := recoveryKeyForWSID(1)
+		malformedOffset := nextPLogOffsetForTest(t, app.appStructs, key.partitionID) + 10
+		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID,
+			checkpoints.PartitionCheckpoint{LastPLogOffset: malformedOffset})
+		restartCmdProc(&app)
+		app.recovery.pLogReads.reset(key)
+		logCap.Reset()
+
+		require.NoError(triggerAndWaitForRecovery(t, app, 1))
+		requireCheckpointFallbackReads(t, malformedOffset, app.recovery.pLogReads.values(key))
+		logCap.HasLine("level=ERROR", "stage=cp.partition_recovery.checkpoint.invalid",
+			fmt.Sprintf("stored PLog offset %d does not identify an existing event; retrying from FirstOffset %d",
+				malformedOffset, istructs.FirstOffset))
+
+		response := sendCUD(t, 1, app)
+		require.Equal(int(previous["CurrentWLogOffset"].(float64))+1,
+			int(response["CurrentWLogOffset"].(float64)))
+		require.Equal(
+			istructs.RecordID(previous["NewIDs"].(map[string]interface{})["3"].(float64))+1,
+			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)),
+		)
+	})
+
+	t.Run("workspace checkpoint beyond the actual tail falls back to the first offset", func(t *testing.T) {
+		require := require.New(t)
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		storage := newTestCheckpointStorage()
+		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+		defer tearDown(app)
+
+		previous := sendCUD(t, 1, app)
+		key := recoveryKeyForWSID(1)
+		workspaceKey := recoveryWorkspaceKey(1)
+		lastWLogOffset := istructs.Offset(previous["CurrentWLogOffset"].(float64))
+		malformedOffset := lastWLogOffset + 10
+		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, checkpoints.PartitionCheckpoint{
+			LastPLogOffset: nextPLogOffsetForTest(t, app.appStructs, key.partitionID) - 1,
+		})
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{
+			LastWLogOffsetWithNewRecordIDs: malformedOffset,
+		})
+		restartCmdProc(&app)
+		app.recovery.wLogReads.reset(workspaceKey)
+		logCap.Reset()
+
+		require.NoError(triggerAndWaitForWorkspaceRecovery(t, app, 1))
+		requireCheckpointFallbackReads(t, malformedOffset, app.recovery.wLogReads.values(workspaceKey))
+		logCap.HasLine("level=ERROR", "stage=cp.workspace_recovery.checkpoint.invalid",
+			fmt.Sprintf("stored WLog offset %d does not identify an ID-bearing event; retrying from FirstOffset %d",
+				malformedOffset, istructs.FirstOffset))
+
+		response := sendCUD(t, 1, app)
+		require.Equal(int(lastWLogOffset+1), int(response["CurrentWLogOffset"].(float64)))
+		require.Equal(
+			istructs.RecordID(previous["NewIDs"].(map[string]interface{})["3"].(float64))+1,
+			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)),
+		)
+	})
+
+	t.Run("a missing exact partition checkpoint falls back even when later events are returned", func(t *testing.T) {
+		require := require.New(t)
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		storage := newTestCheckpointStorage()
+		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+		defer tearDown(app)
+
+		for range 3 {
+			sendCUD(t, 1, app)
+		}
+		key := recoveryKeyForWSID(1)
+		nextPLogOffset := nextPLogOffsetForTest(t, app.appStructs, key.partitionID)
+		missingOffset := nextPLogOffset - 2
+		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID,
+			checkpoints.PartitionCheckpoint{LastPLogOffset: missingOffset})
+		events := &pLogCheckpointSkippingEvents{
+			IEvents:          app.appStructs.Events(),
+			partitionID:      key.partitionID,
+			checkpointOffset: missingOffset,
+		}
+		appStructs := &appStructsWithTestEvents{IAppStructs: app.appStructs, events: events}
+		control := newRecoveryTestControl()
+		cmdProc := newDirectRecoveryCmdProc(storage, control)
+		cmd := &cmdWorkpiece{
+			cmdMes: &implICommandMessage{
+				requestCtx:  t.Context(),
+				appQName:    testAppName,
+				partitionID: key.partitionID,
+			},
+			appStructs: appStructs,
+		}
+		control.pLogReads.reset(key)
+		logCap.Reset()
+
+		recovered, err := cmdProc.recoverPartition(t.Context(), cmd)
+		require.NoError(err)
+		require.Equal(nextPLogOffset, recovered.nextPLogOffset)
+		requireCheckpointFallbackReads(t, missingOffset, control.pLogReads.values(key))
+		logCap.HasLine("level=ERROR", "stage=cp.partition_recovery.checkpoint.invalid",
+			fmt.Sprintf("stored PLog offset %d does not identify an existing event", missingOffset))
+	})
+
+	t.Run("a missing exact workspace checkpoint falls back even when later events are returned", func(t *testing.T) {
+		require := require.New(t)
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		storage := newTestCheckpointStorage()
+		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+		defer tearDown(app)
+
+		first := sendCUD(t, 1, app)
+		last := sendCUD(t, 1, app)
+		key := recoveryWorkspaceKey(1)
+		missingOffset := istructs.Offset(first["CurrentWLogOffset"].(float64))
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), key.wsid,
+			checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: missingOffset})
+		events := &wLogCheckpointSkippingEvents{
+			IEvents:          app.appStructs.Events(),
+			wsid:             key.wsid,
+			checkpointOffset: missingOffset,
+		}
+		appStructs := &appStructsWithTestEvents{IAppStructs: app.appStructs, events: events}
+		control := newRecoveryTestControl()
+		cmdProc := newDirectRecoveryCmdProc(storage, control)
+		control.wLogReads.reset(key)
+		logCap.Reset()
+
+		recovered, err := cmdProc.recoverWorkspace(t.Context(), t.Context(), key,
+			&appPartition{clusterAppID: app.appStructs.ClusterAppID(), appStructs: appStructs})
+		require.NoError(err)
+		require.Equal(istructs.Offset(last["CurrentWLogOffset"].(float64))+1, recovered.NextWLogOffset)
+		nextRecordID, err := recovered.idGenerator.NextID(1)
+		require.NoError(err)
+		require.Equal(
+			istructs.RecordID(last["NewIDs"].(map[string]interface{})["3"].(float64))+1,
+			nextRecordID,
+		)
+		requireCheckpointFallbackReads(t, missingOffset, control.wLogReads.values(key))
+		logCap.HasLine("level=ERROR", "stage=cp.workspace_recovery.checkpoint.invalid",
+			fmt.Sprintf("stored WLog offset %d does not identify an ID-bearing event", missingOffset))
+	})
+
+	t.Run("a non-ID-bearing workspace checkpoint falls back and restores the earlier high-water mark", func(t *testing.T) {
+		require := require.New(t)
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		storage := newTestCheckpointStorage()
+		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+		defer tearDown(app)
+
+		idBearingEvent := sendCUD(t, 1, app)
+		nonIDBearingEvent := sendCUDWithBody(t, 1, app, `{"cuds":[
+			{"fields":{"sys.ID":1,"sys.QName":"test.TestSingleton"}}
+		]}`)
+		lastEvent := sendNoCUDCommand(t, 1, app)
+		key := recoveryKeyForWSID(1)
+		workspaceKey := recoveryWorkspaceKey(1)
+		checkpointOffset := istructs.Offset(nonIDBearingEvent["CurrentWLogOffset"].(float64))
+		storage.forcePartition(app.appStructs.ClusterAppID(), key.partitionID, checkpoints.PartitionCheckpoint{
+			LastPLogOffset: nextPLogOffsetForTest(t, app.appStructs, key.partitionID) - 1,
+		})
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), 1, checkpoints.WorkspaceCheckpoint{
+			LastWLogOffsetWithNewRecordIDs: checkpointOffset,
+		})
+		restartCmdProc(&app)
+		app.recovery.wLogReads.reset(workspaceKey)
+		logCap.Reset()
+
+		require.NoError(triggerAndWaitForWorkspaceRecovery(t, app, 1))
+		requireCheckpointFallbackReads(t, checkpointOffset, app.recovery.wLogReads.values(workspaceKey))
+		logCap.HasLine("level=ERROR", "stage=cp.workspace_recovery.checkpoint.invalid",
+			fmt.Sprintf("stored WLog offset %d does not identify an ID-bearing event", checkpointOffset))
+
+		response := sendCUD(t, 1, app)
+		require.Equal(int(lastEvent["CurrentWLogOffset"].(float64))+1,
+			int(response["CurrentWLogOffset"].(float64)))
+		require.Equal(
+			istructs.RecordID(idBearingEvent["NewIDs"].(map[string]interface{})["3"].(float64))+1,
+			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)),
+		)
+	})
+
+	t.Run("invalid checkpoints over empty logs fall back once and retain empty-log defaults", func(t *testing.T) {
+		require := require.New(t)
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		storage := newTestCheckpointStorage()
+		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
+		defer tearDown(app)
+		control := newRecoveryTestControl()
+		cmdProc := newDirectRecoveryCmdProc(storage, control)
+		const malformedOffset istructs.Offset = 100
+
+		emptyPartitionKey := partitionKey{appQName: testAppName, partitionID: 100}
+		storage.forcePartition(app.appStructs.ClusterAppID(), emptyPartitionKey.partitionID,
+			checkpoints.PartitionCheckpoint{LastPLogOffset: malformedOffset})
+		cmd := &cmdWorkpiece{
+			cmdMes: &implICommandMessage{
+				requestCtx:  t.Context(),
+				appQName:    testAppName,
+				partitionID: emptyPartitionKey.partitionID,
+			},
+			appStructs: app.appStructs,
+		}
+		logCap.Reset()
+
+		recoveredPartition, err := cmdProc.recoverPartition(t.Context(), cmd)
+		require.NoError(err)
+		require.Equal(istructs.FirstOffset, recoveredPartition.nextPLogOffset)
+		requireCheckpointFallbackReads(t, malformedOffset, control.pLogReads.values(emptyPartitionKey))
+		logCap.HasLine("level=ERROR", "stage=cp.partition_recovery.checkpoint.invalid",
+			fmt.Sprintf("stored PLog offset %d does not identify an existing event", malformedOffset))
+
+		emptyWorkspaceKey := workspaceKey{partitionKey: emptyPartitionKey, wsid: 100}
+		storage.forceWorkspace(app.appStructs.ClusterAppID(), emptyWorkspaceKey.wsid,
+			checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: malformedOffset})
+		logCap.Reset()
+		recoveredWorkspace, err := cmdProc.recoverWorkspace(t.Context(), t.Context(), emptyWorkspaceKey,
+			&appPartition{clusterAppID: app.appStructs.ClusterAppID(), appStructs: app.appStructs})
+		require.NoError(err)
+		require.Equal(istructs.FirstOffset, recoveredWorkspace.NextWLogOffset)
+		nextRecordID, err := recoveredWorkspace.idGenerator.NextID(1)
+		require.NoError(err)
+		require.Equal(istructs.FirstUserRecordID, nextRecordID)
+		requireCheckpointFallbackReads(t, malformedOffset, control.wLogReads.values(emptyWorkspaceKey))
+		logCap.HasLine("level=ERROR", "stage=cp.workspace_recovery.checkpoint.invalid",
+			fmt.Sprintf("stored WLog offset %d does not identify an ID-bearing event", malformedOffset))
 	})
 }
 
@@ -943,6 +1188,65 @@ func nextPLogOffsetForTest(t *testing.T, appStructs istructs.IAppStructs, partit
 		})
 	require.NoError(t, err)
 	return next
+}
+
+func requireCheckpointFallbackReads(t *testing.T, checkpointOffset istructs.Offset, actual []logRead) {
+	t.Helper()
+	require.Equal(t, []logRead{
+		{offset: checkpointOffset, count: istructs.ReadToTheEnd},
+		{offset: istructs.FirstOffset, count: istructs.ReadToTheEnd},
+	}, actual)
+}
+
+type appStructsWithTestEvents struct {
+	istructs.IAppStructs
+	events istructs.IEvents
+}
+
+func (a *appStructsWithTestEvents) Events() istructs.IEvents {
+	return a.events
+}
+
+// pLogCheckpointSkippingEvents simulates a deleted checkpoint event while
+// retaining readable events after it. The fallback read from FirstOffset is
+// delegated unchanged so recovery can reconstruct the actual log tail.
+type pLogCheckpointSkippingEvents struct {
+	istructs.IEvents
+	partitionID      istructs.PartitionID
+	checkpointOffset istructs.Offset
+}
+
+func (e *pLogCheckpointSkippingEvents) ReadPLog(ctx context.Context, partitionID istructs.PartitionID,
+	offset istructs.Offset, toReadCount int, cb istructs.PLogEventsReaderCallback) error {
+	if partitionID == e.partitionID && offset == e.checkpointOffset {
+		offset++
+	}
+	return e.IEvents.ReadPLog(ctx, partitionID, offset, toReadCount, cb)
+}
+
+type wLogCheckpointSkippingEvents struct {
+	istructs.IEvents
+	wsid             istructs.WSID
+	checkpointOffset istructs.Offset
+}
+
+func (e *wLogCheckpointSkippingEvents) ReadWLog(ctx context.Context, wsid istructs.WSID,
+	offset istructs.Offset, toReadCount int, cb istructs.WLogEventsReaderCallback) error {
+	if wsid == e.wsid && offset == e.checkpointOffset {
+		offset++
+	}
+	return e.IEvents.ReadWLog(ctx, wsid, offset, toReadCount, cb)
+}
+
+func newDirectRecoveryCmdProc(storage checkpoints.IRecoveryCheckpointStorage, control *recoveryTestControl) *cmdProc {
+	_, workspaceHooks, hooks := control.testHooks()
+	return &cmdProc{
+		checkpointStorage:      storage,
+		numWSRecoverers:        defaultTestNumWSRecoverers,
+		workspaceRecoveryHooks: workspaceHooks,
+		cmdProcHooks:           cmdProcHooksOrNOP(hooks),
+		storeOp:                &pipeline.NOOP{},
+	}
 }
 
 func TestCUDUpdate(t *testing.T) {

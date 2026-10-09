@@ -85,7 +85,7 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 				require.Equal(tc.offset, actual.LastPLogOffset)
 				assertCheckpointJSON(t, sysVVMStorage,
 					partitionCheckpointPKeyForTest(tc.appID, tc.partitionID), checkpointCColsForTest(),
-					map[string]any{"lastPLogOffset": tc.offset})
+					map[string]any{"lastPLogOffset": float64(tc.offset)})
 			}
 		})
 

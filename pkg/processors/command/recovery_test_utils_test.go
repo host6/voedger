@@ -270,8 +270,8 @@ func (c *recoveryTestControl) testHooks() (
 	cmdProcHooks *commandProcessorHooks,
 ) {
 	return c.partitions.hooks(), c.workspaces.hooks(), &commandProcessorHooks{
-		pLogRead: c.pLogReads.record,
-		wLogRead: c.wLogReads.record,
+		onPLogRead: c.pLogReads.record,
+		onWLogRead: c.wLogReads.record,
 	}
 }
 
