@@ -42,7 +42,7 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 
 	t.Run("values format", func(t *testing.T) {
 		partition := checkpoints.PartitionCheckpoint{LastPLogOffset: 42}
-		workspace := checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 43}
+		workspace := checkpoints.WorkspaceCheckpoint{WLogIDBearingOffset: 43}
 
 		require.NoError(checkpointStorage.PutPartitionCheckpoint(appID, partitionID, partition))
 		require.NoError(checkpointStorage.PutWorkspaceCheckpoint(appID, wsid, workspace))
@@ -60,7 +60,7 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 		assertCheckpointJSON(t, sysVVMStorage, partitionCheckpointPKeyForTest(appID, partitionID),
 			checkpointCColsForTest(), map[string]any{"lastPLogOffset": float64(42)})
 		assertCheckpointJSON(t, sysVVMStorage, workspaceCheckpointPKeyForTest(appID, wsid),
-			checkpointCColsForTest(), map[string]any{"lastWLogOffsetWithNewRecordIDs": float64(43)})
+			checkpointCColsForTest(), map[string]any{"wlogIDBearingOffset": float64(43)})
 	})
 
 	t.Run("partition-key suffixes isolate applications partitions and workspaces", func(t *testing.T) {
@@ -101,16 +101,16 @@ func TestRecoveryCheckpointStorage(t *testing.T) {
 			}
 			for _, tc := range workspaceCases {
 				require.NoError(checkpointStorage.PutWorkspaceCheckpoint(tc.appID, tc.wsid,
-					checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: tc.offset}))
+					checkpoints.WorkspaceCheckpoint{WLogIDBearingOffset: tc.offset}))
 			}
 			for _, tc := range workspaceCases {
 				actual, ok, err := checkpointStorage.GetWorkspaceCheckpoint(tc.appID, tc.wsid)
 				require.NoError(err)
 				require.True(ok)
-				require.Equal(tc.offset, actual.LastWLogOffsetWithNewRecordIDs)
+				require.Equal(tc.offset, actual.WLogIDBearingOffset)
 				assertCheckpointJSON(t, sysVVMStorage,
 					workspaceCheckpointPKeyForTest(tc.appID, tc.wsid), checkpointCColsForTest(),
-					map[string]any{"lastWLogOffsetWithNewRecordIDs": float64(tc.offset)})
+					map[string]any{"wlogIDBearingOffset": float64(tc.offset)})
 			}
 		})
 	})
@@ -146,10 +146,10 @@ func TestRecoveryCheckpointStorageUsesLastWriteWins(t *testing.T) {
 	require.NoError(checkpointStorage.PutPartitionCheckpoint(appID, partitionID,
 		checkpoints.PartitionCheckpoint{LastPLogOffset: 200}))
 	require.NoError(checkpointStorage.PutWorkspaceCheckpoint(appID, wsid,
-		checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 50}))
+		checkpoints.WorkspaceCheckpoint{WLogIDBearingOffset: 50}))
 
 	partition := checkpoints.PartitionCheckpoint{LastPLogOffset: 100}
-	workspace := checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 40}
+	workspace := checkpoints.WorkspaceCheckpoint{WLogIDBearingOffset: 40}
 	require.NoError(checkpointStorage.PutPartitionCheckpoint(appID, partitionID, partition))
 	require.NoError(checkpointStorage.PutWorkspaceCheckpoint(appID, wsid, workspace))
 

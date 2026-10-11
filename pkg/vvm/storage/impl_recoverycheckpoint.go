@@ -62,7 +62,7 @@ func (s *implCheckpointStorage) GetWorkspaceCheckpoint(appID istructs.ClusterApp
 func (s *implCheckpointStorage) PutWorkspaceCheckpoint(appID istructs.ClusterAppID,
 	wsid istructs.WSID, checkpoint checkpoints.WorkspaceCheckpoint) error {
 	pKey := workspaceCheckpointPKey(appID, wsid)
-	value := fmt.Sprintf(`{"%s":%d}`, jsonFieldLastWLogOffsetWithNewRecordIDs, checkpoint.LastWLogOffsetWithNewRecordIDs)
+	value := fmt.Sprintf(`{"%s":%d}`, jsonFieldWLogIDBearingOffset, checkpoint.WLogIDBearingOffset)
 	if err := s.sysVVMStorage.Put(pKey, checkpointCCols, []byte(value)); err != nil {
 		return fmt.Errorf("put workspace recovery checkpoint: %w", err)
 	}
@@ -89,6 +89,11 @@ func workspaceCheckpointPKey(appID istructs.ClusterAppID, wsid istructs.WSID) []
 	return binary.BigEndian.AppendUint64(pKey, uint64(wsid))
 }
 
+// WorkspaceCheckpointKey returns storage partition key and clustering columns for a workspace recovery checkpoint.
+func WorkspaceCheckpointKey(appID istructs.ClusterAppID, wsid istructs.WSID) (pKey, cCols []byte) {
+	return workspaceCheckpointPKey(appID, wsid), append([]byte(nil), checkpointCCols...)
+}
+
 func decodePartitionCheckpoint(data []byte) (partCheckpoint checkpoints.PartitionCheckpoint, fields map[string]json.RawMessage, err error) {
 	err = json.Unmarshal(data, &fields)
 	if err != nil {
@@ -105,11 +110,11 @@ func decodeWorkspaceCheckpoint(data []byte) (wsCheckpoint checkpoints.WorkspaceC
 	if err = json.Unmarshal(data, &fields); err != nil {
 		return checkpoints.WorkspaceCheckpoint{}, nil, err
 	}
-	lastWLogOffsetWithNewRecordIDs, err := decodeRequiredJSONField[istructs.Offset](fields, jsonFieldLastWLogOffsetWithNewRecordIDs)
+	wlogIDBearingOffset, err := decodeRequiredJSONField[istructs.Offset](fields, jsonFieldWLogIDBearingOffset)
 	if err != nil {
 		return checkpoints.WorkspaceCheckpoint{}, nil, err
 	}
-	return checkpoints.WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: lastWLogOffsetWithNewRecordIDs}, fields, nil
+	return checkpoints.WorkspaceCheckpoint{WLogIDBearingOffset: wlogIDBearingOffset}, fields, nil
 }
 
 func decodeRequiredJSONField[T ~uint64](fields map[string]json.RawMessage, name string) (T, error) {
@@ -123,4 +128,3 @@ func decodeRequiredJSONField[T ~uint64](fields map[string]json.RawMessage, name 
 	}
 	return value, nil
 }
-

@@ -29,7 +29,7 @@ func recoveryCheckpointProjector(storage IRecoveryCheckpointStorage) func(istruc
 			return nil
 		}
 		return storage.PutWorkspaceCheckpoint(appID, event.Workspace(), WorkspaceCheckpoint{
-			LastWLogOffsetWithNewRecordIDs: event.WLogOffset(),
+			WLogIDBearingOffset: event.WLogOffset(),
 		})
 	}
 }

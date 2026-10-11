@@ -488,8 +488,9 @@ func (s restartStorage) AppStorage(t testing.TB, appQName appdef.AppQName) istor
 }
 
 // TestRestartPreservingStorageWithHooks runs two VVM instances over the same
-// storage. Stop hooks run after the respective VVM has fully stopped, so they
-// can inspect stable storage before the next lifecycle phase starts.
+// storage and VIT config. Config-declared entities like logins are created during
+// the first run. Stop hooks run after the respective VVM has fully stopped, so
+// they can inspect stable storage before the next lifecycle phase starts.
 // cfg must be owned.
 func TestRestartPreservingStorageWithHooks(t *testing.T, cfg *VITConfig, hooks RestartPreservingStorageHooks) {
 	t.Helper()
@@ -507,12 +508,17 @@ func TestRestartPreservingStorageWithHooks(t *testing.T, cfg *VITConfig, hooks R
 			return sharedStorageFactory, nil
 		}
 	}))
+	var appWorkspaces map[appdef.AppQName]map[string]*AppWorkspace
+	var principals map[appdef.AppQName]map[string]*Principal
 	func() {
 		vit := NewVIT(t, cfg)
 		defer vit.TearDown()
 		if hooks.FirstRun != nil {
 			hooks.FirstRun(t, vit)
 		}
+		// need to traverse workspaces and principals created on the first run
+		appWorkspaces = vit.appWorkspaces
+		principals = vit.principals
 	}()
 
 	storage := restartStorage{
@@ -523,7 +529,7 @@ func TestRestartPreservingStorageWithHooks(t *testing.T, cfg *VITConfig, hooks R
 	}
 
 	func() {
-		vit := NewVIT(t, cfg)
+		vit := restartVIT(t, cfg, appWorkspaces, principals)
 		defer vit.TearDown()
 		if hooks.SecondRun != nil {
 			hooks.SecondRun(t, vit)

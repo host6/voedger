@@ -308,9 +308,9 @@ func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, requestCtx cont
 		return nil, err
 	}
 	startOffset := istructs.FirstOffset
-	validateCheckpoint := ok && checkpoint.LastWLogOffsetWithNewRecordIDs >= istructs.FirstOffset
+	validateCheckpoint := ok && checkpoint.WLogIDBearingOffset >= istructs.FirstOffset
 	if validateCheckpoint {
-		startOffset = checkpoint.LastWLogOffsetWithNewRecordIDs
+		startOffset = checkpoint.WLogIDBearingOffset
 	}
 
 	lastWLogOffset, lastRecordID, checkpointValid, err := cmdProc.scanWLog(

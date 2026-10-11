@@ -22,15 +22,15 @@ const (
 )
 
 const (
-	MaxKeyLength                            = 1024
-	MaxValueLength                          = 65536
-	MaxTTLSeconds                           = 31536000
-	appTTLPKSize                            = 8
-	appTTLValidationErrTemplate             = "%w: %w"
-	partitionCheckpointPKeySize             = 4 + 4 + 2 // pkeyPrefix+ClusterAppID+PartitionID
-	workspaceCheckpointPKeySize             = 4 + 4 + 8 // pkeyPrefix+ClusterAppUD+WSID
-	jsonFieldLastPLogOffset                 = "lastPLogOffset"
-	jsonFieldLastWLogOffsetWithNewRecordIDs = "lastWLogOffsetWithNewRecordIDs"
+	MaxKeyLength                 = 1024
+	MaxValueLength               = 65536
+	MaxTTLSeconds                = 31536000
+	appTTLPKSize                 = 8
+	appTTLValidationErrTemplate  = "%w: %w"
+	partitionCheckpointPKeySize  = 4 + 4 + 2 // pkeyPrefix+ClusterAppID+PartitionID
+	workspaceCheckpointPKeySize  = 4 + 4 + 8 // pkeyPrefix+ClusterAppID+WSID
+	jsonFieldLastPLogOffset      = "lastPLogOffset"
+	jsonFieldWLogIDBearingOffset = "wlogIDBearingOffset"
 )
 
 var (

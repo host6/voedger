@@ -12,7 +12,9 @@ type PartitionCheckpoint struct {
 }
 
 type WorkspaceCheckpoint struct {
-	LastWLogOffsetWithNewRecordIDs istructs.Offset `json:"lastWLogOffsetWithNewRecordIDs"`
+	// WLogIDBearingOffset identifies an ID-bearing WLog event from which recovery can scan.
+	// It need not identify the latest ID-bearing event.
+	WLogIDBearingOffset istructs.Offset `json:"wlogIDBearingOffset"`
 }
 
 type IRecoveryCheckpointStorage interface {

@@ -68,7 +68,7 @@ func TestRecoveryCheckpointProjectorWritesOnlyIDBearingWLogOffsets(t *testing.T)
 	require.Equal([]string{"workspace"}, storage.calls)
 	require.Equal(istructs.ClusterAppID(7), storage.appID)
 	require.Equal(istructs.WSID(5), storage.wsid)
-	require.Equal(WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 20}, storage.workspace)
+	require.Equal(WorkspaceCheckpoint{WLogIDBearingOffset: 20}, storage.workspace)
 
 	event.pLogOffset = 2
 	event.wsid = 6
@@ -83,7 +83,7 @@ func TestRecoveryCheckpointProjectorWritesOnlyIDBearingWLogOffsets(t *testing.T)
 	require.NoError(projector(event, state, nil))
 	require.Equal([]string{"workspace", "workspace"}, storage.calls)
 	require.Equal(istructs.WSID(6), storage.wsid)
-	require.Equal(WorkspaceCheckpoint{LastWLogOffsetWithNewRecordIDs: 22}, storage.workspace)
+	require.Equal(WorkspaceCheckpoint{WLogIDBearingOffset: 22}, storage.workspace)
 }
 
 func TestRecoveryCheckpointProjectorReturnsStorageErrors(t *testing.T) {
