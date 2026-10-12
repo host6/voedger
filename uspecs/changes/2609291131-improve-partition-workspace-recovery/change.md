@@ -198,6 +198,7 @@ References (external):
   - document: partition and workspace recovery admission and failure messages emitted through `cp.error`
   - document: partition and workspace recovery lifecycle stages, context attributes, and completion messages
   - document: malformed-checkpoint error stages, messages, recovery context attributes, and fallback to `FirstOffset`
+  - align malformed-checkpoint messages with the exact `retrying from FirstOffset` suffix emitted by command recovery
 
 ## Construction
 
@@ -263,7 +264,7 @@ Gherkin scenario test placement:
   - verify that a zero limit admits no workspace recovery
   - verify that an invalid checkpoint over an empty log logs an error, performs at most one fallback scan, and retains the empty-log defaults
 
-- [x] create: [command/recover_manager_test.go](../../../pkg/processors/command/recover_manager_test.go)
+- [x] create: [command/recovery_manager_test.go](../../../pkg/processors/command/recovery_manager_test.go)
   - directly verify generic recovery-manager startup, ready lookup, duplicate suppression, retained failures, retries, admission limits, hooks, cancellation, reset, stale-completion rejection, recovered-value projection, and shutdown clearing
   - relocate stale-completion coverage from the partition-manager integration-style test
 
@@ -290,6 +291,9 @@ Gherkin scenario test placement:
 
 - [x] update: [actualizers/impl_helpers_test.go](../../../pkg/processors/actualizers/impl_helpers_test.go)
   - extend PLog event mocks with handling-partition and PLog-offset accessors used by the checkpoint projector
+
+- [x] update: [istructsmem/event-types_test.go](../../../pkg/istructsmem/event-types_test.go)
+  - use the exported WLog storage-key helper in the event-read failure test
 
 - [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
   - implement every non-empty-log scenario in [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature) as a VIT integration test
@@ -318,8 +322,8 @@ Gherkin scenario test placement:
 
 - [x] update: [vit/impl.go](../../../pkg/vit/impl.go)
   - extract common VIT initialization performed after VVM launch so normal creation and storage-preserving restart apply options, validate the email captor, advance test time, refresh principal tokens, and capture the initial goroutine count consistently
-  - replace the ambiguous launch-only switch with an explicit `provisionConfigEntities` decision
-  - when `provisionConfigEntities` is false, still apply the VVM config, register workspace templates, and launch services, but skip sign-up, workspace initialization, configured document and subject creation, and post-initialization fixture actions
+  - replace the ambiguous launch-only switch with an explicit `createEntities` decision
+  - when `createEntities` is false, still apply the VVM config, register workspace templates, and launch services, but skip sign-up, workspace initialization, configured document and subject creation, and post-initialization fixture actions
   - keep `appWorkspaces` and `principals` as explicit inputs on the restart path rather than defining a generic or vaguely named holder type
 
 ### Checkpoint contracts and storage
@@ -327,6 +331,12 @@ Gherkin scenario test placement:
 - [x] update: [istructs/events-types.go](../../../pkg/istructs/events-types.go)
   - expose handling partition and PLog offset on persisted PLog events for checkpoint projection
   - keep `IIDGenerator` free of checkpoint-specific record-ID accessors
+
+- [x] update: [istructsmem/utils.go](../../../pkg/istructsmem/utils.go)
+  - export the PLog and WLog storage-key helpers used to construct exact missing-event checkpoint cases
+
+- [x] update: [istructsmem/impl.go](../../../pkg/istructsmem/impl.go)
+  - use the exported PLog and WLog storage-key helpers for event persistence and reads
 
 - [x] update: [storage/consts.go](../../../pkg/vvm/storage/consts.go)
   - retain the sequence-storage prefix values and document partition ID and WSID as partition-key suffixes rather than clustering columns
@@ -376,7 +386,7 @@ Gherkin scenario test placement:
 - [x] update: [command/consts.go](../../../pkg/processors/command/consts.go)
   - define shared errors for recovery-in-progress, concurrency-limit, and retained-failure outcomes
 
-- [x] create: [command/recover_manager.go](../../../pkg/processors/command/recover_manager.go)
+- [x] create: [command/recovery_manager.go](../../../pkg/processors/command/recovery_manager.go)
   - implement the generic keyed recovery lifecycle shared by partitions and workspaces
   - reserve optional concurrency slots before creating attempts, retain failures for one reporting request, and publish successful recovered values
   - reject stale completions after reset and join all workers before clearing state during shutdown
@@ -408,6 +418,7 @@ Gherkin scenario test placement:
   - recover empty fallback scans with `FirstOffset` and `FirstUserRecordID` defaults and never loop beyond two total scans
   - log malformed checkpoints through the dedicated partition or workspace error stage with existing recovery context attributes
   - leave checkpoint repair to the asynchronous projector rather than writing checkpoint storage during recovery
+  - propagate PLog write errors so the command pipeline can schedule partition recovery
 
 - [x] update: [command/provide.go](../../../pkg/processors/command/provide.go)
   - inject checkpoint storage and the exact workspace-recovery limit into command-service construction

@@ -233,7 +233,7 @@ The context with attributes is received from Router
 - `extension` attrib: `sys._Recovery`
 - `partid` attrib: partition ID
 - Partition recovery start: level `Info`, stage `cp.partition_recovery.start`, msg (empty)
-- Invalid partition checkpoint: level `Error`, stage `cp.partition_recovery.checkpoint.invalid`, msg `stored PLog offset <checkpointOffset> does not identify an existing event; retrying from FirstOffset <firstOffset>`
+- Invalid partition checkpoint: level `Error`, stage `cp.partition_recovery.checkpoint.invalid`, msg `stored PLog offset <checkpointOffset> does not identify an existing event; retrying from FirstOffset`
   - emitted when an inclusive read from a present checkpoint returns no event or its first event offset differs from the stored offset
   - uses the partition recovery context attributes and precedes the fallback read from `FirstOffset`
 - Partition recovery complete: level `Info`, stage `cp.partition_recovery.complete`, msg contains `nextPLogOffset <offset>, workspaces <JSON>`
@@ -247,7 +247,7 @@ The context with attributes is received from Router
 - Inherits the partition-recovery attributes `vapp=sys/voedger`, `extension=sys._Recovery`, and `partid=<partitionID>`
 - `wsid` attrib: workspace ID
 - Workspace recovery start: level `Info`, stage `cp.workspace_recovery.start`, msg (empty)
-- Invalid workspace checkpoint: level `Error`, stage `cp.workspace_recovery.checkpoint.invalid`, msg `stored WLog offset <checkpointOffset> does not identify an ID-bearing event; retrying from FirstOffset <firstOffset>`
+- Invalid workspace checkpoint: level `Error`, stage `cp.workspace_recovery.checkpoint.invalid`, msg `stored WLog offset <checkpointOffset> does not identify an ID-bearing event; retrying from FirstOffset`
   - emitted when an inclusive read from a present checkpoint returns no event, its first event offset differs from the stored offset, or the checkpoint event has no newly allocated non-singleton record ID
   - uses the workspace recovery context attributes and precedes the fallback read from `FirstOffset`
 - ReadWLog failure during either the checkpoint scan or the `FirstOffset` fallback scan: level `Error`, stage `cp.workspace_recovery.readwlog.error`, msg `<error message>`
