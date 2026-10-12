@@ -66,11 +66,18 @@ Decisions:
 - The VIT shared-storage restart helper uses the same `VITConfig` for both VVM runs. It materializes config-declared logins, workspaces, documents, and subjects only during the first run; the second run launches the VVM over preserved storage without issuing fixture-provisioning commands.
 - Preserve VIT lookup and authorization behavior on the second run by carrying the `appWorkspaces` and `principals` maps from the first VIT into the second VIT before common VIT initialization refreshes principal tokens. Keep these maps explicit: do not add `SecondRunConfig` or an aggregate type such as `predefinedEntities`.
 
-### Why to store the offset of **ANY** ID-bearing event only?
+### Key points
 
-- Store the last handled offset + last IDs: wrong, IDs might be recorded wrongly
+- Store offset of **ANY** ID-bearing event. Not the last seen ID-bearing, not the last handled etc
+- The stored offset is only a safe scan accelerator. It must not become an authoritative copy of either recovered value.
+- Term: this stored offset is `checkpoint`, `recovery checkpoint`
+
+#### Why?
+
+- Store the last handled offset + last IDs: wrong, IDs may be recorded incorrectly
 - Store the last handled offset: wrong, we do not know last IDs
-- Store both last ID-bearing + last handled offsets, scan only from the last handled offset, then read the ID-bearing event separately when the tail contains no IDs: wrong: ID-bearing offset coud point to valid but not actually last ID-bearing event (wrongly recorded).
+- Store both last ID-bearing + last handled offsets, read tail from the last handled offset, then read the ID-bearing event separately if the tail contains no IDs: wrong: ID-bearing offset coud point to valid but not actually last ID-bearing event (incorrectly recorded).
+  - we have to prove that IDs are really last so we need to read out the tail anyway
 
 Problematic example:
 
@@ -96,7 +103,7 @@ Nothing in either read proves that event 3 is the latest ID-bearing event before
 Event 7 remains invisible to this recovery path.
 ```
 
-A WLog ID-bearing offset is only a safe scan accelerator. It must not become an authoritative copy of either recovered value.
+#### Recovery flow
 
 The safe recovery path must start at `wlogIDBearingOffset` and read through the actual tail:
 
@@ -107,7 +114,7 @@ The safe recovery path must start at `wlogIDBearingOffset` and read through the 
                          v                                  v                      v
 WLog: ---- 1 ---- 2 ---- 3 ---- 4 ---- 5 ---- 6 ---- 7 ---- 8 ---- 9 ---- 10 ---- 11
                          ^                                  ^                      ^
-                         |                                  |                      |
+                     checkpoint                             |                      |
                          |                            sees last IDs      sees last wlog offset
                          |----------- ReadWLog(3, ReadToTheEnd) ------------------>|
 
@@ -125,8 +132,8 @@ So:
 The remaining tradeoff is recovery time when the WLog ID-bearing offset is old:
 
 ```text
-               stored WLog ID-bearing offset
-               ID-bearing; IDs 1001..1003                                                    WLog end
+                     checkpoint
+                   IDs 1001..1003                                                            WLog end
                           |                                                                      |
                           v                                                                      v
 WLog: ------------------ 41 ---- non-ID ---- non-ID ---- ... 1,000,000 non-ID events ... ---- 1000041
@@ -136,11 +143,12 @@ events read       = 1,000,001
 nextRecordID      = 1004
 nextWLogOffset    = 1000042
 ```
+#### Bad cases on recovery
 
 What if the WLog ID-bearing offset is recorded incorrectly?
 
 - `ReadWLog(wlogIDBearingOffset, ReadToTheEnd)`
-  - no callback e.g. the `checkpointOffset` is beyond the end) -> checkpoint invalid -> `ReadWLog(FirstOffset, ReadToTheEnd)`
+  - no callback e.g. the `wlogIDBearingOffset` is beyond the end) -> checkpoint invalid -> `ReadWLog(FirstOffset, ReadToTheEnd)`
   - first callback offset differs from `wlogIDBearingOffset` -> checkpoint invalid -> `ReadWLog(FirstOffset, ReadToTheEnd)`
   - event in the first callback contains no new non-singleton IDs -> checkpoint invalid -> `ReadWLog(FirstOffset, ReadToTheEnd)`
 
@@ -169,30 +177,17 @@ References (external):
 ## Functional design
 
 - [x] create: [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature)
-  - Feature specification for partition and workspace recovery from absent and zero checkpoints, checkpoints pointing to valid offsets, and invalid checkpoints, including invalid checkpoints over empty logs
-
-- [x] update: [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature)
-  - fix: partition-checkpoint scenarios explicitly observe partition recovery first, then workspace recovery on the next request, and succeed only on the request made after both recoveries complete
-  - fix: use record IDs from the user-record range: `200001` for the first allocated user record, `200002` through `200005` for the later ID-bearing event, and `200006` for the next insert
-  - fix: require the complete invalid-checkpoint messages ending with `retrying from FirstOffset`
-  - add: absent and zero checkpoint scenarios over empty PLogs and WLogs; the first command uses `FirstOffset`, the first insert uses `FirstOffset` and `FirstUserRecordID`, and no invalid-checkpoint error is logged
-  - add: workspace recovery over a non-empty WLog with no newly allocated non-singleton record IDs; the next WLog offset follows the actual tail and the next record ID remains `FirstUserRecordID`
-  - add: workspace recovery from an ID-bearing checkpoint that is also the actual WLog tail, covering the one-event inclusive-scan boundary
-  - add: valid-checkpoint suffix examples in which CUD-free, singleton-only, and existing-record update events advance the WLog tail without advancing the next user record ID
-  - expand: invalid workspace checkpoint examples distinguish an existing CUD-free event, singleton-only event, and existing-record update from an ID-bearing event; each falls back to `FirstOffset`
-  - add: externally observable workspace-recovery admission scenarios for a duplicate request to the same recovering workspace, a saturated nonzero recovery limit with no queued attempt and a successful later retry, and a zero recovery limit
-  - add: recovery-failure lifecycle scenario in which one request reports the retained failure, the following request starts one retry, and a request after successful retry uses the recovered workspace
-
-- [x] update: [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature)
-  - add at most one compact plain-text arrow flow as the free-form description immediately below each `Rule` and before its first scenario; do not encode the diagrams as executable steps, Doc Strings, Data Tables, or `#` comments
-  - illustrate `Partition checkpoint` as usable checkpoint versus absent, zero, or invalid checkpoint converging on recovery of the actual PLog tail and the next successful command
-  - illustrate `Workspace checkpoint` as recovery of the actual WLog tail and latest allocated user record ID, with non-ID-bearing suffix events advancing only the next WLog offset
-  - illustrate `Empty WLog` as all accepted checkpoint states converging on the first insert at `FirstOffset` and `FirstUserRecordID`, with invalid checkpoints additionally producing the specified error
-  - illustrate `Workspace recovery admission` as duplicate requests sharing one recovery, an available limit starting recovery, a saturated limit rejecting without queueing, and a retained failure permitting one retry
-  - keep every diagram declarative and externally meaningful: omit concrete Examples offsets and record IDs, scan ranges, callbacks, storage layout, helper names, and other implementation mechanics
-  - preserve all existing scenario names, steps, Examples headers, and Examples rows byte-for-byte so feature-test traceability remains unchanged
+  - Feature specification for externally observable partition and workspace recovery from valid, absent, zero, and invalid checkpoints; empty-log defaults; non-ID-bearing WLog suffixes; workspace-recovery admission and retry behavior; and compact declarative rule flows
 
 ## Technical design
+
+- [x] update: [apps/arch-sequences.md](../../specs/prod/apps/arch-sequences.md)
+  - update: allocation and recovery relationships to include persistent recovery checkpoints and separate partition and workspace recovery managers
+  - replace: full-PLog partition recovery and eager workspace reconstruction with inclusive checkpoint-tail scans and request-triggered workspace recovery
+  - document: `lastPLogOffset` and `wlogIDBearingOffset` meanings, checkpoint production by `ProjectorRecoveryCheckpoint`, and why the WLog checkpoint is only a safe scan start
+  - document: checkpoint validation, one fallback scan from `FirstOffset`, empty-log defaults, actual-tail recovery, and latest encountered non-singleton record-ID recovery
+  - update: recovery admission, retained failure, retry, concurrency-limit, cancellation, shutdown, and stale-attempt behavior for both recovery scopes
+  - update: recovery sequence diagrams, invariants, implementation links, and test evidence to match the new architecture
 
 - [x] update: [apps/logging--td.md](../../specs/prod/apps/logging--td.md)
   - document: partition and workspace recovery admission and failure messages emitted through `cp.error`
