@@ -162,11 +162,25 @@ func (b *reusableHostState) bind(wp *cmdWorkpiece) {
 	b.wp = wp
 }
 
+// partitionKey identifies one application partition for recovery.
+//
+//	partitionManager
+//	    |
+//	    +-- [appQName, partitionID] --> appPartition
 type partitionKey struct {
 	appQName    appdef.AppQName
 	partitionID istructs.PartitionID
 }
 
+// workspaceKey identifies one workspace for recovery within its application
+// partition.
+//
+//	workspaceManager
+//	    |
+//	    +-- [appQName, partitionID, wsid] --> workspace
+//
+// Embedding partitionKey preserves the workspace's partition and application
+// scope while recovery is deduplicated and coordinated.
 type workspaceKey struct {
 	partitionKey
 	wsid istructs.WSID
@@ -188,11 +202,11 @@ type workspace struct {
 //	              +--> WSID 20 --> recovering/failed/ready workspace
 //	              +--> WSID 30 --> rejected while all recovery slots are busy
 //
-// Its recoverManager deduplicates requests by workspaceKey and shares the
+// Its recoveryManager deduplicates requests by workspaceKey and shares the
 // partition's bounded recovery slots, preventing one partition from starting
 // an unbounded number of workspace-recovery goroutines.
 type workspaceManager struct {
-	workspaces *recoverManager[workspaceKey, workspace]
+	workspaces *recoveryManager[workspaceKey, workspace]
 }
 
 // partitionManager keeps recovered and manages recovery of new partitions:
@@ -207,7 +221,7 @@ type workspaceManager struct {
 //
 // partitionKey[appQName,partID]
 type partitionManager struct {
-	partitions  *recoverManager[partitionKey, appPartition]
+	partitions  *recoveryManager[partitionKey, appPartition]
 	recoverFunc recoverPartitionFunc
 }
 

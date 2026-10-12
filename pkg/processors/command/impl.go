@@ -168,16 +168,16 @@ func borrowAppPart(_ context.Context, cmd *cmdWorkpiece) error {
 	return cmd.borrow()
 }
 
-func newAppPartition(numWSRecoverers uint, workspaceRecoveryHooks recoveryHooks[workspaceKey]) *appPartition {
+func newAppPartition(numWSRecoverers uint, workspaceRecoveryHooks recoveryHooks[workspaceKey, workspace]) *appPartition {
 	return &appPartition{
 		workspaces:     newWorkspaceManager(numWSRecoverers, workspaceRecoveryHooks),
 		nextPLogOffset: istructs.FirstOffset,
 	}
 }
 
-func newPartitionManager(hooks recoveryHooks[partitionKey], recoverFunc recoverPartitionFunc) *partitionManager {
+func newPartitionManager(hooks recoveryHooks[partitionKey, appPartition], recoverFunc recoverPartitionFunc) *partitionManager {
 	return &partitionManager{
-		partitions: newRecoverManager[partitionKey, appPartition](
+		partitions: newRecoveryManager[partitionKey, appPartition](
 			nil,
 			hooks,
 		),
@@ -185,9 +185,9 @@ func newPartitionManager(hooks recoveryHooks[partitionKey], recoverFunc recoverP
 	}
 }
 
-func newWorkspaceManager(numRecoverers uint, hooks recoveryHooks[workspaceKey]) *workspaceManager {
+func newWorkspaceManager(numRecoverers uint, hooks recoveryHooks[workspaceKey, workspace]) *workspaceManager {
 	return &workspaceManager{
-		workspaces: newRecoverManager[workspaceKey, workspace](
+		workspaces: newRecoveryManager[workspaceKey, workspace](
 			make(chan struct{}, numRecoverers),
 			hooks,
 		),
@@ -278,7 +278,7 @@ func (m *workspaceManager) getOrStart(vvmCtx context.Context, wsKey workspaceKey
 		})
 }
 
-func getOrStart[K comparable, T any](vvmCtx context.Context, manager *recoverManager[K, T], key K,
+func getOrStart[K comparable, T any](vvmCtx context.Context, manager *recoveryManager[K, T], key K,
 	errorSubject string, newAttempt newRecoveryAttemptFunc[T]) (*T, error) {
 	recovered, err := manager.getOrStart(vvmCtx, key, newAttempt)
 	switch {
@@ -299,7 +299,7 @@ func (m *workspaceManager) marshalJSON() ([]byte, error) {
 	return json.Marshal(workspaces)
 }
 
-// run in a goroutine by recoverManager
+// run in a goroutine by recoveryManager
 func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, requestCtx context.Context, wsKey workspaceKey, ap *appPartition) (*workspace, error) {
 	recoveryCtx := newWSRecoveryCtx(requestCtx, wsKey)
 	logger.InfoCtx(recoveryCtx, "cp.workspace_recovery.start", "")
@@ -325,8 +325,7 @@ func (cmdProc *cmdProc) recoverWorkspace(vvmCtx context.Context, requestCtx cont
 	}
 	if validateCheckpoint && !checkpointValid {
 		logger.ErrorCtx(recoveryCtx, "cp.workspace_recovery.checkpoint.invalid", fmt.Sprintf(
-			"stored WLog offset %d does not identify an ID-bearing event; retrying from FirstOffset %d",
-			startOffset, istructs.FirstOffset))
+			"stored WLog offset %d does not identify an ID-bearing event; retrying from FirstOffset", startOffset))
 		lastWLogOffset, lastRecordID, _, err = cmdProc.scanWLog(
 			vvmCtx, wsKey, ap, istructs.FirstOffset, false)
 		if err != nil {
@@ -460,7 +459,7 @@ func newPartRecoveryCtx(ctx context.Context, partID istructs.PartitionID) contex
 
 var errInvalidRecoveryCheckpoint = errors.New("invalid recovery checkpoint")
 
-// runs in goroutine by recoverManager
+// runs in goroutine by recoveryManager
 func (cmdProc *cmdProc) recoverPartition(vvmCtx context.Context, cmd *cmdWorkpiece) (ap *appPartition, err error) {
 	recoveryCtx := newPartRecoveryCtx(cmd.cmdMes.RequestCtx(), cmd.cmdMes.PartitionID())
 	logger.InfoCtx(recoveryCtx, "cp.partition_recovery.start", "")
@@ -488,8 +487,7 @@ func (cmdProc *cmdProc) recoverPartition(vvmCtx context.Context, cmd *cmdWorkpie
 	}
 	if validateCheckpoint && !checkpointValid {
 		logger.ErrorCtx(recoveryCtx, "cp.partition_recovery.checkpoint.invalid", fmt.Sprintf(
-			"stored PLog offset %d does not identify an existing event; retrying from FirstOffset %d",
-			startOffset, istructs.FirstOffset))
+			"stored PLog offset %d does not identify an existing event; retrying from FirstOffset", startOffset))
 		ap.nextPLogOffset = istructs.FirstOffset
 		lastPLogEvent, lastPLogOffset, _, err = cmdProc.getLastPLogEvent(
 			vvmCtx, recoveryCtx, key, cmd, ap, istructs.FirstOffset, false)
@@ -1238,16 +1236,18 @@ func (idGen *implIDGeneratorReporter) NextID(rawID istructs.RecordID) (storageID
 	return storageID, err
 }
 
-func nopRecoveryHooks[K comparable]() recoveryHooks[K] {
-	return hooksOrNOP(recoveryHooks[K]{})
+func nopRecoveryHooks[K comparable, T any]() recoveryHooks[K, T] {
+	return hooksOrNOP(recoveryHooks[K, T]{})
 }
 
-func hooksOrNOP[K comparable](hooks recoveryHooks[K]) recoveryHooks[K] {
+func hooksOrNOP[K comparable, T any](hooks recoveryHooks[K, T]) recoveryHooks[K, T] {
 	if hooks.scheduled == nil {
 		hooks.scheduled = func(K) {}
 	}
-	if hooks.beforeAttempt == nil {
-		hooks.beforeAttempt = func(context.Context, K) error { return nil }
+	if hooks.wrapAttempt == nil {
+		hooks.wrapAttempt = func(_ K, attempt recoveryAttemptFunc[T]) recoveryAttemptFunc[T] {
+			return attempt
+		}
 	}
 	if hooks.attemptCompleted == nil {
 		hooks.attemptCompleted = func(K, error) {}

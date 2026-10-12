@@ -15,18 +15,18 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
-// logRead turns one production log-reader call into a comparable test value:
+// logReadFromTo turns one production log-reader call into a comparable test value:
 //
-//	ReadPLog/ReadWLog(offset, count) --> logRead{offset, count}
+//	ReadPLog/ReadWLog(offset, count) --> logReadFromTo{offset, count}
 //
 // Tests use the resulting sequence to prove that recovery starts at its
 // checkpoint and performs one inclusive scan to the end.
-type logRead struct {
+type logReadFromTo struct {
 	offset istructs.Offset
 	count  int
 }
 
-// recoveryTestReads solves concurrent observation of recovery log reads:
+// logReadsRecorder solves concurrent observation of recovery log reads:
 //
 //	recovery goroutine --record(key, read)--\
 //	                                          +--> mutex --> byKey[key] history
@@ -35,34 +35,34 @@ type logRead struct {
 //
 // The lock keeps test inspection race-free without adding synchronization to
 // production PLog or WLog readers.
-type recoveryTestReads[K comparable] struct {
+type logReadsRecorder[K comparable] struct {
 	mu    sync.Mutex
-	byKey map[K][]logRead
+	byKey map[K][]logReadFromTo
 }
 
-func newRecoveryTestReads[K comparable]() *recoveryTestReads[K] {
-	return &recoveryTestReads[K]{byKey: map[K][]logRead{}}
+func newLogReadsRecorder[K comparable]() *logReadsRecorder[K] {
+	return &logReadsRecorder[K]{byKey: map[K][]logReadFromTo{}}
 }
 
 // record is the production hook at the write side of the observation flow:
 // Append order preserves the exact log-read order for that key.
-func (r *recoveryTestReads[K]) record(key K, offset istructs.Offset, count int) {
+func (r *logReadsRecorder[K]) record(key K, offset istructs.Offset, count int) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.byKey[key] = append(r.byKey[key], logRead{offset: offset, count: count})
+	r.byKey[key] = append(r.byKey[key], logReadFromTo{offset: offset, count: count})
 }
 
-func (r *recoveryTestReads[K]) reset(key K) {
+func (r *logReadsRecorder[K]) reset(key K) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.byKey, key)
 }
 
 // values returns recorded log records snapshot
-func (r *recoveryTestReads[K]) values(key K) []logRead {
+func (r *logReadsRecorder[K]) values(key K) []logReadFromTo {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return append([]logRead(nil), r.byKey[key]...)
+	return append([]logReadFromTo(nil), r.byKey[key]...)
 }
 
 // recoveryAttempt makes one asynchronous recovery deterministic for a test:
@@ -84,12 +84,14 @@ type recoveryAttempt struct {
 //	blockNext(key) ----> nextGates[key] ---\
 //	failNext(key, err) -> nextFailures[key] +--> scheduled(key) --> attempts[key]
 //	request --------------------------------/          |                 |
-//	                                                   +--> starts[key]  +--> wait(key)
+//	                                                   +--> starts[key]  +--> wrapAttempt
+//	                                                                         |
+//	                                                                         +--> wait(key)
 //
 // Pending controls are consumed by exactly one scheduled attempt. starts proves
 // that duplicate and over-limit requests did not launch work. K lets the same
 // mechanism control both partition and workspace recovery.
-type recoveryTestAttempts[K comparable] struct {
+type recoveryTestAttempts[K comparable, T any] struct {
 	mu           sync.Mutex
 	attempts     map[K]*recoveryAttempt
 	starts       map[K]int
@@ -97,8 +99,8 @@ type recoveryTestAttempts[K comparable] struct {
 	nextFailures map[K]error
 }
 
-func newRecoveryTestAttempts[K comparable]() *recoveryTestAttempts[K] {
-	return &recoveryTestAttempts[K]{
+func newRecoveryTestAttempts[K comparable, T any]() *recoveryTestAttempts[K, T] {
+	return &recoveryTestAttempts[K, T]{
 		attempts:     map[K]*recoveryAttempt{},
 		starts:       map[K]int{},
 		nextGates:    map[K]<-chan struct{}{},
@@ -106,21 +108,21 @@ func newRecoveryTestAttempts[K comparable]() *recoveryTestAttempts[K] {
 	}
 }
 
-func (c *recoveryTestAttempts[K]) hooks() recoveryHooks[K] {
-	return recoveryHooks[K]{
+func (c *recoveryTestAttempts[K, T]) hooks() recoveryHooks[K, T] {
+	return recoveryHooks[K, T]{
 		scheduled:        c.scheduled,
-		beforeAttempt:    c.beforeAttempt,
+		wrapAttempt:      c.wrapAttempt,
 		attemptCompleted: c.attemptCompleted,
 	}
 }
 
-// scheduled consumes controls only after recoverManager admits the work:
+// scheduled consumes controls only after recoveryManager admits the work:
 //
 //	next gate/failure --> recoveryAttempt --> attempts[key]
 //	                                      \-> starts[key]++
 //
 // Requests rejected by the concurrency limit never reach this method.
-func (c *recoveryTestAttempts[K]) scheduled(key K) {
+func (c *recoveryTestAttempts[K, T]) scheduled(key K) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.starts[key]++
@@ -133,31 +135,37 @@ func (c *recoveryTestAttempts[K]) scheduled(key K) {
 	delete(c.nextFailures, key)
 }
 
-// beforeAttempt turns test controls into recovery behavior:
+// wrapAttempt turns test controls into recovery behavior inside the admitted
+// recovery attempt:
 //
-//	gate open   --> wait ----> gate closed --> injected error or nil
-//	ctx canceled -----------^---------------> context error
+//	gate open   --> attempt(ctx) --> wait ----> gate closed --> injected error or production attempt
+//	ctx canceled --------------------------^---------------> context error
 //
 // Context participation lets service shutdown release a deliberately blocked
 // attempt.
-func (c *recoveryTestAttempts[K]) beforeAttempt(ctx context.Context, key K) error {
+func (c *recoveryTestAttempts[K, T]) wrapAttempt(key K, next recoveryAttemptFunc[T]) recoveryAttemptFunc[T] {
 	c.mu.Lock()
 	attempt := c.attempts[key]
 	c.mu.Unlock()
-	if attempt.gate != nil {
-		select {
-		case <-attempt.gate:
-		case <-ctx.Done():
-			return ctx.Err()
+	return func(ctx context.Context) (*T, error) {
+		if attempt.gate != nil {
+			select {
+			case <-attempt.gate:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
 		}
+		if attempt.err != nil {
+			return nil, attempt.err
+		}
+		return next(ctx)
 	}
-	return attempt.err
 }
 
 // attemptCompleted publishes the manager's final result to waiting tests:
 //
 //	final wrapped error --> attempt.err --> close(done) --> wait(key)
-func (c *recoveryTestAttempts[K]) attemptCompleted(key K, err error) {
+func (c *recoveryTestAttempts[K, T]) attemptCompleted(key K, err error) {
 	c.mu.Lock()
 	attempt := c.attempts[key]
 	attempt.err = err
@@ -171,7 +179,7 @@ func (c *recoveryTestAttempts[K]) attemptCompleted(key K, err error) {
 //
 // Holding the gate open makes in-progress and concurrency-limit assertions
 // independent of goroutine timing.
-func (c *recoveryTestAttempts[K]) blockNext(key K) chan struct{} {
+func (c *recoveryTestAttempts[K, T]) blockNext(key K) chan struct{} {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	gate := make(chan struct{})
@@ -184,7 +192,7 @@ func (c *recoveryTestAttempts[K]) blockNext(key K) chan struct{} {
 //	failNext(key, err) --> next scheduled attempt --> err --> retained failure
 //
 // This isolates retry tests from storage or log-reader failures.
-func (c *recoveryTestAttempts[K]) failNext(key K, err error) {
+func (c *recoveryTestAttempts[K, T]) failNext(key K, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.nextFailures[key] = err
@@ -194,7 +202,7 @@ func (c *recoveryTestAttempts[K]) failNext(key K, err error) {
 //
 //	attempts[key] present --> caller may wait and retry
 //	attempts[key] absent  --> caller preserves the response
-func (c *recoveryTestAttempts[K]) latest(key K) (*recoveryAttempt, bool) {
+func (c *recoveryTestAttempts[K, T]) latest(key K) (*recoveryAttempt, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	attempt, ok := c.attempts[key]
@@ -204,9 +212,9 @@ func (c *recoveryTestAttempts[K]) latest(key K) (*recoveryAttempt, bool) {
 // wait joins the latest known attempt without sleeps or polling:
 //
 //	attempt.done closed --> return attempt.err
-//	ctx canceled -------> return ctx.Err()
-//	no attempt ---------> return "not started"
-func (c *recoveryTestAttempts[K]) wait(ctx context.Context, key K) error {
+//	ctx canceled ---------> return ctx.Err()
+//	no attempt -----------> return "not started"
+func (c *recoveryTestAttempts[K, T]) wait(ctx context.Context, key K) error {
 	attempt, ok := c.latest(key)
 	if !ok {
 		return fmt.Errorf("recovery for %v was not started", key)
@@ -221,10 +229,10 @@ func (c *recoveryTestAttempts[K]) wait(ctx context.Context, key K) error {
 
 // startCount exposes admission as a stable assertion:
 //
-//	requests for key --> recoverManager --> scheduled calls --> starts[key]
+//	requests for key --> recoveryManager --> scheduled calls --> starts[key]
 //
 // Deduplicated and concurrency-rejected requests do not increase the count.
-func (c *recoveryTestAttempts[K]) startCount(key K) int {
+func (c *recoveryTestAttempts[K, T]) startCount(key K) int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.starts[key]
@@ -232,17 +240,17 @@ func (c *recoveryTestAttempts[K]) startCount(key K) int {
 
 // recoveryTestControl wires the four independent recovery test channels:
 //
-//	partition recoverManager --> partitions   command processor --> pLogReads
-//	workspace recoverManager --> workspaces   command processor --> wLogReads
+//	partition recoveryManager --> partitions   command processor --> pLogReads
+//	workspace recoveryManager --> workspaces   command processor --> wLogReads
 //
 // Keeping attempt control separate from read observation lets tests combine
 // only the signals they need without leaking workspace state into partition
 // assertions.
 type recoveryTestControl struct {
-	partitions *recoveryTestAttempts[partitionKey]
-	workspaces *recoveryTestAttempts[workspaceKey]
-	pLogReads  *recoveryTestReads[partitionKey]
-	wLogReads  *recoveryTestReads[workspaceKey]
+	partitions *recoveryTestAttempts[partitionKey, appPartition]
+	workspaces *recoveryTestAttempts[workspaceKey, workspace]
+	pLogReads  *logReadsRecorder[partitionKey]
+	wLogReads  *logReadsRecorder[workspaceKey]
 }
 
 // newRecoveryTestControl creates four empty, independently locked channels:
@@ -250,10 +258,10 @@ type recoveryTestControl struct {
 //	{partition attempts, workspace attempts, PLog reads, WLog reads}
 func newRecoveryTestControl() *recoveryTestControl {
 	return &recoveryTestControl{
-		partitions: newRecoveryTestAttempts[partitionKey](),
-		workspaces: newRecoveryTestAttempts[workspaceKey](),
-		pLogReads:  newRecoveryTestReads[partitionKey](),
-		wLogReads:  newRecoveryTestReads[workspaceKey](),
+		partitions: newRecoveryTestAttempts[partitionKey, appPartition](),
+		workspaces: newRecoveryTestAttempts[workspaceKey, workspace](),
+		pLogReads:  newLogReadsRecorder[partitionKey](),
+		wLogReads:  newLogReadsRecorder[workspaceKey](),
 	}
 }
 
@@ -265,8 +273,8 @@ func newRecoveryTestControl() *recoveryTestControl {
 //	pLogReads.record -----+
 //	wLogReads.record -----/
 func (c *recoveryTestControl) testHooks() (
-	partitionHooks recoveryHooks[partitionKey],
-	workspaceHooks recoveryHooks[workspaceKey],
+	partitionHooks recoveryHooks[partitionKey, appPartition],
+	workspaceHooks recoveryHooks[workspaceKey, workspace],
 	cmdProcHooks *commandProcessorHooks,
 ) {
 	return c.partitions.hooks(), c.workspaces.hooks(), &commandProcessorHooks{

@@ -6,6 +6,10 @@ Feature: Partition and workspace recovery from checkpoints
 
   Rule: Partition checkpoint
 
+    usable checkpoint ──────────────────> resume from checkpoint ──┐
+    absent or zero checkpoint ──────────> recover from FirstOffset ├─> actual PLog tail ──> later command succeeds after workspace recovery
+    invalid checkpoint ─> log error ────> recover from FirstOffset ┘
+
     Scenario Outline: Partition recovery starts from a checkpoint
       Given the PLog contains events through offset 50
       And the stored partition checkpoint is <checkpoint>
@@ -70,6 +74,10 @@ Feature: Partition and workspace recovery from checkpoints
       And error message is "stored PLog offset 5 does not identify an existing event; retrying from FirstOffset"
 
   Rule: Workspace checkpoint
+
+    workspace checkpoint ──> recover actual WLog tail ─────────────> successful retry uses following WLog offset
+                          └─> recover latest allocated user record ID ──> successful retry uses following record ID
+    non-ID-bearing suffix ──────────────────────────────────────────> advances the WLog offset only
 
     Scenario Outline: Workspace recovery starts from a checkpoint
       Given the WLog has an ID-bearing event at offset 6 with record ID 200001
@@ -167,6 +175,9 @@ Feature: Partition and workspace recovery from checkpoints
 
   Rule: Empty WLog
 
+    absent or zero checkpoint ─────────────> first successful insert uses FirstOffset and FirstUserRecordID
+    invalid checkpoint ─> specified error ──┘
+
     Scenario Outline: Empty WLog recovery starts at FirstOffset and FirstUserRecordID
       Given the WLog is empty
       And the stored workspace checkpoint is <checkpoint>
@@ -196,6 +207,11 @@ Feature: Partition and workspace recovery from checkpoints
       And error message is "stored WLog offset 5 does not identify an ID-bearing event; retrying from FirstOffset"
 
   Rule: Workspace recovery admission
+
+    request ── duplicate ───────────────────> shares the running recovery
+            ├─ recovery limit available ────> starts one recovery
+            └─ recovery limit reached ──────> rejected without queueing
+    retained failure ── next request ───────> reports the failure and starts one retry
 
     Scenario: Duplicate requests share one workspace recovery
       Given workspace 42 is unrecovered after partition recovery

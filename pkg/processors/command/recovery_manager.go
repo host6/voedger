@@ -11,7 +11,7 @@ import (
 	"sync"
 )
 
-// recoverManager coordinates asynchronous recovery when many requests can ask
+// recoveryManager coordinates asynchronous recovery when many requests can ask
 // for the same key at once and recovery capacity is bounded:
 //
 //	request A --\
@@ -26,15 +26,15 @@ import (
 //
 // The map deduplicates work per key, slots bound concurrent recoveries, and
 // workers let shutdown wait for every goroutine.
-type recoverManager[K comparable, T any] struct {
+type recoveryManager[K comparable, T any] struct {
 	mu      sync.Mutex
 	values  map[K]*recoverableValue[T]
 	slots   chan struct{} // nil means unlimited recovery concurrency
 	workers *sync.WaitGroup
-	hooks   recoveryHooks[K]
+	hooks   recoveryHooks[K, T]
 }
 
-// recoverableValue is the per-key state machine stored by recoverManager:
+// recoverableValue is the per-key state machine stored by recoveryManager:
 //
 //	value == nil, recoveryErr == nil  --> recovering
 //	value == nil, recoveryErr != nil  --> failed; report error and start one retry
@@ -48,19 +48,19 @@ type recoverableValue[T any] struct {
 
 type recoveryAttemptFunc[T any] func(context.Context) (*T, error)
 
-// newRecoveryAttemptFunc creates an attempt only after recoverManager has reserved a recovery slot.
+// newRecoveryAttemptFunc creates an attempt only after recoveryManager has reserved a recovery slot.
 // This lets the caller synchronously transfer request-owned resources to the asynchronous attempt;
 // creating it eagerly could orphan those resources when no attempt is started.
 type newRecoveryAttemptFunc[T any] func() recoveryAttemptFunc[T]
 
-type recoveryHooks[K comparable] struct {
+type recoveryHooks[K comparable, T any] struct {
 	scheduled        func(K)
-	beforeAttempt    func(context.Context, K) error
+	wrapAttempt      func(K, recoveryAttemptFunc[T]) recoveryAttemptFunc[T]
 	attemptCompleted func(K, error)
 }
 
-func newRecoverManager[K comparable, T any](slots chan struct{}, hooks recoveryHooks[K]) *recoverManager[K, T] {
-	return &recoverManager[K, T]{
+func newRecoveryManager[K comparable, T any](slots chan struct{}, hooks recoveryHooks[K, T]) *recoveryManager[K, T] {
+	return &recoveryManager[K, T]{
 		values:  map[K]*recoverableValue[T]{},
 		slots:   slots,
 		workers: &sync.WaitGroup{},
@@ -68,7 +68,7 @@ func newRecoverManager[K comparable, T any](slots chan struct{}, hooks recoveryH
 	}
 }
 
-func (m *recoverManager[K, T]) getOrStart(vvmCtx context.Context, key K,
+func (m *recoveryManager[K, T]) getOrStart(vvmCtx context.Context, key K,
 	newAttempt newRecoveryAttemptFunc[T]) (*T, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -103,7 +103,7 @@ func (m *recoverManager[K, T]) getOrStart(vvmCtx context.Context, key K,
 	return nil, previousErr
 }
 
-func (m *recoverManager[K, T]) reserveSlot() bool {
+func (m *recoveryManager[K, T]) reserveSlot() bool {
 	if m.slots == nil {
 		return true
 	}
@@ -115,20 +115,16 @@ func (m *recoverManager[K, T]) reserveSlot() bool {
 	}
 }
 
-func (m *recoverManager[K, T]) startRecover(vvmCtx context.Context, key K, value *recoverableValue[T], attempt recoveryAttemptFunc[T]) {
+func (m *recoveryManager[K, T]) startRecover(vvmCtx context.Context, key K, value *recoverableValue[T], attempt recoveryAttemptFunc[T]) {
 	m.workers.Add(1)
 	m.hooks.scheduled(key)
+	attempt = m.hooks.wrapAttempt(key, attempt)
 	go m.recover(vvmCtx, key, value, attempt)
 }
 
-// calls hooks around the attempt
-func (m *recoverManager[K, T]) recover(vvmCtx context.Context, key K, value *recoverableValue[T], attempt recoveryAttemptFunc[T]) {
+func (m *recoveryManager[K, T]) recover(vvmCtx context.Context, key K, value *recoverableValue[T], attempt recoveryAttemptFunc[T]) {
 	defer m.workers.Done()
-	var recovered *T
-	err := m.hooks.beforeAttempt(vvmCtx, key)
-	if err == nil {
-		recovered, err = attempt(vvmCtx)
-	}
+	recovered, err := attempt(vvmCtx)
 	if err != nil {
 		err = fmt.Errorf("%w: %w", errRecoveryFailed, err)
 	}
@@ -141,7 +137,7 @@ func (m *recoverManager[K, T]) recover(vvmCtx context.Context, key K, value *rec
 //
 // A reset may detach the state from the map, but cannot make this pointer refer
 // to a newer attempt's state.
-func (m *recoverManager[K, T]) complete(value *recoverableValue[T], recovered *T, err error) {
+func (m *recoveryManager[K, T]) complete(value *recoverableValue[T], recovered *T, err error) {
 	m.mu.Lock()
 	value.recoveryErr = err
 	if err == nil {
@@ -155,24 +151,24 @@ func (m *recoverManager[K, T]) complete(value *recoverableValue[T], recovered *T
 	}
 }
 
-func (m *recoverManager[K, T]) reset(key K) {
+func (m *recoveryManager[K, T]) reset(key K) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	delete(m.values, key)
 }
 
-func (m *recoverManager[K, T]) clear() {
+func (m *recoveryManager[K, T]) clear() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.values = map[K]*recoverableValue[T]{}
 }
 
-func (m *recoverManager[K, T]) shutdown() {
+func (m *recoveryManager[K, T]) shutdown() {
 	m.workers.Wait()
 	m.clear()
 }
 
-func (m *recoverManager[K, T]) recoveredValues() map[K]*T {
+func (m *recoveryManager[K, T]) recoveredValues() map[K]*T {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	values := map[K]*T{}

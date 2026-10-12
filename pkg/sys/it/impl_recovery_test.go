@@ -8,6 +8,7 @@ package sys_it
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -74,7 +75,7 @@ func TestWorkspaceSequencesAfterRecovery(t *testing.T) {
 		),
 	)
 
-	var ws1, ws2 expectedWorkspaceSequence
+	var expectedWS1Numbers, expectedWS2Numbers expectedWorkspaceSequence
 	appID := istructs.ClusterApps[appQName]
 
 	it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
@@ -91,7 +92,7 @@ func TestWorkspaceSequencesAfterRecovery(t *testing.T) {
 
 			ws1Response := vit.PostWS(workspace1, "c.sys.CUD", docWithNested)
 			require.Len(ws1Response.NewIDs, 3)
-			ws1 = expectedWorkspaceSequence{
+			expectedWS1Numbers = expectedWorkspaceSequence{
 				wsid:                workspace1.WSID,
 				wlogIDBearingOffset: ws1Response.CurrentWLogOffset,
 				nextRecordID:        ws1Response.NewIDs["3"] + 1,
@@ -99,7 +100,7 @@ func TestWorkspaceSequencesAfterRecovery(t *testing.T) {
 
 			singletonResponse := vit.PostWS(workspace1, "c.sys.CUD", singletonCUD)
 			require.Equal(ws1Response.CurrentWLogOffset+1, singletonResponse.CurrentWLogOffset)
-			ws1.nextWLogOffset = singletonResponse.CurrentWLogOffset + 1
+			expectedWS1Numbers.nextWLogOffset = singletonResponse.CurrentWLogOffset + 1
 
 			// This must remain the partition's final event before restart. Recovery of
 			// workspace 1 must not adopt workspace 2's independently advanced sequences.
@@ -108,9 +109,9 @@ func TestWorkspaceSequencesAfterRecovery(t *testing.T) {
 				ws2Response = vit.PostWS(workspace2, "c.sys.CUD", docWithNested)
 			}
 			require.Len(ws2Response.NewIDs, 3)
-			require.Greater(ws2Response.CurrentWLogOffset+1, ws1.nextWLogOffset)
-			require.Greater(ws2Response.NewIDs["3"]+1, ws1.nextRecordID)
-			ws2 = expectedWorkspaceSequence{
+			require.Greater(ws2Response.CurrentWLogOffset+1, expectedWS1Numbers.nextWLogOffset)
+			require.Greater(ws2Response.NewIDs["3"]+1, expectedWS1Numbers.nextRecordID)
+			expectedWS2Numbers = expectedWorkspaceSequence{
 				wsid:                workspace2.WSID,
 				wlogIDBearingOffset: ws2Response.CurrentWLogOffset,
 				nextWLogOffset:      ws2Response.CurrentWLogOffset + 1,
@@ -118,24 +119,26 @@ func TestWorkspaceSequencesAfterRecovery(t *testing.T) {
 			}
 		},
 		AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
-			requireWorkspaceCheckpoint(t, storage, appID, ws1)
-			requireWorkspaceCheckpoint(t, storage, appID, ws2)
+			checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(
+				storage.AppStorage(t, istructs.AppQName_sys_vvm))
+			requireStoredWorkspaceCheckpoint(t, checkpointStorage, appID, expectedWS1Numbers)
+			requireStoredWorkspaceCheckpoint(t, checkpointStorage, appID, expectedWS2Numbers)
 		},
 		SecondRun: func(t *testing.T, vit *it.VIT) {
 			workspace1 := vit.WS(appQName, "test_ws_1")
 			workspace2 := vit.WS(appQName, "test_ws_2")
-			require.Equal(t, ws1.wsid, workspace1.WSID)
-			require.Equal(t, ws2.wsid, workspace2.WSID)
+			require.Equal(t, expectedWS1Numbers.wsid, workspace1.WSID)
+			require.Equal(t, expectedWS2Numbers.wsid, workspace2.WSID)
 
 			// insert a doc and check NewID and CurrentWLogOffset from the response
-			checkNextWorkspaceSequence(vit, workspace1, ws1)
-			checkNextWorkspaceSequence(vit, workspace2, ws2)
+			checkNextWorkspaceSequence(vit, workspace1, expectedWS1Numbers)
+			checkNextWorkspaceSequence(vit, workspace2, expectedWS2Numbers)
 		},
 	})
 }
 
 func TestRecoveryFromCheckpoints(t *testing.T) {
-	t.Run("recovery: scn: Partition recovery starts from a checkpoint: absent", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Partition recovery starts from a checkpoint: absent", func(t *testing.T) {
 		// | checkpoint          |
 		// | absent              |
 		// Given the PLog contains events through offset 50
@@ -151,7 +154,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopePartition, checkpointAbsent)
 	})
 
-	t.Run("recovery: scn: Partition recovery starts from a checkpoint: zero", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Partition recovery starts from a checkpoint: lastPLogOffset 0", func(t *testing.T) {
 		// | checkpoint          |
 		// | lastPLogOffset 0    |
 		// Given the PLog contains events through offset 50
@@ -167,7 +170,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopePartition, checkpointZero)
 	})
 
-	t.Run("recovery: scn: Partition recovery starts from a checkpoint: valid but outdated", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Partition recovery starts from a checkpoint: lastPLogOffset 10", func(t *testing.T) {
 		// | checkpoint          |
 		// | lastPLogOffset 10   |
 		// Given the PLog contains events through offset 50
@@ -192,7 +195,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopePartition, checkpointValidButOutdated)
 	})
 
-	t.Run("recovery: scn: Partition recovery starts from a checkpoint: valid", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Partition recovery starts from a checkpoint: lastPLogOffset 50", func(t *testing.T) {
 		// | checkpoint          |
 		// | lastPLogOffset 50   |
 		// Given the PLog contains events through offset 50
@@ -217,7 +220,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopePartition, checkpointValid)
 	})
 
-	t.Run("recovery: scn: Invalid partition checkpoint falls back to the PLog beginning: beyond end", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Invalid partition checkpoint falls back to the PLog beginning: lastPLogOffset 1000000 beyond the PLog end", func(t *testing.T) {
 		// | checkpoint                                         | checkpoint_offset |
 		// | lastPLogOffset 1000000 beyond the PLog end         | 1000000           |
 		// Given the PLog contains events through offset 50
@@ -244,7 +247,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopePartition, checkpointBeyondTail)
 	})
 
-	t.Run("recovery: scn: Invalid partition checkpoint falls back to the PLog beginning: missing event", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Invalid partition checkpoint falls back to the PLog beginning: lastPLogOffset 10 whose first returned event is 11", func(t *testing.T) {
 		// | checkpoint                                         | checkpoint_offset |
 		// | lastPLogOffset 10 whose first returned event is 11 | 10                |
 		// Given the PLog contains events through offset 50
@@ -272,14 +275,14 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopePartition, checkpointMissingEvent)
 	})
 
-	t.Run("recovery: scn: Workspace recovery starts from a checkpoint: absent", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Workspace recovery starts from a checkpoint: absent", func(t *testing.T) {
 		// | checkpoint                |
 		// | absent                    |
 		// Given the WLog has an ID-bearing event at offset 6 with record ID 200001
 		// And the WLog has an ID-bearing event at offset 10 with record IDs 200002 through 200005
 		// And the WLog has a CUD-free event at offset 14
 		// And the WLog ends at offset 14
-		// Given the stored workspace checkpoint is <checkpoint>
+		// And the stored workspace checkpoint is <checkpoint>
 		// checkpoint = absent
 		// And the VVM has restarted and completed partition recovery
 		// When VAOperator submits an insert into the unrecovered workspace
@@ -291,14 +294,14 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointAbsent)
 	})
 
-	t.Run("recovery: scn: Workspace recovery starts from a checkpoint: zero", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Workspace recovery starts from a checkpoint: wlogIDBearingOffset 0", func(t *testing.T) {
 		// | checkpoint                |
 		// | wlogIDBearingOffset 0     |
 		// Given the WLog has an ID-bearing event at offset 6 with record ID 200001
 		// And the WLog has an ID-bearing event at offset 10 with record IDs 200002 through 200005
 		// And the WLog has a CUD-free event at offset 14
 		// And the WLog ends at offset 14
-		// Given the stored workspace checkpoint is <checkpoint>
+		// And the stored workspace checkpoint is <checkpoint>
 		// checkpoint = wlogIDBearingOffset 0
 		// And the VVM has restarted and completed partition recovery
 		// When VAOperator submits an insert into the unrecovered workspace
@@ -310,14 +313,14 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointZero)
 	})
 
-	t.Run("recovery: scn: Workspace recovery starts from a checkpoint: valid but outdated", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Workspace recovery starts from a checkpoint: wlogIDBearingOffset 6", func(t *testing.T) {
 		// | checkpoint                |
 		// | wlogIDBearingOffset 6     |
 		// Given the WLog has an ID-bearing event at offset 6 with record ID 200001
 		// And the WLog has an ID-bearing event at offset 10 with record IDs 200002 through 200005
 		// And the WLog has a CUD-free event at offset 14
 		// And the WLog ends at offset 14
-		// Given the stored workspace checkpoint is <checkpoint>
+		// And the stored workspace checkpoint is <checkpoint>
 		// checkpoint = wlogIDBearingOffset 6
 		//                                                  latest ID-bearing event     WLog end
 		//                                                             |                  |
@@ -339,14 +342,14 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointValidButOutdated)
 	})
 
-	t.Run("recovery: scn: Workspace recovery starts from a checkpoint: valid", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Workspace recovery starts from a checkpoint: wlogIDBearingOffset 10", func(t *testing.T) {
 		// | checkpoint                |
 		// | wlogIDBearingOffset 10    |
 		// Given the WLog has an ID-bearing event at offset 6 with record ID 200001
 		// And the WLog has an ID-bearing event at offset 10 with record IDs 200002 through 200005
 		// And the WLog has a CUD-free event at offset 14
 		// And the WLog ends at offset 14
-		// Given the stored workspace checkpoint is <checkpoint>
+		// And the stored workspace checkpoint is <checkpoint>
 		// checkpoint = wlogIDBearingOffset 10
 		//                                          the last ID-bearing offset        WLog end
 		//                                                        |                       |
@@ -367,7 +370,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointValid)
 	})
 
-	t.Run("recovery: scn: Workspace recovery starts from an ID-bearing checkpoint at the WLog tail", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Workspace recovery starts from an ID-bearing checkpoint at the WLog tail", func(t *testing.T) {
 		// Given the WLog has allocated record IDs 200001 through 200005
 		// And its ID-bearing event at offset 10 is the WLog tail
 		// And the stored workspace checkpoint is wlogIDBearingOffset 10
@@ -381,7 +384,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointAtWLogTail)
 	})
 
-	t.Run("recovery: scn: Non-ID-bearing suffix events advance only the WLog offset: CUD-free events", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Non-ID-bearing suffix events advance only the WLog offset: CUD-free events", func(t *testing.T) {
 		// | suffix_events               |
 		// | CUD-free events             |
 		// Given the WLog has allocated record IDs 200001 through 200005 at offset 10
@@ -398,7 +401,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointValid)
 	})
 
-	t.Run("recovery: scn: Non-ID-bearing suffix events advance only the WLog offset: singleton-only events", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Non-ID-bearing suffix events advance only the WLog offset: singleton-only events", func(t *testing.T) {
 		// | suffix_events               |
 		// | singleton-only events       |
 		// Given the WLog has allocated record IDs 200001 through 200005 at offset 10
@@ -415,7 +418,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointSingletonSuffix)
 	})
 
-	t.Run("recovery: scn: Non-ID-bearing suffix events advance only the WLog offset: updates of existing records", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Non-ID-bearing suffix events advance only the WLog offset: updates of existing records", func(t *testing.T) {
 		// | suffix_events               |
 		// | updates of existing records |
 		// Given the WLog has allocated record IDs 200001 through 200005 at offset 10
@@ -432,7 +435,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointExistingRecordSuffix)
 	})
 
-	t.Run("recovery: scn: Workspace without user record IDs starts allocation at FirstUserRecordID: absent", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Workspace without user record IDs starts allocation at FirstUserRecordID: absent", func(t *testing.T) {
 		// | checkpoint            |
 		// | absent                |
 		// Given the WLog contains CUD-free and singleton-only events through offset 14
@@ -449,7 +452,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointNoUserIDsAbsent)
 	})
 
-	t.Run("recovery: scn: Workspace without user record IDs starts allocation at FirstUserRecordID: zero", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Workspace without user record IDs starts allocation at FirstUserRecordID: wlogIDBearingOffset 0", func(t *testing.T) {
 		// | checkpoint            |
 		// | wlogIDBearingOffset 0 |
 		// Given the WLog contains CUD-free and singleton-only events through offset 14
@@ -466,7 +469,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointNoUserIDsZero)
 	})
 
-	t.Run("recovery: scn: Invalid workspace checkpoint falls back to the WLog beginning: beyond end", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Invalid workspace checkpoint falls back to the WLog beginning: wlogIDBearingOffset 15 beyond the WLog end", func(t *testing.T) {
 		// | checkpoint                                                   | checkpoint_offset |
 		// | wlogIDBearingOffset 15 beyond the WLog end                   | 15                |
 		// Given the WLog has an ID-bearing event at offset 6 with record ID 200001
@@ -476,7 +479,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		// And the WLog has a singleton-only event at offset 13
 		// And the WLog has an update of an existing record at offset 14
 		// And the WLog ends at offset 14
-		// Given the stored workspace checkpoint is <checkpoint>
+		// And the stored workspace checkpoint is <checkpoint>
 		// checkpoint = wlogIDBearingOffset 15 beyond the WLog end
 		//                                                                            WLog end
 		//                                                                               |
@@ -499,7 +502,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointBeyondTail)
 	})
 
-	t.Run("recovery: scn: Invalid workspace checkpoint falls back to the WLog beginning: missing event", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Invalid workspace checkpoint falls back to the WLog beginning: wlogIDBearingOffset 8 whose first returned event is 9", func(t *testing.T) {
 		// | checkpoint                                                   | checkpoint_offset |
 		// | wlogIDBearingOffset 8 whose first returned event is 9        | 8                 |
 		// Given the WLog has an ID-bearing event at offset 6 with record ID 200001
@@ -509,7 +512,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		// And the WLog has a singleton-only event at offset 13
 		// And the WLog has an update of an existing record at offset 14
 		// And the WLog ends at offset 14
-		// Given the stored workspace checkpoint is <checkpoint>
+		// And the stored workspace checkpoint is <checkpoint>
 		// checkpoint = wlogIDBearingOffset 8 whose first returned event is 9
 		//                                      stored wlogIDBearingOffset                       WLog end
 		//                                                  |                                      |
@@ -533,7 +536,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointMissingEvent)
 	})
 
-	t.Run("recovery: scn: Invalid workspace checkpoint falls back to the WLog beginning: CUD-free", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Invalid workspace checkpoint falls back to the WLog beginning: wlogIDBearingOffset 12 pointing to a CUD-free event", func(t *testing.T) {
 		// | checkpoint                                                   | checkpoint_offset |
 		// | wlogIDBearingOffset 12 pointing to a CUD-free event          | 12                |
 		// Given the WLog has an ID-bearing event at offset 6 with record ID 200001
@@ -543,7 +546,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		// And the WLog has a singleton-only event at offset 13
 		// And the WLog has an update of an existing record at offset 14
 		// And the WLog ends at offset 14
-		// Given the stored workspace checkpoint is <checkpoint>
+		// And the stored workspace checkpoint is <checkpoint>
 		// checkpoint = wlogIDBearingOffset 12 pointing to a CUD-free event
 		//                                           CUD-free checkpoint     WLog end
 		//                                                    |                  |
@@ -567,7 +570,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointCUDFree)
 	})
 
-	t.Run("recovery: scn: Invalid workspace checkpoint falls back to the WLog beginning: singleton-only", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Invalid workspace checkpoint falls back to the WLog beginning: wlogIDBearingOffset 13 pointing to a singleton-only event", func(t *testing.T) {
 		// | checkpoint                                                   | checkpoint_offset |
 		// | wlogIDBearingOffset 13 pointing to a singleton-only event    | 13                |
 		// Given the WLog has an ID-bearing event at offset 6 with record ID 200001
@@ -591,7 +594,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointSingleton)
 	})
 
-	t.Run("recovery: scn: Invalid workspace checkpoint falls back to the WLog beginning: existing-record update", func(t *testing.T) {
+	t.Run("recovery-checkpoints: scn: Invalid workspace checkpoint falls back to the WLog beginning: wlogIDBearingOffset 14 pointing to an existing-record update", func(t *testing.T) {
 		// | checkpoint                                                   | checkpoint_offset |
 		// | wlogIDBearingOffset 14 pointing to an existing-record update | 14                |
 		// Given the WLog has an ID-bearing event at offset 6 with record ID 200001
@@ -697,7 +700,7 @@ func runRecoveryCheckpointScenario(t *testing.T, scope checkpointScope, kind che
 			nextRecordID := istructs.FirstUserRecordID
 			collectionOffset := recoveryTestWLogIDBearingOffset
 			expectedIDBearingOffset := recoveryTestWLogIDBearingOffset
-			require.Equal(t, recoveryTestInitialWLogTail, readWLogTail(t, vit, currentWS))
+			require.Equal(t, recoveryTestInitialWLogTail, getLastWLogOffset(t, vit, currentWS))
 			if isNoUserIDsCheckpoint(kind) {
 				appendSingletonOnlyEvents(t, vit, currentWS, appStructs, recoveryTestInitialWLogTail+1)
 				fillWLogWithNonIDBearingEvents(t, vit, currentWS, recoveryTestWLogTail)
@@ -715,7 +718,7 @@ func runRecoveryCheckpointScenario(t *testing.T, scope checkpointScope, kind che
 				require.Equal(t, recoveryTestWLogIDBearingOffset, lastIDBearing.CurrentWLogOffset)
 				require.Len(t, lastIDBearing.NewIDs, 4)
 				for rawID := 1; rawID <= 4; rawID++ {
-					require.Equal(t, istructs.RecordID(200001+rawID), lastIDBearing.NewIDs[fmt.Sprint(rawID)])
+					require.Equal(t, istructs.RecordID(200001+rawID), lastIDBearing.NewIDs[strconv.Itoa(rawID)])
 				}
 				nextRecordID = lastIDBearing.NewIDs["4"] + 1
 
@@ -741,9 +744,9 @@ func runRecoveryCheckpointScenario(t *testing.T, scope checkpointScope, kind che
 					}
 				}
 			}
-			require.Equal(t, expectedWLogTail, readWLogTail(t, vit, currentWS))
+			require.Equal(t, expectedWLogTail, getLastWLogOffset(t, vit, currentWS))
 			fillPLogWithNonIDBearingEvents(t, vit, appQName, partitionID, currentWS.Owner, recoveryTestPLogTail)
-			require.Equal(t, recoveryTestPLogTail, readPLogTail(t, vit, appQName, partitionID))
+			require.Equal(t, recoveryTestPLogTail, getLastPLogOffset(t, vit, appQName, partitionID))
 			vit.WaitForOffset(plogOffsets, recoveryTestPLogTail)
 			vit.WaitForOffset(collectionOffsets, collectionOffset)
 
@@ -758,7 +761,10 @@ func runRecoveryCheckpointScenario(t *testing.T, scope checkpointScope, kind che
 			// need to avoid recoveryCheckpointProjector modify the checkpoint
 			// since we're going modify the checkpoint according to the test
 			moveActualizerToPLogEnd(t, appStructs, partitionID)
-			configureRecoveryCheckpoint(t, storage, appQName, appID, partitionID, expected.wsid, scope, kind)
+			checkpointAppStorage := storage.AppStorage(t, istructs.AppQName_sys_vvm)
+			checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(checkpointAppStorage)
+			configureRecoveryCheckpoint(t, checkpointStorage, checkpointAppStorage,
+				storage.AppStorage(t, appQName), appID, partitionID, expected.wsid, scope, kind)
 			logCap.Reset()
 		},
 		SecondRun: func(t *testing.T, vit *it.VIT) {
@@ -775,8 +781,7 @@ func runRecoveryCheckpointScenario(t *testing.T, scope checkpointScope, kind che
 			logCap.EventuallyHasLine("stage=cp.workspace_recovery.complete", fmt.Sprintf("wsid=%d", currentWS.WSID))
 
 			currentWLogOffset := checkNextWorkspaceSequence(vit, currentWS, expected)
-			checkRecoveryCommandPLog(t, vit, appQName, partitionID, currentWS.WSID,
-				recoveryTestPLogTail+1, currentWLogOffset)
+			checkLastPLogEvent(t, vit, appQName, partitionID, currentWS.WSID, recoveryTestPLogTail+1, currentWLogOffset)
 			checkRecoveryCheckpointLogs(t, logCap, scope, kind)
 		},
 	})
@@ -795,7 +800,7 @@ func moveActualizerToPLogEnd(t *testing.T, appStructs istructs.IAppStructs, part
 
 func fillWLogWithNonIDBearingEvents(t *testing.T, vit *it.VIT, workspace *it.AppWorkspace, tail istructs.Offset) {
 	t.Helper()
-	current := readWLogTail(t, vit, workspace)
+	current := getLastWLogOffset(t, vit, workspace)
 	require.LessOrEqual(t, current, tail)
 	for current < tail {
 		response := vit.PostWS(workspace, nonIDBearingCommand, "{}")
@@ -808,7 +813,7 @@ func fillWLogWithNonIDBearingEvents(t *testing.T, vit *it.VIT, workspace *it.App
 func appendSingletonOnlyEvents(t *testing.T, vit *it.VIT, workspace *it.AppWorkspace,
 	appStructs istructs.IAppStructs, tail istructs.Offset) {
 	t.Helper()
-	current := readWLogTail(t, vit, workspace)
+	current := getLastWLogOffset(t, vit, workspace)
 	require.Less(t, current, tail)
 	response := vit.PostWS(workspace, "c.sys.CUD", singletonCUD)
 	current++
@@ -829,7 +834,7 @@ func appendSingletonOnlyEvents(t *testing.T, vit *it.VIT, workspace *it.AppWorks
 func appendExistingRecordUpdates(t *testing.T, vit *it.VIT, workspace *it.AppWorkspace,
 	recordID istructs.RecordID, tail istructs.Offset) {
 	t.Helper()
-	current := readWLogTail(t, vit, workspace)
+	current := getLastWLogOffset(t, vit, workspace)
 	require.LessOrEqual(t, current, tail)
 	for current < tail {
 		response := vit.PostWS(workspace, "c.sys.CUD", fmt.Sprintf(
@@ -843,7 +848,7 @@ func appendExistingRecordUpdates(t *testing.T, vit *it.VIT, workspace *it.AppWor
 func fillPLogWithNonIDBearingEvents(t *testing.T, vit *it.VIT, appQName appdef.AppQName,
 	partitionID istructs.PartitionID, principal *it.Principal, tail istructs.Offset) {
 	t.Helper()
-	current := readPLogTail(t, vit, appQName, partitionID)
+	current := getLastPLogOffset(t, vit, appQName, partitionID)
 	require.LessOrEqual(t, current, tail)
 	for current < tail {
 		response := vit.PostProfile(principal, nonIDBearingCommand, "{}")
@@ -852,7 +857,7 @@ func fillPLogWithNonIDBearingEvents(t *testing.T, vit *it.VIT, appQName appdef.A
 	}
 }
 
-func readPLogTail(t *testing.T, vit *it.VIT, appQName appdef.AppQName,
+func getLastPLogOffset(t *testing.T, vit *it.VIT, appQName appdef.AppQName,
 	partitionID istructs.PartitionID) istructs.Offset {
 	t.Helper()
 	appStructs, err := vit.IAppStructsProvider.BuiltIn(appQName)
@@ -868,7 +873,7 @@ func readPLogTail(t *testing.T, vit *it.VIT, appQName appdef.AppQName,
 	return tail
 }
 
-func readWLogTail(t *testing.T, vit *it.VIT, workspace *it.AppWorkspace) istructs.Offset {
+func getLastWLogOffset(t *testing.T, vit *it.VIT, workspace *it.AppWorkspace) istructs.Offset {
 	t.Helper()
 	appStructs, err := vit.IAppStructsProvider.BuiltIn(workspace.AppQName())
 	require.NoError(t, err)
@@ -883,22 +888,18 @@ func readWLogTail(t *testing.T, vit *it.VIT, workspace *it.AppWorkspace) istruct
 	return tail
 }
 
-func configureRecoveryCheckpoint(t *testing.T, storage it.RestartStorage, appQName appdef.AppQName,
-	appID istructs.ClusterAppID, partitionID istructs.PartitionID, wsid istructs.WSID,
-	scope checkpointScope, kind checkpointKind) {
+func configureRecoveryCheckpoint(t *testing.T, checkpointStorage checkpoints.IRecoveryCheckpointStorage,
+	checkpointAppStorage, appStorage istorage.IAppStorage, appID istructs.ClusterAppID,
+	partitionID istructs.PartitionID, wsid istructs.WSID, scope checkpointScope, kind checkpointKind) {
 	t.Helper()
-	checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(
-		storage.AppStorage(t, istructs.AppQName_sys_vvm))
-	appStorage := storage.AppStorage(t, appQName)
 
 	if scope == checkpointScopePartition {
 		configurePartitionCheckpoint(t, checkpointStorage, appStorage, appID, partitionID, kind)
 		return
 	}
 
-	require.NoError(t, checkpointStorage.PutPartitionCheckpoint(appID, partitionID,
-		checkpoints.PartitionCheckpoint{LastPLogOffset: recoveryTestPLogTail}))
-	configureWorkspaceCheckpoint(t, storage, checkpointStorage, appStorage, appID, wsid, kind)
+	require.NoError(t, checkpointStorage.PutPartitionCheckpoint(appID, partitionID, checkpoints.PartitionCheckpoint{LastPLogOffset: recoveryTestPLogTail}))
+	configureWorkspaceCheckpoint(t, checkpointStorage, checkpointAppStorage, appStorage, appID, wsid, kind)
 }
 
 func configurePartitionCheckpoint(t *testing.T, checkpointStorage checkpoints.IRecoveryCheckpointStorage,
@@ -923,7 +924,7 @@ func configurePartitionCheckpoint(t *testing.T, checkpointStorage checkpoints.IR
 	case checkpointMissingEvent:
 		offset = 10
 		pKey, cCols := istructsmem.PLogKey(partitionID, offset)
-		deleteStorageCell(t, appStorage, pKey, cCols)
+		deleteFromStorage(t, appStorage, pKey, cCols)
 	default:
 		require.FailNow(t, "unsupported partition checkpoint kind", "%d", kind)
 	}
@@ -931,9 +932,9 @@ func configurePartitionCheckpoint(t *testing.T, checkpointStorage checkpoints.IR
 		checkpoints.PartitionCheckpoint{LastPLogOffset: offset}))
 }
 
-func configureWorkspaceCheckpoint(t *testing.T, storage it.RestartStorage,
-	checkpointStorage checkpoints.IRecoveryCheckpointStorage, appStorage istorage.IAppStorage,
-	appID istructs.ClusterAppID, wsid istructs.WSID, kind checkpointKind) {
+func configureWorkspaceCheckpoint(t *testing.T, checkpointStorage checkpoints.IRecoveryCheckpointStorage,
+	checkpointAppStorage, appStorage istorage.IAppStorage, appID istructs.ClusterAppID,
+	wsid istructs.WSID, kind checkpointKind) {
 	t.Helper()
 	var offset istructs.Offset
 	switch kind {
@@ -942,7 +943,7 @@ func configureWorkspaceCheckpoint(t *testing.T, storage it.RestartStorage,
 		_, exists, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
 		require.NoError(t, err)
 		if exists {
-			deleteStorageCell(t, storage.AppStorage(t, istructs.AppQName_sys_vvm), pKey, cCols)
+			deleteFromStorage(t, checkpointAppStorage, pKey, cCols)
 		}
 		_, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, wsid)
 		require.NoError(t, err)
@@ -964,7 +965,7 @@ func configureWorkspaceCheckpoint(t *testing.T, storage it.RestartStorage,
 		}
 		if kind == checkpointMissingEvent {
 			pKey, cCols := istructsmem.WLogKey(wsid, offset)
-			deleteStorageCell(t, appStorage, pKey, cCols)
+			deleteFromStorage(t, appStorage, pKey, cCols)
 		}
 	}
 	require.NoError(t, checkpointStorage.PutWorkspaceCheckpoint(appID, wsid,
@@ -1020,7 +1021,7 @@ func invalidWorkspaceCheckpointOffset(kind checkpointKind) (istructs.Offset, boo
 	}
 }
 
-func deleteStorageCell(t *testing.T, storage istorage.IAppStorage, pKey, cCols []byte) {
+func deleteFromStorage(t *testing.T, storage istorage.IAppStorage, pKey, cCols []byte) {
 	t.Helper()
 	var value []byte
 	ok, err := storage.Get(pKey, cCols, &value)
@@ -1070,30 +1071,28 @@ func checkNextWorkspaceSequence(vit *it.VIT, workspace *it.AppWorkspace,
 	return resp.CurrentWLogOffset
 }
 
-func checkRecoveryCommandPLog(t *testing.T, vit *it.VIT, appQName appdef.AppQName,
-	partitionID istructs.PartitionID, wsid istructs.WSID, expectedOffset, expectedWLogOffset istructs.Offset) {
+func checkLastPLogEvent(t *testing.T, vit *it.VIT, appQName appdef.AppQName,
+	partitionID istructs.PartitionID, wsid istructs.WSID, expectedLastPLogOffset, expectedWLogOffset istructs.Offset) {
 	t.Helper()
 	appStructs, err := vit.IAppStructsProvider.BuiltIn(appQName)
 	require.NoError(t, err)
 	eventCount := 0
-	err = appStructs.Events().ReadPLog(t.Context(), partitionID, expectedOffset, istructs.ReadToTheEnd,
+	err = appStructs.Events().ReadPLog(t.Context(), partitionID, expectedLastPLogOffset, istructs.ReadToTheEnd,
 		func(offset istructs.Offset, event istructs.IPLogEvent) error {
 			defer event.Release()
 			eventCount++
-			require.Equal(t, expectedOffset, offset)
+			require.Equal(t, expectedLastPLogOffset, offset)
 			require.Equal(t, wsid, event.Workspace())
 			require.Equal(t, expectedWLogOffset, event.WLogOffset())
 			return nil
 		})
 	require.NoError(t, err)
-	require.Equal(t, 1, eventCount, "unexpected events after PLog offset %d", expectedOffset)
+	require.Equal(t, 1, eventCount, "unexpected events after PLog offset %d", expectedLastPLogOffset)
 }
 
-func requireWorkspaceCheckpoint(t *testing.T, storage it.RestartStorage, appID istructs.ClusterAppID,
-	expected expectedWorkspaceSequence) {
+func requireStoredWorkspaceCheckpoint(t *testing.T, checkpointStorage checkpoints.IRecoveryCheckpointStorage,
+	appID istructs.ClusterAppID, expected expectedWorkspaceSequence) {
 	t.Helper()
-	checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(
-		storage.AppStorage(t, istructs.AppQName_sys_vvm))
 	checkpoint, ok, err := checkpointStorage.GetWorkspaceCheckpoint(appID, expected.wsid)
 	require.NoError(t, err)
 	require.True(t, ok)

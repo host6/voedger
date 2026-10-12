@@ -168,10 +168,10 @@ References (external):
 
 ## Functional design
 
-- [x] create: [apps/recovery.feature](../../specs/prod/apps/recovery.feature)
+- [x] create: [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature)
   - Feature specification for partition and workspace recovery from absent and zero checkpoints, checkpoints pointing to valid offsets, and invalid checkpoints, including invalid checkpoints over empty logs
 
-- [x] update: [apps/recovery.feature](../../specs/prod/apps/recovery.feature)
+- [x] update: [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature)
   - fix: partition-checkpoint scenarios explicitly observe partition recovery first, then workspace recovery on the next request, and succeed only on the request made after both recoveries complete
   - fix: use record IDs from the user-record range: `200001` for the first allocated user record, `200002` through `200005` for the later ID-bearing event, and `200006` for the next insert
   - fix: require the complete invalid-checkpoint messages ending with `retrying from FirstOffset`
@@ -182,6 +182,15 @@ References (external):
   - expand: invalid workspace checkpoint examples distinguish an existing CUD-free event, singleton-only event, and existing-record update from an ID-bearing event; each falls back to `FirstOffset`
   - add: externally observable workspace-recovery admission scenarios for a duplicate request to the same recovering workspace, a saturated nonzero recovery limit with no queued attempt and a successful later retry, and a zero recovery limit
   - add: recovery-failure lifecycle scenario in which one request reports the retained failure, the following request starts one retry, and a request after successful retry uses the recovered workspace
+
+- [x] update: [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature)
+  - add at most one compact plain-text arrow flow as the free-form description immediately below each `Rule` and before its first scenario; do not encode the diagrams as executable steps, Doc Strings, Data Tables, or `#` comments
+  - illustrate `Partition checkpoint` as usable checkpoint versus absent, zero, or invalid checkpoint converging on recovery of the actual PLog tail and the next successful command
+  - illustrate `Workspace checkpoint` as recovery of the actual WLog tail and latest allocated user record ID, with non-ID-bearing suffix events advancing only the next WLog offset
+  - illustrate `Empty WLog` as all accepted checkpoint states converging on the first insert at `FirstOffset` and `FirstUserRecordID`, with invalid checkpoints additionally producing the specified error
+  - illustrate `Workspace recovery admission` as duplicate requests sharing one recovery, an available limit starting recovery, a saturated limit rejecting without queueing, and a retained failure permitting one retry
+  - keep every diagram declarative and externally meaningful: omit concrete Examples offsets and record IDs, scan ranges, callbacks, storage layout, helper names, and other implementation mechanics
+  - preserve all existing scenario names, steps, Examples headers, and Examples rows byte-for-byte so feature-test traceability remains unchanged
 
 ## Technical design
 
@@ -194,7 +203,7 @@ References (external):
 
 Gherkin scenario test placement:
 
-- Implement the scenarios in [apps/recovery.feature](../../specs/prod/apps/recovery.feature) as VIT integration tests in [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go).
+- Implement the scenarios in [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature) as VIT integration tests in [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go).
 - Implement the empty-PLog and empty-WLog scenarios as mocked command-processor tests because VIT cannot create those states.
 - Use a mocked command-processor test for any other scenario only when its VIT implementation proves impossible or disproportionately complicated. Document the concrete reason next to that fallback test; otherwise, do not duplicate Gherkin scenario coverage in command-processor tests.
 
@@ -211,7 +220,14 @@ Gherkin scenario test placement:
   - verify the successful post-recovery command by reading from its returned PLog offset through the end, matching the event to the target workspace, and asserting that no later PLog event exists instead of checking only that the tail increased
   - continue reading from the successful insert's returned WLog offset through the end and assert that exactly that insert event exists there, with no later WLog event
 
+- [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
+  - replace semantic Scenario Outline disambiguators such as `zero`, `valid but outdated`, `valid`, `beyond end`, `missing event`, and event-kind abbreviations with the exact distinguishing Examples cell value, so all 20 non-empty-log Examples rows are directly discoverable from their `recovery-checkpoints: scn:` names
+  - preserve the existing exact Examples header/row comments, placeholder mappings, distinct checkpoint kinds, fixture construction, and behavioral assertions; do not duplicate the existing scenario tests or expand the grouped technical tests
+  - correct the seven workspace-checkpoint step comments from `Given the stored workspace checkpoint is <checkpoint>` to the feature's verbatim `And the stored workspace checkpoint is <checkpoint>`
+  - explicitly retain the already exact `updates of existing records` case and its `checkpointExistingRecordSuffix` path, and the CUD-free and existing-record-update invalid-checkpoint paths at offsets 12 and 14
+
 - [x] update: [command/impl_test.go](../../../pkg/processors/command/impl_test.go)
+  - keep the grouped `TestRecoveryCheckpoints_RecordIDsRecovery` subtests as supplementary technical coverage rather than treating their generic names as feature-scenario identities
   - implement absent, zero, and invalid checkpoints over empty PLogs and WLogs with mocked logs, the only log state that VIT cannot construct
   - drive each empty-log scenario through the partition and workspace recovery managers' request-equivalent `503` stages and verify the next PLog offset, WLog offset, and record ID; direct manager tests are required because provisioning a command-capable fixture makes the logs non-empty
   - use a mocked test for another Gherkin scenario only when deterministic VIT construction is impossible or disproportionately complicated, and document that concrete reason next to the test
@@ -220,13 +236,17 @@ Gherkin scenario test placement:
   - verify the retained-failure/report/retry scenario through its externally observable `503`, `500`, `503`, and success sequence
   - assert complete invalid-checkpoint messages, including the `FirstOffset` fallback wording, rather than matching a proper prefix of a longer message
 
+- [x] update: [command/impl_test.go](../../../pkg/processors/command/impl_test.go)
+  - replace the `zero` aliases in the empty-PLog and empty-WLog Scenario Outline subtest names with the exact `lastPLogOffset 0` and `wlogIDBearingOffset 0` Examples values
+  - preserve the existing exact Examples header/row comments, placeholder mappings, mocked recovery flow, and assertions; do not duplicate the four empty-log scenario tests
+
 - [x] update: [checkpoints/impl_test.go](../../../pkg/sys/checkpoints/impl_test.go)
   - verify that one projector stores `lastPLogOffset` when `PLogOffset % 100 == 0`
   - verify that an event allocating non-singleton record IDs stores `wlogIDBearingOffset`, while singleton, existing-record, and CUD-free events do not write a workspace checkpoint
   - verify storage-error propagation and registration of the single standard asynchronous projector
 
 - [x] update: [command/impl_test.go](../../../pkg/processors/command/impl_test.go)
-  - implement the empty-PLog and empty-WLog scenarios from [apps/recovery.feature](../../specs/prod/apps/recovery.feature) with mocked logs
+  - implement the empty-PLog and empty-WLog scenarios from [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature) with mocked logs
   - implement another Gherkin scenario here only if its VIT implementation is impossible or disproportionately complicated, and document the concrete reason for the fallback
   - verify one inclusive PLog read from the saved `lastPLogOffset` to the end
   - verify that partition recovery does not start workspace recovery and that a subsequent request starts it from the command stage
@@ -272,7 +292,7 @@ Gherkin scenario test placement:
   - extend PLog event mocks with handling-partition and PLog-offset accessors used by the checkpoint projector
 
 - [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
-  - implement every non-empty-log scenario in [apps/recovery.feature](../../specs/prod/apps/recovery.feature) as a VIT integration test
+  - implement every non-empty-log scenario in [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature) as a VIT integration test
   - cover absent and zero checkpoints, earlier valid offsets, and current PLog and WLog checkpoints from the scenario examples
   - cover PLog and WLog checkpoints beyond the log end, checkpoints whose exact event is missing, and a WLog checkpoint pointing to a non-ID-bearing event
   - verify `wlogIDBearingOffset` across sequential VVM instances sharing storage
@@ -308,11 +328,11 @@ Gherkin scenario test placement:
   - expose handling partition and PLog offset on persisted PLog events for checkpoint projection
   - keep `IIDGenerator` free of checkpoint-specific record-ID accessors
 
-- [ ] update: [storage/consts.go](../../../pkg/vvm/storage/consts.go)
+- [x] update: [storage/consts.go](../../../pkg/vvm/storage/consts.go)
   - retain the sequence-storage prefix values and document partition ID and WSID as partition-key suffixes rather than clustering columns
   - replace the `lastWLogOffsetWithNewRecordIDs` JSON field constant with `wlogIDBearingOffset`
 
-- [ ] update: [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
+- [x] update: [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
   - append partition ID or WSID to the corresponding application partition key and use `[]byte{1}` as the clustering column
   - encode only `lastPLogOffset` for PLog checkpoints and only `wlogIDBearingOffset` for WLog checkpoints
   - report missing values as absent, reject malformed values, and overwrite unconditionally
@@ -323,12 +343,12 @@ Gherkin scenario test placement:
 - [x] create: [checkpoints/consts.go](../../../pkg/sys/checkpoints/consts.go)
   - define the 100-event partition-checkpoint interval and `ProjectorRecoveryCheckpoint` QName
 
-- [ ] update: [checkpoints/types.go](../../../pkg/sys/checkpoints/types.go)
+- [x] update: [checkpoints/types.go](../../../pkg/sys/checkpoints/types.go)
   - define a PLog checkpoint containing only `lastPLogOffset` and a WLog checkpoint containing only `wlogIDBearingOffset`
   - name the Go workspace-checkpoint field `WLogIDBearingOffset`; its documentation must state that it need not identify the latest ID-bearing event
   - define the partition and workspace checkpoint storage contract
 
-- [ ] update: [checkpoints/impl.go](../../../pkg/sys/checkpoints/impl.go)
+- [x] update: [checkpoints/impl.go](../../../pkg/sys/checkpoints/impl.go)
   - implement one recovery-checkpoint projector for both checkpoint types
   - persist an ID-bearing event offset as `wlogIDBearingOffset` without making recovery depend on it being the latest such event
   - persist the PLog offset when `PLogOffset % 100 == 0`
@@ -366,7 +386,7 @@ Gherkin scenario test placement:
   - define partition and workspace keys and manager wrappers over the shared generic recovery manager
   - retain application identity and structures in recovered partitions for asynchronous WLog recovery
 
-- [ ] update: [command/impl.go](../../../pkg/processors/command/impl.go)
+- [x] update: [command/impl.go](../../../pkg/processors/command/impl.go)
   - recover the partition with one inclusive PLog suffix scan and use only its final event
   - publish the recovered partition without starting workspace recovery from the partition-recovery goroutine
   - start workspace recovery on demand from the command pipeline's workspace stage

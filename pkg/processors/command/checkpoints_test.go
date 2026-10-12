@@ -69,13 +69,13 @@ func (s *testCheckpointStorage) PutWorkspaceCheckpoint(appID istructs.ClusterApp
 	return nil
 }
 
-func (s *testCheckpointStorage) forcePartition(appID istructs.ClusterAppID, partitionID istructs.PartitionID, checkpoint checkpoints.PartitionCheckpoint) {
+func (s *testCheckpointStorage) setPLogCheckpoint(appID istructs.ClusterAppID, partitionID istructs.PartitionID, checkpoint checkpoints.PartitionCheckpoint) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.partitions[[2]uint64{uint64(appID), uint64(partitionID)}] = checkpoint
 }
 
-func (s *testCheckpointStorage) forceWorkspace(appID istructs.ClusterAppID, wsid istructs.WSID, checkpoint checkpoints.WorkspaceCheckpoint) {
+func (s *testCheckpointStorage) setWLogCheckpoint(appID istructs.ClusterAppID, wsid istructs.WSID, checkpoint checkpoints.WorkspaceCheckpoint) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.workspaces[[2]uint64{uint64(appID), uint64(wsid)}] = checkpoint

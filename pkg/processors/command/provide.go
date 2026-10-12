@@ -32,24 +32,23 @@ type cmdProc struct {
 	storeOp                pipeline.ISyncOperator
 	checkpointStorage      checkpoints.IRecoveryCheckpointStorage
 	numWSRecoverers        uint
-	workspaceRecoveryHooks recoveryHooks[workspaceKey]
+	workspaceRecoveryHooks recoveryHooks[workspaceKey, workspace]
 	cmdProcHooks           *commandProcessorHooks
 }
-
 
 // syncActualizerFactory is a factory(partitionID) that returns a fork operator with a sync actualizer per each application. Inside of an each actualizer - projectors for each application
 func ProvideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
 	secretReader isecrets.ISecretReader, checkpointStorage checkpoints.IRecoveryCheckpointStorage, numWSRecoverers uint) ServiceFactory {
 	return provideServiceFactory(appParts, tm, n10nBroker, metrics, vvm, authenticator, secretReader,
-		checkpointStorage, numWSRecoverers, nopRecoveryHooks[partitionKey](),
-		nopRecoveryHooks[workspaceKey](), nopCommandProcessorHooks())
+		checkpointStorage, numWSRecoverers, nopRecoveryHooks[partitionKey, appPartition](),
+		nopRecoveryHooks[workspaceKey, workspace](), nopCommandProcessorHooks())
 }
 
 func provideServiceFactory(appParts appparts.IAppPartitions, tm timeu.ITime,
 	n10nBroker in10n.IN10nBroker, metrics imetrics.IMetrics, vvm processors.VVMName, authenticator iauthnz.IAuthenticator,
 	secretReader isecrets.ISecretReader, checkpointStorage checkpoints.IRecoveryCheckpointStorage, numWSRecoverers uint,
-	partitionRecoveryHooks recoveryHooks[partitionKey], workspaceRecoveryHooks recoveryHooks[workspaceKey],
+	partitionRecoveryHooks recoveryHooks[partitionKey, appPartition], workspaceRecoveryHooks recoveryHooks[workspaceKey, workspace],
 	cmdProcHooks *commandProcessorHooks) ServiceFactory {
 	partitionRecoveryHooks = hooksOrNOP(partitionRecoveryHooks)
 	workspaceRecoveryHooks = hooksOrNOP(workspaceRecoveryHooks)
