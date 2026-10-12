@@ -138,6 +138,10 @@ func TestWorkspaceSequencesAfterRecovery(t *testing.T) {
 }
 
 func TestRecoveryFromCheckpoints(t *testing.T) {
+	if testing.Short() {
+		t.Skip()
+	}
+	
 	t.Run("recovery-checkpoints: scn: Partition recovery starts from a checkpoint: absent", func(t *testing.T) {
 		// | checkpoint          |
 		// | absent              |

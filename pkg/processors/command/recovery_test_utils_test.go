@@ -13,6 +13,7 @@ import (
 
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/istructs"
+	"github.com/voedger/voedger/pkg/sys/checkpoints"
 )
 
 // logReadFromTo turns one production log-reader call into a comparable test value:
@@ -327,4 +328,65 @@ func (s *recoveryRetrySender) SendRequest(ctx context.Context, req bus.Request) 
 			return nil, bus.ResponseMeta{}, nil, err
 		}
 	}
+}
+
+// testCheckpointStorage is a thread-safe, last-write-wins implementation of
+// the recovery storage contract used by command recovery tests. Partition
+// values carry LastPLogOffset; workspace values carry
+// WLogIDBearingOffset.
+type testCheckpointStorage struct {
+	mu         sync.Mutex
+	partitions map[key]checkpoints.PartitionCheckpoint
+	workspaces map[key]checkpoints.WorkspaceCheckpoint
+}
+
+type key [2]uint64
+
+func newTestCheckpointStorage() *testCheckpointStorage {
+	return &testCheckpointStorage{
+		partitions: map[key]checkpoints.PartitionCheckpoint{},
+		workspaces: map[key]checkpoints.WorkspaceCheckpoint{},
+	}
+}
+
+func (s *testCheckpointStorage) GetPartitionCheckpoint(appID istructs.ClusterAppID, partitionID istructs.PartitionID) (checkpoints.PartitionCheckpoint, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	checkpoint, ok := s.partitions[key{uint64(appID), uint64(partitionID)}]
+	return checkpoint, ok, nil
+}
+
+func (s *testCheckpointStorage) PutPartitionCheckpoint(appID istructs.ClusterAppID, partitionID istructs.PartitionID, checkpoint checkpoints.PartitionCheckpoint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := key{uint64(appID), uint64(partitionID)}
+	s.partitions[key] = checkpoint
+	return nil
+}
+
+func (s *testCheckpointStorage) GetWorkspaceCheckpoint(appID istructs.ClusterAppID, wsid istructs.WSID) (checkpoints.WorkspaceCheckpoint, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	checkpoint, ok := s.workspaces[key{uint64(appID), uint64(wsid)}]
+	return checkpoint, ok, nil
+}
+
+func (s *testCheckpointStorage) PutWorkspaceCheckpoint(appID istructs.ClusterAppID, wsid istructs.WSID, checkpoint checkpoints.WorkspaceCheckpoint) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key := key{uint64(appID), uint64(wsid)}
+	s.workspaces[key] = checkpoint
+	return nil
+}
+
+func (s *testCheckpointStorage) setPLogCheckpoint(appID istructs.ClusterAppID, partitionID istructs.PartitionID, checkpoint checkpoints.PartitionCheckpoint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.partitions[key{uint64(appID), uint64(partitionID)}] = checkpoint
+}
+
+func (s *testCheckpointStorage) setWLogCheckpoint(appID istructs.ClusterAppID, wsid istructs.WSID, checkpoint checkpoints.WorkspaceCheckpoint) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workspaces[key{uint64(appID), uint64(wsid)}] = checkpoint
 }
