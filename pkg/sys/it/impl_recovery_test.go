@@ -14,6 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
 	appdefsys "github.com/voedger/voedger/pkg/appdef/sys"
+	"github.com/voedger/voedger/pkg/checkpoints"
 	"github.com/voedger/voedger/pkg/extensionpoints"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
@@ -22,7 +23,6 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/processors/actualizers"
-	"github.com/voedger/voedger/pkg/sys/checkpoints"
 	"github.com/voedger/voedger/pkg/sys/collection"
 	it "github.com/voedger/voedger/pkg/vit"
 	sys_test_template "github.com/voedger/voedger/pkg/vit/testdata"
@@ -141,7 +141,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 	if testing.Short() {
 		t.Skip()
 	}
-	
+
 	t.Run("recovery-checkpoints: scn: Partition recovery starts from a checkpoint: absent", func(t *testing.T) {
 		// | checkpoint          |
 		// | absent              |

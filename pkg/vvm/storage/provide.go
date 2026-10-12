@@ -5,9 +5,9 @@
 package storage
 
 import (
+	"github.com/voedger/voedger/pkg/checkpoints"
 	"github.com/voedger/voedger/pkg/ielections"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/sys/checkpoints"
 )
 
 // [~server.design.orch/NewElectionsTTLStorage~impl]

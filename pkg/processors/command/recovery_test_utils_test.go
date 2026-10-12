@@ -12,8 +12,8 @@ import (
 	"sync"
 
 	"github.com/voedger/voedger/pkg/bus"
+	"github.com/voedger/voedger/pkg/checkpoints"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/sys/checkpoints"
 )
 
 // logReadFromTo turns one production log-reader call into a comparable test value:

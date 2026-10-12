@@ -152,9 +152,9 @@ References (internal):
 
 - [command/impl.go](../../../pkg/processors/command/impl.go)
 - [command/provide.go](../../../pkg/processors/command/provide.go)
-- [checkpoint contracts](../../../pkg/sys/checkpoints/types.go)
-- [checkpoint projector](../../../pkg/sys/checkpoints/impl.go)
-- [checkpoint registration](../../../pkg/sys/checkpoints/provide.go)
+- [checkpoint contracts](../../../pkg/checkpoints/types.go)
+- [checkpoint projector](../../../pkg/checkpoints/impl.go)
+- [checkpoint registration](../../../pkg/checkpoints/provide.go)
 - [storage/impl_recoverycheckpoint.go](../../../pkg/vvm/storage/impl_recoverycheckpoint.go)
 - [istructs/events-types.go](../../../pkg/istructs/events-types.go)
 - [vvm/types.go](../../../pkg/vvm/types.go)
@@ -241,7 +241,7 @@ Gherkin scenario test placement:
   - replace the `zero` aliases in the empty-PLog and empty-WLog Scenario Outline subtest names with the exact `lastPLogOffset 0` and `wlogIDBearingOffset 0` Examples values
   - preserve the existing exact Examples header/row comments, placeholder mappings, mocked recovery flow, and assertions; do not duplicate the four empty-log scenario tests
 
-- [x] update: [checkpoints/impl_test.go](../../../pkg/sys/checkpoints/impl_test.go)
+- [x] update: [checkpoints/impl_test.go](../../../pkg/checkpoints/impl_test.go)
   - verify that one projector stores `lastPLogOffset` when `PLogOffset % 100 == 0`
   - verify that an event allocating non-singleton record IDs stores `wlogIDBearingOffset`, while singleton, existing-record, and CUD-free events do not write a workspace checkpoint
   - verify storage-error propagation and registration of the single standard asynchronous projector
@@ -350,20 +350,20 @@ Gherkin scenario test placement:
 - [x] update: [storage/provide.go](../../../pkg/vvm/storage/provide.go)
   - construct the recovery-checkpoint adapter over shared system-VVM storage
 
-- [x] create: [checkpoints/consts.go](../../../pkg/sys/checkpoints/consts.go)
+- [x] create: [checkpoints/consts.go](../../../pkg/checkpoints/consts.go)
   - define the 100-event partition-checkpoint interval and `ProjectorRecoveryCheckpoint` QName
 
-- [x] update: [checkpoints/types.go](../../../pkg/sys/checkpoints/types.go)
+- [x] update: [checkpoints/types.go](../../../pkg/checkpoints/types.go)
   - define a PLog checkpoint containing only `lastPLogOffset` and a WLog checkpoint containing only `wlogIDBearingOffset`
   - name the Go workspace-checkpoint field `WLogIDBearingOffset`; its documentation must state that it need not identify the latest ID-bearing event
   - define the partition and workspace checkpoint storage contract
 
-- [x] update: [checkpoints/impl.go](../../../pkg/sys/checkpoints/impl.go)
+- [x] update: [checkpoints/impl.go](../../../pkg/checkpoints/impl.go)
   - implement one recovery-checkpoint projector for both checkpoint types
   - persist an ID-bearing event offset as `wlogIDBearingOffset` without making recovery depend on it being the latest such event
   - persist the PLog offset when `PLogOffset % 100 == 0`
 
-- [x] create: [checkpoints/provide.go](../../../pkg/sys/checkpoints/provide.go)
+- [x] create: [checkpoints/provide.go](../../../pkg/checkpoints/provide.go)
   - register the single built-in asynchronous recovery-checkpoint projector with stateless resources
 
 - [x] update: [parser/impl_analyse.go](../../../pkg/parser/impl_analyse.go)

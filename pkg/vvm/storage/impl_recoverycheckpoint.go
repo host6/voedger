@@ -10,8 +10,8 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/voedger/voedger/pkg/checkpoints"
 	"github.com/voedger/voedger/pkg/istructs"
-	"github.com/voedger/voedger/pkg/sys/checkpoints"
 )
 
 type implCheckpointStorage struct {
