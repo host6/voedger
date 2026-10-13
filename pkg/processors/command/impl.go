@@ -177,7 +177,7 @@ func newAppPartition(numWSRecoverers uint, workspaceRecoveryHooks recoveryHooks[
 
 func newPartitionManager(hooks recoveryHooks[partitionKey, appPartition], recoverFunc recoverPartitionFunc) *partitionManager {
 	return &partitionManager{
-		partitions: newRecoveryManager[partitionKey, appPartition](
+		partitions: newRecoveryManager(
 			nil,
 			hooks,
 		),
@@ -187,7 +187,7 @@ func newPartitionManager(hooks recoveryHooks[partitionKey, appPartition], recove
 
 func newWorkspaceManager(numRecoverers uint, hooks recoveryHooks[workspaceKey, workspace]) *workspaceManager {
 	return &workspaceManager{
-		workspaces: newRecoveryManager[workspaceKey, workspace](
+		workspaces: newRecoveryManager(
 			make(chan struct{}, numRecoverers),
 			hooks,
 		),
