@@ -33,6 +33,17 @@ In the production application-processing context:
 
 ## How
 
+### Key concepts
+
+- **Recovery checkpoint** (or **checkpoint**): a persisted set of log offsets used as inclusive recovery-scan starts. A checkpoint accelerates recovery but is not an authoritative copy of recovered sequence state.
+- **Partition checkpoint**: `lastPLogOffset`, the latest PLog offset stored by the checkpoint projector for a partition.
+- **Workspace checkpoint**: `wlogIDBearingOffset`, the offset of the latest ID-bearing WLog event seen by the checkpoint projector for a workspace.
+- **ID-bearing event**: a WLog event that allocates at least one new non-singleton record ID.
+- **Inclusive suffix scan**: a log read that starts with the event identified by a checkpoint and continues through the actual log tail. The first returned event validates the checkpoint; the complete suffix supplies the recovered values.
+- **Checkpoint fallback**: one inclusive scan from `FirstOffset` when a stored checkpoint is invalid. Recovery does not rewrite the checkpoint.
+- **Partition recovery**: service-scoped recovery that restores the next PLog offset and republishes the application partition.
+- **Workspace recovery**: on-demand recovery that restores one workspace's next WLog offset and record ID after its partition has recovered.
+
 ### Decisions
 
 #### Key decisions
@@ -40,7 +51,8 @@ In the production application-processing context:
 - Store the offset of the latest ID-bearing WLog event seen by the checkpoint projector.
 - The stored offset is only a safe scan accelerator. It must not become an authoritative copy of either recovered value.
 - Store the offset of the latest PLog event seen by the checkpoint projector.
-- Term: this stored set of offsets is `checkpoint`, `recovery checkpoint`
+- Recover partitions and workspaces independently and start each recovery only when a request first needs it.
+- Persist neither the last WLog offset nor record IDs; derive both recovered workspace values by scanning from the workspace checkpoint through the actual WLog tail.
 
 #### Key flow
 
