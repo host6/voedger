@@ -37,9 +37,10 @@ In the production application-processing context:
 
 #### Key decisions
 
-- Store the offset of the latest ID-bearing event seen by the checkpoint projector.
+- Store the offset of the latest ID-bearing WLog event seen by the checkpoint projector.
 - The stored offset is only a safe scan accelerator. It must not become an authoritative copy of either recovered value.
-- Term: this stored offset is `checkpoint`, `recovery checkpoint`
+- Store the offset of the latest PLog event seen by the checkpoint projector.
+- Term: this stored set of offsets is `checkpoint`, `recovery checkpoint`
 
 #### Key flow
 
