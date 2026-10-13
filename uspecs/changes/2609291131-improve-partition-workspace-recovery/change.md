@@ -401,14 +401,8 @@ Gherkin scenario test placement:
 - [x] create: [checkpoints/provide.go](../../../pkg/checkpoints/provide.go)
   - register the single built-in asynchronous recovery-checkpoint projector with stateless resources
 
-- [x] update: [parser/impl_analyse.go](../../../pkg/parser/impl_analyse.go)
-  - resolve the built-in generic Command trigger used by the recovery-checkpoint projector
-
-- [x] update: [parser/impl_build.go](../../../pkg/parser/impl_build.go)
-  - map the generic Command trigger to command events
-
 - [x] update: [sys/sys.vsql](../../../pkg/sys/sys.vsql)
-  - replace both built-in recovery-checkpoint declarations with one projector for command, CUD, and ODoc events
+  - replace both built-in recovery-checkpoint declarations with one projector using `AFTER EXECUTE ON ALL COMMANDS` together with the CUD and ODoc triggers
 
 - [x] update: [pkg/sys/sys.vsql](../../../pkg/sys/it/testdata/apps/test2.app1/image/pkg/sys/sys.vsql)
   - mirror the single built-in recovery-checkpoint projector declaration in the generated integration-test schema

@@ -448,7 +448,7 @@ ABSTRACT WORKSPACE Workspace (
 		QUERY Modules RETURNS ModulesResult WITH Tags=(AllowedToEveryoneTag);
 		COMMAND RenameQName(RenameQNameParams) WITH Tags=(WorkspaceOwnerFuncTag);
 		PROJECTOR ProjectorRecoveryCheckpoint
-			AFTER EXECUTE ON Command OR
+			AFTER EXECUTE ON ALL COMMANDS OR
 			AFTER INSERT OR UPDATE OR ACTIVATE OR DEACTIVATE ON (CRecord, WRecord) OR
 			AFTER EXECUTE WITH PARAM ON ODoc;
 		SYNC PROJECTOR RecordsRegistryProjector
