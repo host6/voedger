@@ -182,6 +182,7 @@ events read       = 1,000,001
 nextRecordID      = 1004
 nextWLogOffset    = 1000042
 ```
+
 #### Bad cases on recovery
 
 What if the WLog ID-bearing offset is recorded incorrectly?
