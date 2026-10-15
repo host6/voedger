@@ -1,14 +1,80 @@
-Feature: Partition and workspace recovery from checkpoints
+Feature: Partition and workspace recovery
 
-  VAOperator restarts a VVM without losing the next partition-log offset,
-  workspace-log offset, or workspace record ID, even when a stored recovery
-  checkpoint points to a valid offset or is invalid.
+  VAOperator starts or restarts a VVM without losing the next partition-log
+  offset, workspace-log offset, or workspace record ID, even when recovery
+  checkpoints are absent, valid, or invalid.
+
+  Bootstrap isolates an initial-checkpoint failure to its partition: other
+  partition attempts finish and bootstrap continues. The server becomes ready
+  even if every partition attempt fails. The affected partition's first command
+  enters the normal recovery and retained-error retry lifecycle, making a
+  persistent error observable to its caller.
+
+  Rule: Initial recovery
+
+    Scenario: Missing checkpoints are computed for every declared partition
+      Given an application declares partition IDs 0 through 2
+      And partition 0 has stored checkpoint lastPLogOffset 20
+      And partition 1 has no stored partition checkpoint
+      And partition 1 PLog ends at offset 50 and contains workspace histories:
+        | WSID | latest ID-bearing WLog offset |
+        | 10   | 6                             |
+        | 11   | none                          |
+      And partition 2 has no stored partition checkpoint
+      And partition 2 PLog is empty
+      When VAOperator starts the VVM
+      Then partition 0 retains checkpoint lastPLogOffset 20
+      And workspace checkpoints for partition 1 are persisted before its partition checkpoint:
+        | WSID | wlogIDBearingOffset |
+        | 10   | 6                   |
+        | 11   | 0                   |
+      And partition checkpoints are persisted:
+        | partition ID | lastPLogOffset |
+        | 1            | 50             |
+        | 2            | 0              |
+      And the server becomes ready
+
+    Scenario: Initial recovery initializes checkpoints but not runtime sequence state
+      Given initial recovery has created checkpoints for partition 1 and workspace 10
+      And the server has become ready
+      When VAOperator submits a command to workspace 10
+      Then response status is "503 Service Unavailable" while partition recovery runs
+      When VAOperator retries the command after partition recovery completes
+      Then response status is "503 Service Unavailable" while workspace recovery runs
+      When VAOperator retries the command after workspace recovery completes
+      Then the command succeeds
+
+    Scenario Outline: Initial recovery failures do not prevent server readiness
+      Given an application declares partition IDs 0 through 2 with no stored partition checkpoints
+      And initial recovery fails for <failed_partitions> with "PLog read failed"
+      When VAOperator starts the VVM
+      Then partition checkpoints are <checkpoint_state>
+      And initial-recovery error "PLog read failed" is logged for <failed_partitions>
+      And the server becomes ready
+      When VAOperator submits a command to partition <target_partition>
+      Then response status is "503 Service Unavailable" while partition recovery runs
+      When partition recovery fails with "PLog read failed"
+      And VAOperator submits another command to partition <target_partition>
+      Then response status is "500 Internal Server Error"
+      And response error is "partition <target_partition>: recovery failed: PLog read failed"
+      And exactly one retry of partition <target_partition> recovery starts
+      When VAOperator submits another command before that retry completes
+      Then response status is "503 Service Unavailable" while the retry runs
+
+      Examples:
+        | failed_partitions      | checkpoint_state                    | target_partition |
+        | partition 1            | present for partitions 0 and 2 only | 1                |
+        | partitions 0 through 2 | absent for every partition          | 0                |
 
   Rule: Partition checkpoint
 
     usable checkpoint ──────────────────> resume from checkpoint ──┐
     absent or zero checkpoint ──────────> recover from FirstOffset ├─> actual PLog tail ──> later command succeeds after workspace recovery
     invalid checkpoint ─> log error ────> recover from FirstOffset ┘
+
+    An absent or zero partition checkpoint starts one scan at FirstOffset.
+    Zero is an initialization sentinel, not an event offset to validate, so this
+    path does not fall back or report an invalid checkpoint.
 
     Scenario Outline: Partition recovery starts from a checkpoint
       Given the PLog contains events through offset 50
@@ -78,6 +144,10 @@ Feature: Partition and workspace recovery from checkpoints
     workspace checkpoint ──> recover actual WLog tail ─────────────> successful retry uses following WLog offset
                           └─> recover latest allocated user record ID ──> successful retry uses following record ID
     non-ID-bearing suffix ──────────────────────────────────────────> advances the WLog offset only
+
+    An absent or zero workspace checkpoint starts one scan at FirstOffset.
+    Zero is an initialization sentinel, not an event offset to validate, so this
+    path does not fall back or report an invalid checkpoint.
 
     Scenario Outline: Workspace recovery starts from a checkpoint
       Given the WLog has an ID-bearing event at offset 6 with record ID 200001

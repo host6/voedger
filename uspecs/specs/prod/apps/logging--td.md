@@ -117,6 +117,40 @@ HTTP root context is derived from VVM context:
 - Bootstrap completes: level `Info`, stage `bootstrap`, msg `completed`
 - On app deployment failure: panics with `failed to deploy app <appName>: <error>` (no logging)
 
+**Initial recovery:**
+
+Initial recovery derives its context from bootstrap and replaces `extension`
+with `sys._Recovery`. Every entry uses `vapp=sys/voedger` and the
+component-local `app=<appQName>` attribute. Every per-partition entry also uses
+`partid=<partitionID>`; a failed workspace-checkpoint write additionally uses
+`wsid=<workspaceID>`.
+
+- Application initialization starts after application structures are available
+  and before partition attempts are scheduled: level `Info`, stage
+  `bootstrap.initial_recovery.start`, msg
+  `partitions <numPartitions>, workers <workerLimit>`
+- A missing partition is initialized successfully: level `Info`, stage
+  `bootstrap.initial_recovery.partition.complete`, msg
+  `lastPLogOffset <offset>, workspaceCheckpoints <count>`
+- A partition attempt fails: level `Error`, stage
+  `bootstrap.initial_recovery.error`, msg `<operation>: <error message>`, where
+  `<operation>` is one of `get partition checkpoint`, `read PLog`,
+  `put workspace checkpoint`, or `put partition checkpoint`
+- Application initialization completes after every scheduled attempt has
+  finished: level `Info`, stage `bootstrap.initial_recovery.complete`, msg
+  `initialized <count>, skipped <count>, failed <count>`
+
+While the bootstrap context remains active, each partition attempt emits at most
+one `bootstrap.initial_recovery.error` entry and no completion entry after that
+error. The message identifies both the operation that failed and its underlying
+error. Such an error is isolated to the partition: it leaves the partition
+completion marker absent, does not cancel sibling attempts, is not returned as a
+bootstrap error, and does not prevent the application-completion entry or server
+readiness. Bootstrap-context cancellation takes precedence over classifying an
+operation error as partition-scoped; cancellation and application setup failure
+before partition scheduling are returned to bootstrap, and the
+application-completion entry is not emitted.
+
 #### Leadership acquisition
 
 Uses `vapp="sys/voedger"`, `extension="sys._Leadership"`, `key` attribs.

@@ -14,14 +14,16 @@ Refs:
 
 ## Why
 
-Partition and workspace sequence state must survive a VVM restart without rebuilding every counter from the complete log.
+Partition and workspace sequence state must survive a VVM restart without rebuilding every counter from the complete log on demand. Existing deployments can already contain PLog and WLog history while having no recovery checkpoints, so VVM startup must backfill the initial checkpoint set before normal request-driven recovery begins.
 
 ## What
 
 In the production application-processing context:
 
 - Store only the last handled PLog offset in the partition checkpoint.
-- Store one WLog ID-bearing offset: the offset of the most recent ID-bearing event observed by the checkpoint projector. Do not persist the last WLog offset or record IDs themselves.
+- Store one WLog ID-bearing offset: the offset of the most recent ID-bearing event found by initial recovery or observed by the checkpoint projector. Do not persist the last WLog offset or record IDs themselves.
+- During VVM bootstrap, ensure that every declared application partition has a partition checkpoint. For each partition whose checkpoint is absent, scan its complete PLog, compute workspace checkpoints for every WSID encountered, persist those workspace checkpoints, and persist the partition checkpoint last.
+- Represent a successfully initialized empty PLog with a present partition checkpoint whose `lastPLogOffset` is zero. Represent an encountered workspace with no ID-bearing event with a present workspace checkpoint whose `wlogIDBearingOffset` is zero.
 - Recover a partition by reading the PLog from its saved handled offset through the end, using the final event to set the next PLog offset, and reapplying that final event.
 - After partition recovery, let the requesting command continue to the workspace stage, which starts workspace recovery on demand.
 - Recover a workspace by reading its WLog inclusively from the WLog ID-bearing offset through the end. Use the actual final event to set the next WLog offset and the latest ID-bearing event encountered in the complete suffix to restore record-ID allocation.
@@ -36,82 +38,47 @@ In the production application-processing context:
 ### Key concepts
 
 - **Recovery checkpoint** (or **checkpoint**): a persisted set of log offsets used as inclusive recovery-scan starts. A checkpoint accelerates recovery but is not an authoritative copy of recovered sequence state.
-- **Partition checkpoint**: `lastPLogOffset`, the latest PLog offset stored by the checkpoint projector for a partition.
-- **Workspace checkpoint**: `wlogIDBearingOffset`, the offset of the latest ID-bearing WLog event seen by the checkpoint projector for a workspace.
+- **Partition checkpoint**: `lastPLogOffset`, the latest PLog offset selected by initial recovery or subsequently stored by the checkpoint projector for a partition. A present zero value is an initialization sentinel marking an initialized empty PLog; it is not an event offset to validate.
+- **Workspace checkpoint**: `wlogIDBearingOffset`, the offset of the latest ID-bearing WLog event found by initial recovery or subsequently seen by the checkpoint projector for a workspace. A present zero value is an initialization sentinel marking an encountered workspace for which no ID-bearing event was found; it is not an event offset to validate.
 - **ID-bearing event**: a WLog event that allocates at least one new non-singleton record ID.
-- **Inclusive suffix scan**: a log read that starts with the event identified by a checkpoint and continues through the actual log tail. The first returned event validates the checkpoint; the complete suffix supplies the recovered values.
+- **Initial recovery**: bootstrap-time reconstruction of missing recovery checkpoints from complete PLogs before an application's partitions and asynchronous projectors are started. It initializes checkpoint storage only; it does not restore or publish runtime partition or workspace sequence state.
+- **Known partition**: every partition ID in the application deployment descriptor's contiguous declared range `0..NumPartitions-1`, whether or not that partition has a PLog event or allocated storage yet.
+- **Initial-recovery worker limit**: `runtime.GOMAXPROCS(0)`, sampled once when an application's initial recovery starts. It is the Go runtime's effective available-processor limit and bounds the number of that application's missing partitions whose checkpoints may be computed concurrently.
+- **Initial-recovery completion marker**: the presence of a partition checkpoint. Initial recovery writes all workspace checkpoints derived from that partition before writing its partition checkpoint, so an absent partition checkpoint means that the partition must be scanned again.
+- **Inclusive suffix scan**: a log read that starts with the event identified by a nonzero checkpoint and continues through the actual log tail. The first returned event validates the checkpoint; the complete suffix supplies the recovered values. An absent or zero checkpoint instead selects a direct full scan from `FirstOffset`.
+- **Checkpoint invalid**: a nonzero checkpoint exists but any of:
+  - `Read*Log(storedOffset, ReadToTheEnd)` produces no callback (e.g. beyond the end)
+  - offset of the event on the first callback of `Read*Log(storedOffset, ReadToTheEnd)` is not equal to `storedOffset` (e.g. points to an unoccupied offset in the middle of the log)
+  - for `Workspace checkpoint`: event on the first callback of `Read*Log(storedOffset, ReadToTheEnd)` has no new IDs (e.g. `storedOffset` incorrectly recorded)
 - **Checkpoint fallback**: one inclusive scan from `FirstOffset` when a stored checkpoint is invalid. Recovery does not rewrite the checkpoint.
 - **Partition recovery**: service-scoped recovery that restores the next PLog offset and republishes the application partition.
 - **Workspace recovery**: on-demand recovery that restores one workspace's next WLog offset and record ID after its partition has recovered.
 
 ### Decisions
 
-#### Key decisions
+- Store only `lastPLogOffset` per partition and `wlogIDBearingOffset` per workspace. Checkpoints are inclusive scan starts, not authoritative sequence state; do not store the last WLog offset or record-ID high-water marks.
+- `ProjectorRecoveryCheckpoint` advances the partition checkpoint every 100 PLog events and replaces the workspace checkpoint on each ID-bearing event.
+- Bootstrap orchestrates initial recovery through `checkpoints.IInitialRecovery`; `pkg/checkpoints` owns event scanning and checkpoint calculation.
+- A present partition checkpoint skips initial recovery. For each missing checkpoint in `0..NumPartitions-1`, scan the complete PLog and retain its end plus the latest ID-bearing WLog offset, or zero, for every encountered WSID.
+- Run partition scans concurrently with a per-application limit sampled from `runtime.GOMAXPROCS(0)`. Persist all computed workspace checkpoints before the partition checkpoint.
+- A partition-scoped scan or storage failure is logged, leaves its partition checkpoint absent, and does not cancel sibling scans, fail bootstrap, or degrade server readiness. Only pre-scheduling application setup failure or bootstrap cancellation is fatal.
+- Initial recovery initializes checkpoint storage only. Runtime partition and workspace states remain request-recovered.
+- An absent or zero checkpoint starts one scan at `FirstOffset` without validation or invalid-checkpoint logging. A nonzero checkpoint must identify the first returned event, and a workspace checkpoint must identify an ID-bearing event; otherwise recovery logs the error and performs one fallback scan from `FirstOffset`.
+- Partition recovery restores the next PLog offset from the actual tail and reapplies the final event. A later request starts workspace recovery, which restores the next WLog offset and next non-singleton record ID from the actual WLog tail.
+- Recovery admission remains `503` while work runs. A retained failure is returned as `500` while one retry starts; an in-progress retry returns `503`.
+- Workspace recovery remains bounded by `NumWSRecoverers`, deduplicated by WSID, tied to the service context, and joined on shutdown.
+- Recovery logs identify the application, partition, workspace when applicable, failed operation, and underlying error.
+- `sequences.feature` covers successful user-visible issuance; `sequences--td.md` keeps issuance internals and failure-induced gaps. All checkpoint and recovery behavior belongs in `recovery.feature` and `recovery--td.md`.
 
-- Store the offset of the latest ID-bearing WLog event seen by the checkpoint projector.
-- The stored offset is only a safe scan accelerator. It must not become an authoritative copy of either recovered value.
-- Store the offset of the latest PLog event seen by the checkpoint projector.
-- Recover partitions and workspaces independently and start each recovery only when a request first needs it.
-- Persist neither the last WLog offset nor record IDs; derive both recovered workspace values by scanning from the workspace checkpoint through the actual WLog tail.
+Notes:
 
-#### Key flow
-
-1. During normal processing, `ProjectorRecoveryCheckpoint` stores the current PLog offset every 100 PLog events and replaces the workspace checkpoint whenever it sees a later ID-bearing WLog event.
-2. After restart, the first request to an unrecovered partition starts partition recovery from its partition checkpoint and receives `503 Service Unavailable`.
-3. Partition recovery validates the checkpoint, scans inclusively through the actual PLog tail, restores the next PLog offset, reapplies the final event when one exists, and publishes the recovered partition without starting workspace recovery.
-4. The next request reaches the workspace stage, starts recovery of its workspace from the workspace checkpoint, and receives `503 Service Unavailable`.
-5. Workspace recovery validates the checkpoint, scans inclusively through the actual WLog tail, restores the next WLog offset and record ID, and publishes the recovered workspace.
-6. A subsequent request uses the recovered partition and workspace and proceeds normally.
-
-#### Checkpoint data and persistence
-
-- Store the partition checkpoint as `{"lastPLogOffset": <offset>}` and store no other PLog checkpoint state.
-- Store the workspace checkpoint as `{"wlogIDBearingOffset": <offset>}`. The field identifies the latest ID-bearing event seen by the checkpoint projector; it is zero when the projector has not seen such an event and is never authoritative sequence state.
-- Do not additionally store the last WLog offset. The asynchronous projector may lag the WLog, so its latest seen ID-bearing offset is not necessarily the latest ID-bearing event in the log. Recovery must still scan from the checkpoint through the tail, and a separately stored last offset does not safely shorten that scan.
-- Do not use partition IDs or WSIDs as clustering columns. Append the partition ID or WSID, respectively, to the existing checkpoint partition key and use the fixed singleton clustering column `[]byte{1}` for every checkpoint record. Ok to make many small partitions.
-- Do not store a record-ID high-water mark and do not extend `IIDGenerator` with a persisted-state accessor.
-- Use one built-in asynchronous projector, `ProjectorRecoveryCheckpoint`, for both checkpoint types. Whenever the projector sees an event that allocates non-singleton record IDs, replace `wlogIDBearingOffset` with that event's offset so the checkpoint identifies the latest ID-bearing event seen by the projector. Recovery correctness must not depend on the projector having reached the WLog tail. When `PLogOffset % 100 == 0`, save the current PLog offset.
-
-#### Partition recovery
-
-- On the first request to an unrecovered partition, start only partition recovery and return the existing partition-recovering `503` response.
-- Start partition recovery at the persisted `lastPLogOffset`, or `FirstOffset` when the value is absent or zero. Perform an inclusive `ReadPLog(startOffset, ReadToTheEnd)` and retain only the final event returned by the scan.
-- When a partition checkpoint is present, require the first returned PLog event offset to equal `lastPLogOffset`. No returned event or a different first offset means that the checkpoint does not identify an existing event.
-- If the partition checkpoint is invalid, abort the suffix scan, log `cp.partition_recovery.checkpoint.invalid` error, and repeat the inclusive scan from `FirstOffset`. Never perform more than these two scans and do not rewrite the checkpoint during recovery.
-- If the PLog scan from `FirstOffset` is empty, set `nextPLogOffset = FirstOffset` and publish the recovered partition without reapplying an event. Otherwise, set `nextPLogOffset = lastPLogEventOffset + 1`, reapply that final event, and publish the recovered partition. Do not start workspace recovery from the partition-recovery goroutine.
-
-#### Workspace recovery
-
-- Start workspace recovery from the workspace command-processing stage when a subsequent request reaches the recovered partition.
-- Start workspace recovery at the persisted `wlogIDBearingOffset`, or `FirstOffset` when it is absent or less than `FirstOffset`. Perform one inclusive `ReadWLog(startOffset, ReadToTheEnd)`, retaining the final event offset and the latest non-singleton record ID encountered anywhere in the suffix.
-- When a workspace checkpoint is present, require the first callback to report exactly `wlogIDBearingOffset` and require that event to allocate at least one non-singleton record ID. No callback, a different first callback offset, or a non-ID-bearing checkpoint event makes the checkpoint invalid.
-- If the workspace checkpoint is invalid, abort the suffix scan, log `cp.workspace_recovery.checkpoint.invalid`, and repeat one inclusive scan from `FirstOffset`. The fallback scan restores both counters; never perform more than one fallback scan and do not rewrite the checkpoint during recovery.
-- If the WLog scan from `FirstOffset` is empty, set `nextWLogOffset = FirstOffset` and `nextRecordID = FirstUserRecordID`. Otherwise, set `nextWLogOffset = lastWLogEventOffset + 1` from the actual final event without comparing it with the checkpoint.
-- Determine `nextRecordID` only from newly allocated non-singleton CUD record IDs. Singleton IDs have a different scope and must not advance the workspace record-ID generator.
-- While scanning from `wlogIDBearingOffset` to the WLog end, retain the maximum non-singleton record ID from the latest event that contains one. The stored offset is the latest ID-bearing event seen by the projector, but it is only an inclusive recovery start and does not prove that the projector had reached the latest ID-bearing event or the WLog tail.
-- If the complete scanned suffix provides no newly allocated non-singleton record ID, use `FirstUserRecordID` as `nextRecordID`. Otherwise, use the latest found event's maximum non-singleton record ID plus one.
-
-#### Recovery coordination and admission
-
-- Retain one service-scoped recovery lifecycle per application partition and add a per-partition, on-demand workspace recovery lifecycle.
-- Admit a workspace recovery only after reserving one of the partition's `NumWSRecoverers` slots. If no slot is available, return `503`, log that the workspace recovery limit was reached, and create neither recovery state nor a waiting goroutine. A later request may try again.
-- Deduplicate by WSID. A request for a workspace whose goroutine is still running returns `503`; a completed workspace is admitted immediately. Preserve the existing retained-error/report-and-retry lifecycle for failed recovery attempts.
-- Treat `NumWSRecoverers` as the exact upper bound. The default VVM configuration sets it to four; an explicit zero permits no workspace recovery and therefore yields `503` for an unrecovered workspace.
-- Keep partition and workspace recovery tied to the service context, ignore stale attempt completion after partition replacement, and join recovery goroutines during command-service shutdown.
-
-#### Recovery logging
-
-- Log recovery admission and failure responses through `cp.error` with `partition <partitionID>:` or `workspace <wsid>:` prefixes.
-- Log partition recovery start, PLog-read failure, and completion with `vapp=sys/voedger`, `extension=sys._Recovery`, and `partid=<partitionID>`.
-- Log workspace recovery start, initial WLog suffix-read failure, and completion with the partition recovery attributes plus `wsid=<workspaceID>`.
-- Log malformed partition and workspace checkpoints at `Error` level with the stored offset and the exact decision text `retrying from FirstOffset`; use the normal recovery context attributes on the dedicated `cp.partition_recovery.checkpoint.invalid` and `cp.workspace_recovery.checkpoint.invalid` stages.
-
-#### VIT restart infrastructure
-
-- The VIT shared-storage restart helper uses the same `VITConfig` for both VVM runs. It materializes config-declared logins, workspaces, documents, and subjects only during the first run; the second run launches the VVM over preserved storage without issuing fixture-provisioning commands.
-- Preserve VIT lookup and authorization behavior on the second run by carrying the `appWorkspaces` and `principals` maps from the first VIT into the second VIT before common VIT initialization refreshes principal tokens. Keep these maps explicit: do not add `SecondRunConfig` or an aggregate type such as `predefinedEntities`.
+- Workspace chekpoints existance for each WSID is not checked on Intial recovery
+- The last event in the plog is not applied on the Inital Recovery. It is done on the first command to the partition
+- Query does not initiate partition or workspace recovery. Only a command does.
 
 ### Checkpoint rationale
+
+Store the offset of the last-seen wlog ID-bearing event
 
 #### Why?
 
@@ -185,8 +152,16 @@ nextWLogOffset    = 1000042
 
 #### Bad cases on recovery
 
+What if the PLog offset is recorded incorrectly?
+
+- `lastPLogOffset` is absent or zero -> this is not an invalid checkpoint -> `ReadPLog(FirstOffset, ReadToTheEnd)` once, with no checkpoint-error log
+- `ReadPLog(lastPLogOffset, ReadToTheEnd)`
+  - no callback -> checkpoint invalid -> `ReadPLog(FirstOffset, ReadToTheEnd)`
+  - first callback offset differs from `lastPLogOffset` -> checkpoint invalid -> `ReadPLog(FirstOffset, ReadToTheEnd)`
+
 What if the WLog ID-bearing offset is recorded incorrectly?
 
+- `wlogIDBearingOffset` is absent or zero -> this is not an invalid checkpoint -> `ReadWLog(FirstOffset, ReadToTheEnd)` once, with no checkpoint-error log
 - `ReadWLog(wlogIDBearingOffset, ReadToTheEnd)`
   - no callback e.g. the `wlogIDBearingOffset` is beyond the end) -> checkpoint invalid -> `ReadWLog(FirstOffset, ReadToTheEnd)`
   - first callback offset differs from `wlogIDBearingOffset` -> checkpoint invalid -> `ReadWLog(FirstOffset, ReadToTheEnd)`
@@ -216,18 +191,45 @@ References (external):
 
 ## Functional design
 
-- [x] create: [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature)
-  - Feature specification for externally observable partition and workspace recovery from valid, absent, zero, and invalid checkpoints; empty-log defaults; non-ID-bearing WLog suffixes; workspace-recovery admission and retry behavior; and compact declarative rule flows
+- [x] create: [apps/sequences.feature](../../specs/prod/apps/sequences.feature)
+  - Feature specification for successful, externally observable allocation of PLog offsets, WLog offsets, ordinary record IDs, singleton IDs, and workspace IDs; exclude failed-command behavior, implementation-level persistence policy, restart, checkpoint, and recovery behavior
+
+- [x] rename: [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature) -> [apps/recovery.feature](../../specs/prod/apps/recovery.feature)
+  - rename the feature to partition and workspace recovery
+  - add a rule for bootstrap-time initial recovery when a declared partition has no checkpoint
+  - define known partitions as the complete declared `0..NumPartitions-1` range and include empty partitions in initialization
+  - specify that every missing partition checkpoint is computed from the complete PLog and persisted after the workspace checkpoints derived from that partition
+  - specify that every WSID encountered in the scan receives a workspace checkpoint, using zero when no ID-bearing event was found
+  - specify empty-PLog initialization as a present zero-valued partition checkpoint
+  - specify partition-isolated initial-recovery failure: other partition attempts finish, bootstrap continues, the failed partition remains without a completion marker, and its first command enters the existing `503`, retained-error `500`/single-retry, and retry-in-progress `503` lifecycle when the underlying error persists
+  - specify that the server becomes ready even when every partition initialization fails, so callers can observe persistent recovery errors through their requests rather than only through failed-startup logs
+  - specify that successful initial recovery initializes checkpoint storage only and that the first later request still enters normal partition recovery followed by lazy workspace recovery
+  - retain request-driven partition/workspace recovery, checkpoint validation, fallback, empty-log defaults, admission limits, and retry behavior under recovery-focused rules
+  - remove normal sequence-allocation behavior; it belongs in `sequences.feature`
 
 ## Technical design
 
-- [x] update: [apps/arch-sequences.md](../../specs/prod/apps/arch-sequences.md)
-  - update: allocation and recovery relationships to include persistent recovery checkpoints and separate partition and workspace recovery managers
-  - replace: full-PLog partition recovery and eager workspace reconstruction with inclusive checkpoint-tail scans and request-triggered workspace recovery
-  - document: `lastPLogOffset` and `wlogIDBearingOffset` meanings, checkpoint production by `ProjectorRecoveryCheckpoint`, and why the WLog checkpoint is only a safe scan start
-  - document: checkpoint validation, one fallback scan from `FirstOffset`, empty-log defaults, actual-tail recovery, and latest encountered non-singleton record-ID recovery
-  - update: recovery admission, retained failure, retry, concurrency-limit, cancellation, shutdown, and stale-attempt behavior for both recovery scopes
-  - update: recovery sequence diagrams, invariants, implementation links, and test evidence to match the new architecture
+- [x] delete: [apps/arch-sequences.md](../../specs/prod/apps/arch-sequences.md)
+  - replace its current-behavior content with the focused sequence-allocation and recovery feature technical designs below; retain historical material only through the existing historical references
+
+- [x] create: [apps/sequences--td.md](../../specs/prod/apps/sequences--td.md)
+  - Feature Technical Design whose Key concepts define sequence state, next values, partition/workspace/application allocation scopes, ordinary versus singleton record IDs, and successful-write advancement; cover the components, persistence boundaries, Sequence Trust Level policy, and failure-induced gaps needed to explain normal PLog-offset, WLog-offset, record-ID, and workspace-ID issuance, cite existing technical-test evidence for failure edges instead of adding those cases to `sequences.feature`, and explicitly exclude checkpointing and recovery
+
+- [x] create: [apps/recovery--td.md](../../specs/prod/apps/recovery--td.md)
+  - Feature Technical Design whose Key concepts define recovery checkpoints, partition and workspace checkpoints, their zero-value initialization sentinels, ID-bearing events, initial recovery, the initial-recovery completion marker, inclusive suffix scans, checkpoint fallback, partition recovery, and workspace recovery; cover bootstrap orchestration, checkpoint production and storage, request-driven recovery, admission and retry lifecycles, failure ordering, logging, and shutdown
+
+- [x] update: [apps/arch.md](../../specs/prod/apps/arch.md)
+  - remove `arch-sequences.md` as the canonical Sequences subsystem architecture
+  - link `sequences.feature` with `sequences--td.md` and `recovery.feature` with `recovery--td.md` as the focused feature designs
+
+- [x] update: [apps/arch2-sequences.md](../../specs/prod/apps/arch2-sequences.md)
+  - replace the link to the deleted canonical sequence architecture with links to the new sequence-allocation and recovery specifications while retaining this file as historical context only
+
+- [x] update: [apps/arch-deployment.md](../../specs/prod/apps/arch-deployment.md)
+  - document that bootstrap invokes the checkpoint initial-recovery component after app registration and before partition deployment
+  - document bounded per-application partition initialization, waiting for every scheduled attempt, and continuation into partition deployment despite logged partition-scoped failures
+  - define readiness as independent of partition-scoped initial-recovery results, including the all-partitions-failed case
+  - distinguish failures before partition scheduling and bootstrap cancellation, which still stop bootstrap, from every failure inside a scheduled partition attempt, which does not
 
 - [x] update: [apps/logging--td.md](../../specs/prod/apps/logging--td.md)
   - document: partition and workspace recovery admission and failure messages emitted through `cp.error`
@@ -235,15 +237,56 @@ References (external):
   - document: malformed-checkpoint error stages, messages, recovery context attributes, and fallback to `FirstOffset`
   - align malformed-checkpoint messages with the exact `retrying from FirstOffset` suffix emitted by command recovery
 
+- [x] update: [apps/logging--td.md](../../specs/prod/apps/logging--td.md)
+  - document initial-recovery start, per-partition completion, failure, and app completion stages under the bootstrap/recovery context
+  - require app QName and partition ID on per-partition initial-recovery logs, distinguish scan failures from checkpoint-storage failures, and state that these errors are partition-isolated rather than bootstrap-fatal
+
 ## Construction
 
 Gherkin scenario test placement:
 
-- Implement the scenarios in [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature) as VIT integration tests in [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go).
+- Implement the normal allocation scenarios in [apps/sequences.feature](../../specs/prod/apps/sequences.feature) as VIT integration tests in [sys/it/impl_sequences_test.go](../../../pkg/sys/it/impl_sequences_test.go); reuse or move exact existing coverage instead of duplicating it.
+- Implement the scenarios in [apps/recovery.feature](../../specs/prod/apps/recovery.feature) as VIT integration tests in [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go).
 - Implement the empty-PLog and empty-WLog scenarios as mocked command-processor tests because VIT cannot create those states.
 - Use a mocked command-processor test for any other scenario only when its VIT implementation proves impossible or disproportionately complicated. Document the concrete reason next to that fallback test; otherwise, do not duplicate Gherkin scenario coverage in command-processor tests.
 
 ### Tests
+
+- [x] create: [sys/it/impl_sequences_test.go](../../../pkg/sys/it/impl_sequences_test.go)
+  - VIT scenario tests for `sequences.feature`
+  - verify successful partition-scoped PLog-offset issuance, workspace-scoped WLog-offset and record-ID issuance, singleton-ID behavior, and persistent application-scoped WSID allocation; keep failed-command and recovery cases out of these feature scenarios
+  - move or rename exact existing tests where possible; use `sequences: scn:` names matching the feature scenarios, verbatim step comments at the code that realizes each step, and exact Examples header/row comments and placeholder mappings for every Scenario Outline row
+
+- [x] create: [checkpoints/initial_recovery_test.go](../../../pkg/checkpoints/initial_recovery_test.go)
+  - unit tests for bootstrap-time checkpoint reconstruction over multiple declared partitions and workspaces
+  - cover every partition in the declared `0..NumPartitions-1` range, present and absent checkpoints, empty PLogs with no allocated storage, workspaces with and without ID-bearing events, and selection of the latest ID-bearing WLog offset
+  - verify the concurrency bound, continuation of other partitions after one scan or storage failure, waiting for all attempts, workspace-before-partition persistence order, retry on the next bootstrap, no writes for a completed partition, context cancellation, and absence of any runtime recovery/publication side effect
+  - capture and assert one operation-specific error log for each failed partition
+  - use a private test constructor with an explicit worker limit to prove the bound deterministically without changing process-wide `GOMAXPROCS`; verify that the public constructor samples `runtime.GOMAXPROCS(0)` for each application initialization
+
+- [x] update: [sys/it/impl_bootstrap_test.go](../../../pkg/sys/it/impl_bootstrap_test.go)
+  - use an injected test initializer to verify the technical orchestration contract: bootstrap invokes initial recovery for every registered app before deploying its partitions
+  - verify that one or all logged partition-scoped failures do not stop partition deployment or server readiness, while a pre-scheduling application setup error or bootstrap cancellation still stops deployment; leave the feature scenarios and checkpoint-value assertions in `impl_recovery_test.go`
+
+- [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
+  - rename feature traceability from `recovery-checkpoints: scn:` to `recovery: scn:` and align step comments with `recovery.feature`
+  - replace request-time absent-partition-checkpoint scenarios with bootstrap initial-recovery scenarios
+  - retain direct technical coverage for defensive request-time handling of a checkpoint removed after bootstrap
+  - simulate a pre-checkpoint deployment by creating PLog histories in shared storage and removing their partition completion markers before the next VVM launch
+  - verify that bootstrap initializes every missing declared partition, persists the actual PLog tail, creates a workspace checkpoint for every WSID encountered, and stores zero for empty/non-ID-bearing histories
+  - inject one partition-scoped initial-recovery failure and verify that other partitions receive completion markers, bootstrap continues, the failed partition remains unmarked, and its command observes `503`, retained-error `500` with one retry, and `503` while the retry runs if the failure persists
+  - inject failures for every partition and verify that the server still reports ready and accepts commands, allowing each affected partition's request-driven recovery to surface its own persistent error
+  - verify across shared-storage VVM runs that initial recovery creates checkpoints once and later bootstrap runs preserve completed partition markers
+  - verify that checkpoint initialization does not eagerly recover runtime state: the first command still receives partition-recovery `503`, the next reaches lazy workspace recovery, and only the later retry succeeds
+  - give every feature scenario an exact `recovery: scn:` subtest name, place each verbatim step comment immediately above the code that realizes it, and preserve exact Examples header/row comments and placeholder mappings
+
+- [x] update: [command/impl_test.go](../../../pkg/processors/command/impl_test.go)
+  - rename retained feature scenario tests to the `recovery: scn:` prefix
+  - keep request-time missing-partition-checkpoint behavior as a technical fallback test rather than an initial-recovery feature scenario
+  - verify that absent and zero-valued partition and workspace checkpoints each cause exactly one read from `FirstOffset`, no validation attempt, no fallback read, and no invalid-checkpoint log
+
+- [x] update: [checkpoints/impl_test.go](../../../pkg/checkpoints/impl_test.go)
+  - exercise the shared ID-bearing-event predicate used by both initial recovery and the asynchronous checkpoint projector
 
 - [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
   - realign every VIT scenario subtest, exact Examples row, and step comment with the updated feature specification
@@ -257,7 +300,7 @@ Gherkin scenario test placement:
   - continue reading from the successful insert's returned WLog offset through the end and assert that exactly that insert event exists there, with no later WLog event
 
 - [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
-  - replace semantic Scenario Outline disambiguators such as `zero`, `valid but outdated`, `valid`, `beyond end`, `missing event`, and event-kind abbreviations with the exact distinguishing Examples cell value, so all 20 non-empty-log Examples rows are directly discoverable from their `recovery-checkpoints: scn:` names
+  - replace semantic Scenario Outline disambiguators such as `zero`, `valid but outdated`, `valid`, `beyond end`, `missing event`, and event-kind abbreviations with the exact distinguishing Examples cell value, so all 20 non-empty-log Examples rows are directly discoverable from their final `recovery: scn:` names
   - preserve the existing exact Examples header/row comments, placeholder mappings, distinct checkpoint kinds, fixture construction, and behavioral assertions; do not duplicate the existing scenario tests or expand the grouped technical tests
   - correct the seven workspace-checkpoint step comments from `Given the stored workspace checkpoint is <checkpoint>` to the feature's verbatim `And the stored workspace checkpoint is <checkpoint>`
   - explicitly retain the already exact `updates of existing records` case and its `checkpointExistingRecordSuffix` path, and the CUD-free and existing-record-update invalid-checkpoint paths at offsets 12 and 14
@@ -282,7 +325,7 @@ Gherkin scenario test placement:
   - verify storage-error propagation and registration of the single standard asynchronous projector
 
 - [x] update: [command/impl_test.go](../../../pkg/processors/command/impl_test.go)
-  - implement the empty-PLog and empty-WLog scenarios from [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature) with mocked logs
+  - implement the empty-PLog and empty-WLog scenarios from the renamed [apps/recovery.feature](../../specs/prod/apps/recovery.feature) with mocked logs
   - implement another Gherkin scenario here only if its VIT implementation is impossible or disproportionately complicated, and document the concrete reason for the fallback
   - verify one inclusive PLog read from the saved `lastPLogOffset` to the end
   - verify that partition recovery does not start workspace recovery and that a subsequent request starts it from the command stage
@@ -331,7 +374,7 @@ Gherkin scenario test placement:
   - use the exported WLog storage-key helper in the event-read failure test
 
 - [x] update: [sys/it/impl_recovery_test.go](../../../pkg/sys/it/impl_recovery_test.go)
-  - implement every non-empty-log scenario in [apps/recovery-checkpoints.feature](../../specs/prod/apps/recovery-checkpoints.feature) as a VIT integration test
+  - implement every non-empty-log scenario in the renamed [apps/recovery.feature](../../specs/prod/apps/recovery.feature) as a VIT integration test
   - cover absent and zero checkpoints, earlier valid offsets, and current PLog and WLog checkpoints from the scenario examples
   - cover PLog and WLog checkpoints beyond the log end, checkpoints whose exact event is missing, and a WLog checkpoint pointing to a non-ID-bearing event
   - verify `wlogIDBearingOffset` across sequential VVM instances sharing storage
@@ -360,6 +403,38 @@ Gherkin scenario test placement:
   - replace the ambiguous launch-only switch with an explicit `createEntities` decision
   - when `createEntities` is false, still apply the VVM config, register workspace templates, and launch services, but skip sign-up, workspace initialization, configured document and subject creation, and post-initialization fixture actions
   - keep `appWorkspaces` and `principals` as explicit inputs on the restart path rather than defining a generic or vaguely named holder type
+
+### Initial recovery
+
+- [ ] create: [checkpoints/initial_recovery.go](../../../pkg/checkpoints/initial_recovery.go)
+  - bootstrap-time `IInitialRecovery` implementation backed by the app-structures provider and recovery-checkpoint storage
+  - `NewInitialRecovery` constructor and `Ensure(ctx, appQName, numPartitions)` operation that enumerates `0..numPartitions-1`, skips partitions with present completion markers, and scans each missing partition from `FirstOffset` through the PLog tail
+  - per-partition accumulation of the final PLog offset and latest ID-bearing WLog offset for every encountered WSID, including zero-valued checkpoints for empty or non-ID-bearing histories
+  - production worker limit sampled from `runtime.GOMAXPROCS(0)` at the start of each `Ensure` call, plus a private constructor seam for deterministic lower-limit tests
+  - bounded worker scheduling that waits for every partition attempt and does not cancel siblings after a partition-scoped failure
+  - ordered persistence of all computed workspace checkpoints before the partition completion marker, with partition-scoped read/storage errors logged and suppressed and only application-level setup or context errors returned to bootstrap
+
+- [ ] update: [checkpoints/types.go](../../../pkg/checkpoints/types.go)
+  - define `IInitialRecovery` with `Ensure(ctx, appQName, numPartitions) error` for injection into bootstrap
+  - document checkpoint presence, rather than a nonzero offset, as the initial-recovery completion marker
+  - document zero-valued partition and workspace checkpoints produced for empty and non-ID-bearing histories and identify both zero values as non-validating full-scan sentinels
+
+- [ ] update: [checkpoints/impl.go](../../../pkg/checkpoints/impl.go)
+  - extract one ID-bearing-event predicate shared by initial recovery and `ProjectorRecoveryCheckpoint`
+  - keep the asynchronous projector as the normal post-bootstrap checkpoint producer
+
+- [ ] update: [btstrp/impl.go](../../../pkg/btstrp/impl.go)
+  - accept the service context and injected initial-recovery contract
+  - invoke initial recovery after each app is registered with app structures and before `DeployAppPartitions` starts its partition workers
+  - apply the same ordering to the cluster app, built-in apps, and sidecar apps
+  - continue into partition deployment and successful readiness after the initializer has logged any number of partition-scoped failures; stop bootstrap only when the initializer returns a pre-scheduling application setup or context error
+
+- [ ] update: [vvm/provide.go](../../../pkg/vvm/provide.go)
+  - construct `checkpoints.IInitialRecovery` from the app-structures provider and recovery-checkpoint storage
+  - inject it and the bootstrap operator context into `btstrp.Bootstrap`
+
+- [ ] regenerate: [vvm/wire_gen.go](../../../pkg/vvm/wire_gen.go)
+  - reflect construction and bootstrap injection of the checkpoint initial-recovery component
 
 ### Checkpoint contracts and storage
 
@@ -390,7 +465,7 @@ Gherkin scenario test placement:
 
 - [x] update: [checkpoints/types.go](../../../pkg/checkpoints/types.go)
   - define a PLog checkpoint containing only `lastPLogOffset` and a WLog checkpoint containing only `wlogIDBearingOffset`
-  - name the Go workspace-checkpoint field `WLogIDBearingOffset`; its documentation must state that it identifies the latest ID-bearing event seen by the projector but need not identify the latest ID-bearing event in the WLog
+  - name the Go workspace-checkpoint field `WLogIDBearingOffset`; its documentation must state that it identifies the latest ID-bearing event found by its producer but need not identify the latest ID-bearing event in the WLog
   - define the partition and workspace checkpoint storage contract
 
 - [x] update: [checkpoints/impl.go](../../../pkg/checkpoints/impl.go)

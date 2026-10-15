@@ -1,6 +1,6 @@
 # Context subsystem architecture: prod/apps/deployment
 
-Apps deployment subsystem architecture for registering built-in and sidecar applications, deploying their partitions, and rejecting incompatible redeployments. Context-level overview: [arch.md](./arch.md).
+Apps deployment subsystem architecture for registering built-in and sidecar applications, initializing missing recovery checkpoints, deploying partitions, and rejecting incompatible redeployments. Context-level overview: [arch.md](./arch.md).
 
 ## External actors
 
@@ -15,10 +15,13 @@ Roles:
 ## Scenarios overview
 
 - **`Bootstrap VVM`**
-  - On VVM startup initialize the cluster app workspace, deploy the cluster app partition, register every built-in and sidecar app through `c.cluster.DeployApp`, and deploy their partitions.
+  - On VVM startup initialize the cluster app workspace, register each application's structures, initialize its missing recovery checkpoints, and then deploy its partitions.
 
 - **`Register app`**
   - The cluster app validates compatibility against the previously stored `cluster.App` descriptor and writes the descriptor on first deployment.
+
+- **`Initialize recovery checkpoints`**
+  - Before partition workers start, process every declared partition with bounded concurrency; isolate and log failures inside partition attempts while allowing deployment and readiness to continue.
 
 - **`Deploy app partitions`**
   - The app partitions engine builds extension engine pools, deploys partition-scoped projector actualizers, and deploys schedulers per partition.
@@ -42,6 +45,7 @@ External actors
 Bootstrap
     |
     +-- [Bootstrap operator]
+    +-- [Checkpoint initial recovery]
     |
     v
 Cluster app
@@ -72,8 +76,14 @@ State
 ### Bootstrap
 
 - `[Bootstrap operator]`
-  - Runs `btstrp.Bootstrap` once on VVM startup: initializes the cluster app workspace via `cluster.InitAppWS`, deploys the cluster app partition, then calls `c.cluster.DeployApp` for each built-in and sidecar app and deploys their partitions through the app partitions engine.
+  - Runs `btstrp.Bootstrap` with the VVM service context: initializes the cluster app workspace, registers each app with `[DeployApp]`, calls `[Checkpoint initial recovery]`, and calls `[DeployAppPartitions]` only after initialization has waited for every scheduled attempt. The ordering applies to the cluster app, built-in apps, and sidecar apps.
   - Path to file: [pkg/btstrp/impl.go](../../../../pkg/btstrp/impl.go)
+
+- `[Checkpoint initial recovery]`
+  - `checkpoints.IInitialRecovery.Ensure(ctx, appQName, numPartitions)` ensures a partition checkpoint exists for every ID in `0..numPartitions-1` before the application's actualizers and schedulers start.
+  - Missing partitions are processed with a per-application concurrency bound sampled once from `runtime.GOMAXPROCS(0)`. The component waits for every scheduled attempt. A partition-attempt failure is logged and suppressed; pre-scheduling application setup failure and bootstrap cancellation are returned.
+  - Design: [recovery--td.md](./recovery--td.md)
+  - Declaration: [pkg/checkpoints/types.go](../../../../pkg/checkpoints/types.go)
 
 ### Cluster app
 
@@ -126,11 +136,15 @@ State
 ```text
 [Bootstrap operator]
   -> initClusterAppWS -> [(AppStructs)] for sys.cluster
-  -> [DeployApp](sys.cluster) -> [DeployAppPartitions](sys.cluster, [0])
+  -> [DeployApp](sys.cluster)
+  -> [Checkpoint initial recovery](sys.cluster, declared partition count)
+  -> [DeployAppPartitions](sys.cluster, [0])
   -> for each built-in/sidecar app:
        [c.cluster.DeployApp] -> [cluster.App uniqueness check] -> [(cluster.App)]
   -> for each built-in/sidecar app:
-       [DeployApp](app) -> [DeployAppPartitions](app, [0..NumParts-1])
+       [DeployApp](app)
+       -> [Checkpoint initial recovery](app, NumParts)
+       -> [DeployAppPartitions](app, [0..NumParts-1])
 ```
 
 ### Register app
@@ -144,13 +158,32 @@ State
                     match    -> ok
 ```
 
+### Initialize recovery checkpoints
+
+```text
+[Bootstrap operator]
+  -> [Checkpoint initial recovery]: Ensure(ctx, appQName, NumPartitions)
+      - sample worker limit = runtime.GOMAXPROCS(0)
+      - enumerate complete declared range 0..NumPartitions-1
+      - skip partitions with completion markers
+      - process missing partitions with at most worker-limit attempts in flight
+      - on partition attempt failure: log; leave marker absent; continue siblings
+      - wait for every scheduled attempt
+      - setup failure or bootstrap cancellation -> return error
+      - otherwise -> return success even when every partition attempt failed
+  -> [DeployAppPartitions]: start all declared partition workers
+  -> server readiness: independent of partition-attempt results
+```
+
 ### Deploy app partitions
 
 ```text
 [DeployApp]
   -> [VSQL parser] + [AppDef builder] -> appdef.IAppDef
   -> [Extension presence validator]
-  -> build [extension engine pools] per ProcessorKind
+  -> build extension engine pools per ProcessorKind
+[Bootstrap operator]
+  -> [Checkpoint initial recovery]: wait for all declared partition attempts
 [DeployAppPartitions]
   -> per partition:
        deploy projector actualizers (async)
@@ -168,3 +201,12 @@ State
             VSQL-declared extension missing in code      -> panic, bootstrap fails
             built-in extension missing in VSQL           -> panic, bootstrap fails
 ```
+
+## Cross-cutting concerns
+
+### Bootstrap failure and readiness
+
+- Every `[Checkpoint initial recovery]` partition-attempt error is partition-scoped: it is logged, leaves that partition incomplete, and does not stop sibling attempts, `[DeployAppPartitions]`, or server readiness.
+- Every `[Checkpoint initial recovery]` invocation waits for all attempts it scheduled before `[Bootstrap operator]` proceeds to partition deployment.
+- Every application-setup error raised before partition scheduling and every bootstrap-context cancellation is bootstrap-fatal and prevents partition deployment for that application.
+- Server readiness does not assert that recovery checkpoints exist for every partition; it remains successful when one or all partition initialization attempts fail so request-driven recovery can expose persistent errors to callers.

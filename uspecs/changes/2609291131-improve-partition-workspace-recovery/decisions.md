@@ -1,0 +1,161 @@
+# Decisions: Improved partition and workspace recovery
+
+## Inconsistency: zero workspace checkpoint could not satisfy checkpoint validation
+
+Decision: Treat an absent or zero-valued workspace checkpoint as a direct instruction to scan once from `FirstOffset`, without checkpoint validation, fallback, or invalid-checkpoint logging.
+
+- Pros: makes the zero value a usable initialization sentinel; satisfies the requirement to persist a checkpoint for every encountered workspace; matches the existing zero-checkpoint scenarios and logging expectations.
+- Cons: request-driven recovery intentionally treats a present zero workspace checkpoint and an absent workspace checkpoint the same way.
+- Confidence: high
+
+Alternatives:
+
+1. Do not persist zero workspace checkpoints
+   - Pros: avoids sentinel semantics.
+   - Cons: violates the requirement to persist a workspace checkpoint for every encountered WSID.
+   - Confidence: low
+2. Define special validation rules for present-zero checkpoints
+   - Pros: preserves a semantic distinction between present-zero and absent checkpoints during recovery.
+   - Cons: adds a separate validation branch while producing the same full scan from `FirstOffset`.
+   - Confidence: medium
+
+## Inconsistency: zero partition checkpoint could not satisfy checkpoint validation
+
+Decision: Treat an absent or zero-valued partition checkpoint as a direct instruction to scan once from `FirstOffset`, without checkpoint validation, fallback, or invalid-checkpoint logging.
+
+- Pros: makes zero usable both as the completion marker for an initialized empty partition and as the normal full-scan sentinel; matches the existing zero-checkpoint scenarios and logging expectations.
+- Cons: request-driven recovery intentionally treats a present zero partition checkpoint and an absent partition checkpoint the same way.
+- Confidence: high
+
+Alternatives:
+
+1. Do not persist zero partition checkpoints
+   - Pros: avoids sentinel semantics.
+   - Cons: removes the completion marker for an initialized empty partition and causes initial recovery to repeat on every bootstrap.
+   - Confidence: low
+2. Define special validation rules for present-zero checkpoints
+   - Pros: preserves a semantic distinction between present-zero and absent checkpoints during recovery.
+   - Cons: adds a separate validation branch while producing the same full scan from `FirstOffset`.
+   - Confidence: medium
+
+## Ambiguity: scope of the sequence technical design
+
+Decision: Keep `sequences.feature` focused on successful, externally observable sequence issuance, while allowing `sequences--td.md` to document the write boundaries, Sequence Trust Level policy, and failure-induced gaps needed to explain that issuance. Exclude all checkpoint and recovery behavior from both files.
+
+- Pros: keeps the behavioral specification concise while preserving the technical invariants that would otherwise be lost with `arch-sequences.md`; maintains a clean boundary between sequence issuance and recovery.
+- Cons: the technical design intentionally covers failure consequences that are not scenarios in its paired feature file.
+- Confidence: high
+
+Alternatives:
+
+1. Restrict both sequence files to successful allocation only
+   - Pros: gives "normal behavior" its narrowest interpretation.
+   - Cons: leaves important advancement, persistence, and gap invariants undocumented after deleting `arch-sequences.md`.
+   - Confidence: medium
+2. Include user-visible allocation failures and gaps in both sequence files
+   - Pros: provides complete behavioral coverage of sequence issuance failures.
+   - Cons: broadens `sequences.feature` beyond the requested normal behavior.
+   - Confidence: low
+
+## Ambiguity: whether initial recovery restores runtime sequence state
+
+Decision: Initial recovery only computes and persists missing checkpoints. It does not restore or publish in-memory partition or workspace state; normal request-driven partition recovery and lazy workspace recovery remain unchanged after bootstrap.
+
+- Pros: matches the requested checkpoint-computation goal; keeps bootstrap bounded to checkpoint initialization; preserves one runtime recovery path and the existing recovery-admission lifecycle.
+- Cons: the first request after bootstrap still incurs recovery, and partition recovery scans again from the newly created checkpoint.
+- Confidence: high
+
+Alternatives:
+
+1. Eagerly restore every partition and workspace during initial recovery
+   - Pros: requests can be admitted immediately after startup.
+   - Cons: substantially increases bootstrap work and removes lazy workspace recovery.
+   - Confidence: low
+2. Restore partition runtime state during initial recovery but leave workspaces lazy
+   - Pros: avoids the first partition-recovery response while retaining bounded workspace recovery.
+   - Cons: couples checkpoint initialization to command-processor publication and creates two partition-recovery paths.
+   - Confidence: medium
+
+## Vagueness: partitions covered by initial recovery
+
+Decision: Treat every partition ID in the application's declared contiguous range `0..NumPartitions-1` as known. Initial recovery checks and, when necessary, initializes every one of those partitions, including partitions with empty PLogs or no allocated log storage.
+
+- Pros: gives every deployable partition an explicit completion marker; aligns initialization with bootstrap's partition deployment set; keeps `IInitialRecovery` count-based.
+- Cons: performs checkpoint checks and may write zero-valued markers for partitions that have never received an event.
+- Confidence: high
+
+Alternatives:
+
+1. Initialize only partitions for which PLog storage already exists
+   - Pros: avoids work for unused partitions.
+   - Cons: leaves empty partitions without completion markers and requires a separate stored-PLog enumeration facility.
+   - Confidence: low
+2. Let bootstrap pass an explicit partition-ID list
+   - Pros: supports non-contiguous or selectively deployed partitions.
+   - Cons: expands the interface even though current applications deploy a contiguous declared range.
+   - Confidence: medium
+
+## Uncertainty: partition scheduling and failure policy during initial recovery
+
+Decision: Process missing partitions with bounded concurrency. When one partition fails, log its error, leave its completion marker absent, allow all other partition attempts to finish, and continue bootstrap. The failed partition's first request starts normal recovery and receives `503`; if that recovery still fails, the existing retained-error `500` and single-retry lifecycle applies.
+
+- Pros: reduces bootstrap latency; isolates damaged or temporarily unavailable partitions; allows healthy partitions and the public service to start; reuses the existing request-driven recovery error lifecycle.
+- Cons: bootstrap may complete with one or more partitions still requiring full request-time recovery; operators must notice the initial-recovery error logs; concurrency and partial success make startup less deterministic.
+- Confidence: user-provided
+
+Alternatives:
+
+1. Process partitions sequentially and fail bootstrap on the first error
+   - Pros: deterministic ordering and simple failure semantics.
+   - Cons: one partition prevents every healthy partition and the public service from starting.
+   - Confidence: high
+2. Process partitions with bounded concurrency and cancel remaining attempts on the first error
+   - Pros: improves startup speed while still treating incomplete initialization as bootstrap-fatal.
+   - Cons: discards the opportunity to initialize healthy partitions after one failure.
+   - Confidence: medium
+3. Attempt every partition but return an aggregated error and fail bootstrap afterward
+   - Pros: maximizes checkpoint progress while reporting all failures.
+   - Cons: still prevents service startup even though healthy partitions completed successfully.
+   - Confidence: low
+
+## Uncertainty: source of the initial-recovery concurrency bound
+
+Decision: Bound partition initial-recovery workers by `runtime.GOMAXPROCS(0)`, sampled once at the start of each application's initialization. Do not add a VVM configuration field.
+
+- Pros: follows the Go runtime's effective available-processor limit; adapts to the process environment without additional configuration; keeps initial-recovery concurrency independent of workspace recovery.
+- Cons: CPU availability, rather than storage throughput, determines concurrency; operators cannot tune initial recovery independently without changing `GOMAXPROCS`.
+- Confidence: user-provided
+
+Alternatives:
+
+1. Add `VVMConfig.NumInitialRecoveryWorkers` with a default of four
+   - Pros: independently tunable for deployment and storage characteristics.
+   - Cons: adds configuration validation and wiring for a bootstrap-only operation.
+   - Confidence: high
+2. Use a fixed package constant of four
+   - Pros: simple and predictable.
+   - Cons: cannot adapt to different process limits or deployment sizes.
+   - Confidence: medium
+3. Reuse `NumWSRecoverers`
+   - Pros: avoids a new setting or runtime lookup.
+   - Cons: couples application-level bootstrap work to an unrelated per-partition workspace-recovery limit.
+   - Confidence: low
+
+## Ambiguity: initial-recovery errors that may stop bootstrap
+
+Decision: Only a pre-scheduling application setup failure or bootstrap context cancellation is fatal. Every error inside a scheduled partition attempt is isolated to that partition, even if the same dependency error affects all partitions. The server still starts and reports ready, allowing request-driven recovery to expose a persistent error to users through their requests.
+
+- Pros: keeps the service reachable; gives users the actual error associated with their request; prevents a partition or shared storage failure from turning into an opaque non-running server whose cause is visible only in logs.
+- Cons: readiness no longer means every partition has a usable checkpoint; an outage can produce repeated per-partition logs and request errors after startup.
+- Confidence: user-provided
+
+Alternatives:
+
+1. Treat only context cancellation as fatal
+   - Pros: maximizes startup availability under setup failures as well.
+   - Cons: bootstrap may lack the application structures or dependencies required to schedule meaningful partition attempts.
+   - Confidence: low
+2. Treat shared-storage failures as fatal even when encountered by partition workers
+   - Pros: stops startup early when a systemic outage is likely.
+   - Cons: requires unreliable local-versus-global error classification and prevents users from receiving the actual failure through request handling.
+   - Confidence: medium

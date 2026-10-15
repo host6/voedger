@@ -86,6 +86,27 @@ func TestRecoveryCheckpointProjectorWritesOnlyIDBearingWLogOffsets(t *testing.T)
 	require.Equal(WorkspaceCheckpoint{WLogIDBearingOffset: 22}, storage.workspace)
 }
 
+func TestIDBearingEvent(t *testing.T) {
+	t.Run("new ordinary record", func(t *testing.T) {
+		event := &testPLogEvent{cuds: []testCUDRow{{id: istructs.FirstUserRecordID, isNew: true}}}
+		require.True(t, isIDBearingEvent(event))
+	})
+
+	t.Run("new singleton", func(t *testing.T) {
+		event := &testPLogEvent{cuds: []testCUDRow{{id: istructs.FirstSingletonID, isNew: true}}}
+		require.False(t, isIDBearingEvent(event))
+	})
+
+	t.Run("existing ordinary record update", func(t *testing.T) {
+		event := &testPLogEvent{cuds: []testCUDRow{{id: istructs.FirstUserRecordID, isNew: false}}}
+		require.False(t, isIDBearingEvent(event))
+	})
+
+	t.Run("CUD-free event", func(t *testing.T) {
+		require.False(t, isIDBearingEvent(&testPLogEvent{}))
+	})
+}
+
 func TestRecoveryCheckpointProjectorReturnsStorageErrors(t *testing.T) {
 	require := require.New(t)
 	partitionErr := errors.New("injected partition checkpoint failure")
@@ -179,6 +200,7 @@ func (e *testPLogEvent) HandlingPartition() istructs.PartitionID { return e.part
 func (e *testPLogEvent) PLogOffset() istructs.Offset             { return e.pLogOffset }
 func (e *testPLogEvent) Workspace() istructs.WSID                { return e.wsid }
 func (e *testPLogEvent) WLogOffset() istructs.Offset             { return e.wLogOffset }
+func (e *testPLogEvent) Release()                                {}
 func (e *testPLogEvent) CUDs(cb func(istructs.ICUDRow) bool) {
 	for i := range e.cuds {
 		if !cb(&e.cuds[i]) {

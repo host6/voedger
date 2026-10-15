@@ -6,8 +6,12 @@
 package sys_it
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
+	"net/url"
+	"sync"
 	"testing"
 	"testing/fstest"
 
@@ -16,14 +20,14 @@ import (
 	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/btstrp"
 	"github.com/voedger/voedger/pkg/bus"
+	"github.com/voedger/voedger/pkg/checkpoints"
 	"github.com/voedger/voedger/pkg/cluster"
 	"github.com/voedger/voedger/pkg/extensionpoints"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/testingu"
-	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iblobstoragestg"
 	"github.com/voedger/voedger/pkg/istorage"
-	"github.com/voedger/voedger/pkg/istorage/mem"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
@@ -35,16 +39,16 @@ import (
 	builtinapps "github.com/voedger/voedger/pkg/vvm/builtin"
 	"github.com/voedger/voedger/pkg/vvm/builtin/clusterapp"
 	dbcertcache "github.com/voedger/voedger/pkg/vvm/db_cert_cache"
+	vvmstorage "github.com/voedger/voedger/pkg/vvm/storage"
 )
 
 func TestBoostrap_BasicUsage(t *testing.T) {
 	require := require.New(t)
-	memStorage := mem.Provide(testingu.MockTime)
 
 	// launch the VVM with an app with a certain NumParts and NumAppWorkspaces
 	numParts := istructs.NumAppPartitions(42)
 	numAppWS := istructs.NumAppWorkspaces(43)
-	cfg := getTestCfg(numParts, numAppWS, memStorage)
+	cfg := getTestCfg(numParts, numAppWS)
 	vit := it.NewVIT(t, &cfg)
 	defer vit.TearDown()
 
@@ -64,7 +68,7 @@ func TestBoostrap_BasicUsage(t *testing.T) {
 		postWiredInterfacePtrs := newPostWiredInterfacePtrs()
 		testBlobRequestHandler := blobprocessor.NewIRequestHandler(nil, 0, nil)
 		testRequestSender := bus.NewIRequestSender(testingu.MockTime, nil)
-		err := btstrp.Bootstrap(vit.IFederation.WithRetry(), vit.IAppStructsProvider, vit.Time, appParts, clusterApp, otherApps,
+		err := btstrp.Bootstrap(t.Context(), vit.IFederation.WithRetry(), vit.IAppStructsProvider, vit.Time, appParts, newMockInitialRecovery(t, vit, nil), clusterApp, otherApps,
 			nil, vit.ITokens, vit.IAppStorageProvider, postWiredInterfacePtrs, testBlobRequestHandler, testRequestSender)
 		require.NoError(err)
 		require.NotNil(*postWiredInterfacePtrs.BlobberAppStorage)
@@ -87,7 +91,7 @@ func TestBoostrap_BasicUsage(t *testing.T) {
 		//nolint errcheck
 		require.PanicsWithValue(fmt.Sprintf("failed to deploy app %[1]s: status 409, expected [200 201]: num partitions changed: app %[1]s declaring NumPartitions=%d but was previously deployed with NumPartitions=%d",
 			otherApps[0].Name, otherApps[0].AppDeploymentDescriptor.NumParts, otherApps[0].AppDeploymentDescriptor.NumParts-1), func() {
-			btstrp.Bootstrap(vit.IFederation.WithRetry(), vit.IAppStructsProvider, vit.Time, appParts, clusterApp, otherApps,
+			btstrp.Bootstrap(t.Context(), vit.IFederation.WithRetry(), vit.IAppStructsProvider, vit.Time, appParts, newMockInitialRecovery(t, vit, nil), clusterApp, otherApps,
 				nil, vit.ITokens, vit.IAppStorageProvider, postWiredInterfacePtrs, testBlobRequestHandler, testRequestSender)
 		})
 	})
@@ -106,10 +110,255 @@ func TestBoostrap_BasicUsage(t *testing.T) {
 			postWiredInterfacePtrs := newPostWiredInterfacePtrs()
 			testBlobRequestHandler := blobprocessor.NewIRequestHandler(nil, 0, nil)
 			testRequestSender := bus.NewIRequestSender(testingu.MockTime, nil)
-			btstrp.Bootstrap(vit.IFederation.WithRetry(), vit.IAppStructsProvider, vit.Time, appParts, clusterApp, otherApps,
+			btstrp.Bootstrap(t.Context(), vit.IFederation.WithRetry(), vit.IAppStructsProvider, vit.Time, appParts, newMockInitialRecovery(t, vit, nil), clusterApp, otherApps,
 				nil, vit.ITokens, vit.IAppStorageProvider, postWiredInterfacePtrs, testBlobRequestHandler, testRequestSender)
 		})
 	})
+}
+
+func TestBootstrapInitialRecoveryOrchestration(t *testing.T) {
+	cfg := getTestCfg(2, 1)
+	vit := it.NewVIT(t, &cfg)
+	defer vit.TearDown()
+	clusterApp, otherApps := bootstrapTestApps(vit)
+	require.NotEmpty(t, otherApps)
+	sidecarApps := []appparts.SidecarApp{{BuiltInApp: otherApps[len(otherApps)-1]}}
+	otherApps = otherApps[:len(otherApps)-1]
+
+	t.Run("initializes every registered app before its partitions", func(t *testing.T) {
+		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+		defer cleanup()
+		timeline := &bootstrapTimeline{}
+		recordingParts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
+		initializer := newMockInitialRecovery(t, vit, timeline)
+
+		err := runBootstrap(t.Context(), vit, recordingParts, initializer, clusterApp, otherApps, sidecarApps)
+
+		require.NoError(t, err)
+		apps := []appparts.BuiltInApp{appparts.BuiltInApp(clusterApp)}
+		apps = append(apps, otherApps...)
+		apps = append(apps, sidecarApps[0].BuiltInApp)
+
+		// check operations order: registrered, initialized, partitions
+		for _, app := range apps {
+			order_DeployApp := timeline.index("DeployApp:" + app.Name.String())
+			order_Ensure := timeline.index("Ensure:" + app.Name.String())
+			order_DeployAppPartitions := timeline.index("DeployAppPartitions:" + app.Name.String())
+			require.NotEqual(t, -1, order_DeployApp, app.Name.String())
+			require.NotEqual(t, -1, order_Ensure, app.Name.String())
+			require.NotEqual(t, -1, order_DeployAppPartitions, app.Name.String())
+			require.Less(t, order_DeployApp, order_Ensure, app.Name.String())
+			require.Less(t, order_Ensure, order_DeployAppPartitions, app.Name.String())
+			require.Equal(t, app.NumParts, initializer.numPartitions(app.Name))
+		}
+	})
+
+	for _, failureScope := range []string{"one partition", "all partitions"} {
+		t.Run(failureScope+" failures do not stop deployment or readiness", func(t *testing.T) {
+			appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+			defer cleanup()
+			timeline := &bootstrapTimeline{}
+			recordingParts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
+			initializer := newMockInitialRecovery(t, vit, timeline)
+			initializer.partitionFailures = map[appdef.AppQName]string{
+				otherApps[0].Name: failureScope + " failed",
+			}
+			logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+
+			err := runBootstrap(t.Context(), vit, recordingParts, initializer, clusterApp, otherApps, sidecarApps)
+
+			require.NoError(t, err, "successful bootstrap is the readiness signal")
+			require.NotEqual(t, -1, timeline.index("DeployAppPartitions:"+otherApps[0].Name.String()))
+			logCap.HasLine("stage=bootstrap.initial_recovery.error", failureScope+" failed")
+		})
+	}
+
+	t.Run("application setup error stops partition deployment", func(t *testing.T) {
+		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+		defer cleanup()
+		timeline := &bootstrapTimeline{}
+		recordingParts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
+		setupErr := errors.New("application structures unavailable")
+		initializer := newMockInitialRecovery(t, vit, timeline)
+		initializer.setupErrors = map[appdef.AppQName]error{
+			otherApps[0].Name: setupErr,
+		}
+
+		err := runBootstrap(t.Context(), vit, recordingParts, initializer, clusterApp, otherApps, sidecarApps)
+
+		require.ErrorIs(t, err, setupErr)
+		require.Equal(t, -1, timeline.index("DeployAppPartitions:"+otherApps[0].Name.String()))
+	})
+
+	t.Run("bootstrap cancellation stops partition deployment", func(t *testing.T) {
+		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+		defer cleanup()
+		timeline := &bootstrapTimeline{}
+		recordingParts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
+		initializer := newMockInitialRecovery(t, vit, timeline)
+		ctx, cancel := context.WithCancel(t.Context())
+		cancel()
+
+		err := runBootstrap(ctx, vit, recordingParts, initializer, clusterApp, otherApps, sidecarApps)
+
+		require.ErrorIs(t, err, context.Canceled)
+		require.Equal(t, -1, timeline.index("DeployAppPartitions:"+istructs.AppQName_sys_cluster.String()))
+	})
+}
+
+func bootstrapTestApps(vit *it.VIT) (btstrp.ClusterBuiltInApp, []appparts.BuiltInApp) {
+	var clusterApp btstrp.ClusterBuiltInApp
+	otherApps := []appparts.BuiltInApp{}
+	for _, app := range vit.BuiltInAppsPackages {
+		if app.Name == istructs.AppQName_sys_cluster {
+			clusterApp = btstrp.ClusterBuiltInApp(app.BuiltInApp)
+		} else {
+			otherApps = append(otherApps, app.BuiltInApp)
+		}
+	}"DeployApp:"
+	return clusterApp, otherApps
+}
+
+func runBootstrap(ctx context.Context, vit *it.VIT, appParts appparts.IAppPartitions,
+	initializer checkpoints.IInitialRecovery, clusterApp btstrp.ClusterBuiltInApp,
+	otherApps []appparts.BuiltInApp, sidecarApps []appparts.SidecarApp) error {
+	postWiredInterfacePtrs := newPostWiredInterfacePtrs()
+	testBlobRequestHandler := blobprocessor.NewIRequestHandler(nil, 0, nil)
+	testRequestSender := bus.NewIRequestSender(testingu.MockTime, nil)
+	return btstrp.Bootstrap(ctx, vit.IFederation.WithRetry(), vit.IAppStructsProvider, vit.Time, appParts, initializer,
+		clusterApp, otherApps, sidecarApps, vit.ITokens, vit.IAppStorageProvider, postWiredInterfacePtrs,
+		testBlobRequestHandler, testRequestSender)
+}
+
+// need to track the correct order of methods call:
+// DeployApp() -> Ensure() -> DeployAppPartitions()
+type bootstrapTimeline struct {
+	mu     sync.Mutex
+	events []string
+}
+
+func (l *bootstrapTimeline) append(event string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.events = append(l.events, event)
+}
+
+func (l *bootstrapTimeline) index(event string) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for index, actual := range l.events {
+		if actual == event {
+			return index
+		}
+	}
+	return -1
+}
+
+type bootstrapRecordingAppParts struct {
+	appparts.IAppPartitions
+	timeline *bootstrapTimeline
+}
+
+func (p *bootstrapRecordingAppParts) DeployApp(name appdef.AppQName, extModuleURLs map[string]*url.URL,
+	def appdef.IAppDef, partsCount istructs.NumAppPartitions, numEngines [appparts.ProcessorKind_Count]uint,
+	numAppWorkspaces istructs.NumAppWorkspaces) {
+	p.timeline.append("DeployApp:" + name.String())
+	p.IAppPartitions.DeployApp(name, extModuleURLs, def, partsCount, numEngines, numAppWorkspaces)
+}
+
+func (p *bootstrapRecordingAppParts) DeployAppPartitions(name appdef.AppQName, partitionIDs []istructs.PartitionID) {
+	p.timeline.append("DeployAppPartitions:" + name.String())
+	p.IAppPartitions.DeployAppPartitions(name, partitionIDs)
+}
+
+type mockInitialRecovery struct {
+	checkpoints.IInitialRecovery
+	mu                sync.Mutex
+	timeline          *bootstrapTimeline
+	parts             map[appdef.AppQName]istructs.NumAppPartitions
+	setupErrors       map[appdef.AppQName]error
+	partitionFailures map[appdef.AppQName]string
+	appQNamesByID     map[istructs.ClusterAppID]appdef.AppQName
+}
+
+var _ checkpoints.IInitialRecovery = (*mockInitialRecovery)(nil)
+
+func newMockInitialRecovery(t *testing.T, vit *it.VIT, timeline *bootstrapTimeline) *mockInitialRecovery {
+	t.Helper()
+	sysVVMStorage, err := vit.IAppStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
+	require.NoError(t, err)
+	recovery := &mockInitialRecovery{
+		timeline:      timeline,
+		parts:         map[appdef.AppQName]istructs.NumAppPartitions{},
+		appQNamesByID: map[istructs.ClusterAppID]appdef.AppQName{},
+	}
+	appStructsProvider := &mockInitialRecoveryAppStructsProvider{
+		IAppStructsProvider: vit.IAppStructsProvider,
+		recovery:            recovery,
+	}
+	checkpointStorage := &mockInitialRecoveryCheckpointStorage{
+		IRecoveryCheckpointStorage: vvmstorage.NewRecoveryCheckpointStorage(sysVVMStorage),
+		recovery:                   recovery,
+	}
+	recovery.IInitialRecovery = checkpoints.NewInitialRecovery(appStructsProvider, checkpointStorage)
+	return recovery
+}
+
+func (r *mockInitialRecovery) Ensure(ctx context.Context, appQName appdef.AppQName,
+	numPartitions istructs.NumAppPartitions) error {
+	r.mu.Lock()
+	r.parts[appQName] = numPartitions
+	r.mu.Unlock()
+
+	err := r.Ensure(ctx, appQName, numPartitions)
+	if err == nil && r.timeline != nil {
+		r.timeline.append("Ensure:" + appQName.String())
+	}
+	return err
+}
+
+func (r *mockInitialRecovery) numPartitions(appQName appdef.AppQName) istructs.NumAppPartitions {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.parts[appQName]
+}
+
+type mockInitialRecoveryAppStructsProvider struct {
+	istructs.IAppStructsProvider
+	recovery *mockInitialRecovery
+}
+
+func (p *mockInitialRecoveryAppStructsProvider) BuiltIn(appQName appdef.AppQName) (istructs.IAppStructs, error) {
+	p.recovery.mu.Lock()
+	setupErr := p.recovery.setupErrors[appQName]
+	p.recovery.mu.Unlock()
+	if setupErr != nil {
+		return nil, setupErr
+	}
+	appStructs, err := p.IAppStructsProvider.BuiltIn(appQName)
+	if err == nil {
+		p.recovery.mu.Lock()
+		p.recovery.appQNamesByID[appStructs.ClusterAppID()] = appQName
+		p.recovery.mu.Unlock()
+	}
+	return appStructs, err
+}
+
+type mockInitialRecoveryCheckpointStorage struct {
+	checkpoints.IRecoveryCheckpointStorage
+	recovery *mockInitialRecovery
+}
+
+func (s *mockInitialRecoveryCheckpointStorage) GetPartitionCheckpoint(appID istructs.ClusterAppID,
+	partitionID istructs.PartitionID) (checkpoints.PartitionCheckpoint, bool, error) {
+	s.recovery.mu.Lock()
+	appQName := s.recovery.appQNamesByID[appID]
+	partitionFailure := s.recovery.partitionFailures[appQName]
+	s.recovery.mu.Unlock()
+	if partitionFailure == "all partitions failed" || partitionFailure == "one partition failed" && partitionID == 0 {
+		return checkpoints.PartitionCheckpoint{}, false, errors.New(partitionFailure)
+	}
+	return s.IRecoveryCheckpointStorage.GetPartitionCheckpoint(appID, partitionID)
 }
 
 func newPostWiredInterfacePtrs() btstrp.PostWireInterfacePtrs {
@@ -121,7 +370,7 @@ func newPostWiredInterfacePtrs() btstrp.PostWireInterfacePtrs {
 	}
 }
 
-func getTestCfg(numParts istructs.NumAppPartitions, numAppWS istructs.NumAppWorkspaces, storage istorage.IAppStorageFactory) it.VITConfig {
+func getTestCfg(numParts istructs.NumAppPartitions, numAppWS istructs.NumAppWorkspaces) it.VITConfig {
 	fs := fstest.MapFS{
 		"app.vsql": &fstest.MapFile{
 			Data: []byte(`APPLICATION app1();`),
@@ -140,12 +389,6 @@ func getTestCfg(numParts istructs.NumAppPartitions, numAppWS istructs.NumAppWork
 				NumAppWorkspaces: numAppWS,
 				AppQName:         istructs.AppQName_test1_app1,
 				Packages:         []parser.PackageFS{sysPkg, app1PackageFS},
-			}
-		}),
-		it.WithVVMConfig(func(cfg *vvm.VVMConfig) {
-			// use predefined storage
-			cfg.StorageFactory = func(timeu.ITime) (provider istorage.IAppStorageFactory, err error) {
-				return storage, nil
 			}
 		}),
 	)

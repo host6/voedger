@@ -620,7 +620,7 @@ func restartCmdProc(app *testApp) {
 }
 
 func TestRecoveryCheckpoints_RecordIDsRecovery(t *testing.T) {
-	t.Run("missing and zero checkpoints causes scan from the first offset", func(t *testing.T) {
+	t.Run("request-time fallback for missing and zero checkpoints scans once from the first offset", func(t *testing.T) {
 		for _, checkpointState := range []string{"missing", "zero"} {
 			t.Run(checkpointState, func(t *testing.T) {
 				require := require.New(t)
@@ -1016,7 +1016,7 @@ func TestRecoveryCheckpoints_RecordIDsRecovery(t *testing.T) {
 }
 
 func TestRecoveryFeatureCommandProcessorScenarios(t *testing.T) {
-	t.Run("recovery-checkpoints: scn: Empty PLog recovery starts at FirstOffset: absent", func(t *testing.T) {
+	t.Run("recovery: scn: Empty PLog recovery starts at FirstOffset: absent", func(t *testing.T) {
 		// Empty logs cannot be produced by VIT because workspace provisioning writes
 		// initial events, so this scenario exercises both recovery managers directly.
 		// | checkpoint       |
@@ -1034,7 +1034,7 @@ func TestRecoveryFeatureCommandProcessorScenarios(t *testing.T) {
 		runEmptyPartitionFeatureScenario(t, false, false)
 	})
 
-	t.Run("recovery-checkpoints: scn: Empty PLog recovery starts at FirstOffset: lastPLogOffset 0", func(t *testing.T) {
+	t.Run("recovery: scn: Empty PLog recovery starts at FirstOffset: lastPLogOffset 0", func(t *testing.T) {
 		// Empty logs cannot be produced by VIT because workspace provisioning writes
 		// initial events, so this scenario exercises both recovery managers directly.
 		// | checkpoint       |
@@ -1052,7 +1052,7 @@ func TestRecoveryFeatureCommandProcessorScenarios(t *testing.T) {
 		runEmptyPartitionFeatureScenario(t, true, false)
 	})
 
-	t.Run("recovery-checkpoints: scn: Empty WLog recovery starts at FirstOffset and FirstUserRecordID: absent", func(t *testing.T) {
+	t.Run("recovery: scn: Empty WLog recovery starts at FirstOffset and FirstUserRecordID: absent", func(t *testing.T) {
 		// Empty logs cannot be produced by VIT because workspace provisioning writes
 		// initial events, so this scenario exercises workspace recovery directly.
 		// | checkpoint            |
@@ -1070,7 +1070,7 @@ func TestRecoveryFeatureCommandProcessorScenarios(t *testing.T) {
 		runEmptyWorkspaceFeatureScenario(t, false, false)
 	})
 
-	t.Run("recovery-checkpoints: scn: Empty WLog recovery starts at FirstOffset and FirstUserRecordID: wlogIDBearingOffset 0", func(t *testing.T) {
+	t.Run("recovery: scn: Empty WLog recovery starts at FirstOffset and FirstUserRecordID: wlogIDBearingOffset 0", func(t *testing.T) {
 		// Empty logs cannot be produced by VIT because workspace provisioning writes
 		// initial events, so this scenario exercises workspace recovery directly.
 		// | checkpoint            |
@@ -1088,7 +1088,7 @@ func TestRecoveryFeatureCommandProcessorScenarios(t *testing.T) {
 		runEmptyWorkspaceFeatureScenario(t, true, false)
 	})
 
-	t.Run("recovery-checkpoints: scn: Invalid partition checkpoint over an empty PLog", func(t *testing.T) {
+	t.Run("recovery: scn: Invalid partition checkpoint over an empty PLog", func(t *testing.T) {
 		// Empty logs cannot be produced by VIT because workspace provisioning writes
 		// initial events, so this scenario exercises both recovery managers directly.
 		// Given the PLog is empty
@@ -1104,7 +1104,7 @@ func TestRecoveryFeatureCommandProcessorScenarios(t *testing.T) {
 		runEmptyPartitionFeatureScenario(t, false, true)
 	})
 
-	t.Run("recovery-checkpoints: scn: Invalid workspace checkpoint over an empty WLog", func(t *testing.T) {
+	t.Run("recovery: scn: Invalid workspace checkpoint over an empty WLog", func(t *testing.T) {
 		// Empty logs cannot be produced by VIT because workspace provisioning writes
 		// initial events, so this scenario exercises workspace recovery directly.
 		// Given the WLog is empty
@@ -1250,7 +1250,7 @@ func runEmptyWorkspaceFeatureScenario(t *testing.T, zeroCheckpoint, invalidCheck
 }
 
 func TestWorkspaceRecovery(t *testing.T) {
-	t.Run("recovery-checkpoints: scn: Duplicate requests share one workspace recovery", func(t *testing.T) {
+	t.Run("recovery: scn: Duplicate requests share one workspace recovery", func(t *testing.T) {
 		require := require.New(t)
 		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
 		// This scenario uses command-processor recovery gates because holding a VIT
@@ -1291,7 +1291,7 @@ func TestWorkspaceRecovery(t *testing.T) {
 			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)))
 	})
 
-	t.Run("recovery-checkpoints: scn: Failed workspace recovery is reported and retried once", func(t *testing.T) {
+	t.Run("recovery: scn: Failed workspace recovery is reported and retried once", func(t *testing.T) {
 		require := require.New(t)
 		// Failure injection is not available through VIT, so this scenario uses the
 		// command processor's deterministic recovery hook.
@@ -1340,7 +1340,7 @@ func TestWorkspaceRecovery(t *testing.T) {
 			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)))
 	})
 
-	t.Run("recovery-checkpoints: scn: Recovery limit rejects without queueing and permits a later retry", func(t *testing.T) {
+	t.Run("recovery: scn: Recovery limit rejects without queueing and permits a later retry", func(t *testing.T) {
 		require := require.New(t)
 		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
 		// A full-VVM test would need to pause one workspace recovery while proving
@@ -1399,7 +1399,7 @@ func TestWorkspaceRecovery(t *testing.T) {
 			istructs.RecordID(response["NewIDs"].(map[string]interface{})["1"].(float64)))
 	})
 
-	t.Run("recovery-checkpoints: scn: Zero recovery limit rejects workspace recovery", func(t *testing.T) {
+	t.Run("recovery: scn: Zero recovery limit rejects workspace recovery", func(t *testing.T) {
 		require := require.New(t)
 		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
 		// A zero limit cannot provision a recoverable VIT workspace after restart,
