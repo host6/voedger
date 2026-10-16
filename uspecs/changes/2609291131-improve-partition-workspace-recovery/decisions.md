@@ -59,7 +59,7 @@ Alternatives:
 
 ## Ambiguity: whether initial recovery restores runtime sequence state
 
-Decision: Initial recovery only computes and persists missing checkpoints. It does not restore or publish in-memory partition or workspace state; normal request-driven partition recovery and lazy workspace recovery remain unchanged after bootstrap.
+Decision: Initial recovery only computes and persists missing checkpoints. It does not restore or publish in-memory partition or workspace state. Normal request-driven partition recovery and lazy workspace recovery remain unchanged for deployed partitions; a failed initial-recovery partition remains undeployed and cannot enter request-driven recovery during that server run.
 
 - Pros: matches the requested checkpoint-computation goal; keeps bootstrap bounded to checkpoint initialization; preserves one runtime recovery path and the existing recovery-admission lifecycle.
 - Cons: the first request after bootstrap still incurs recovery, and partition recovery scans again from the newly created checkpoint.
@@ -97,10 +97,10 @@ Alternatives:
 
 ## Uncertainty: partition scheduling and failure policy during initial recovery
 
-Decision: Process missing partitions with bounded concurrency. When one partition fails, log its error, leave its completion marker absent, allow all other partition attempts to finish, and continue bootstrap. The failed partition's first request starts normal recovery and receives `503`; if that recovery still fails, the existing retained-error `500` and single-retry lifecycle applies.
+Decision: Process missing partitions with CPU-bounded concurrency and return `([]istructs.PartitionID, map[istructs.PartitionID]error, error)`: successful/already-completed IDs, failed partition IDs with operation-specific errors, and a separate fatal setup/context error. Bootstrap passes the IDs directly to `DeployAppPartitions` and logs each map entry once with application and partition identity; the initializer does not duplicate the failure logs. A failed reconstruction leaves its completion marker absent; any checkpoint-read/scan/write error prevents deployment of that partition. Let other attempts finish and continue to server readiness even when all attempts fail. Start no asynchronous projectors or scheduled jobs for excluded partitions. Every command to an undeployed partition receives `500` with `partition not found`, without a runtime retry; a missing application instead returns `400` with `application not found`. Application and partition identity belong in structured log fields, not in these request errors. Missing completion markers are retried on a later bootstrap. Keep `IAppPartitions` and its existing errors unchanged, classify missing applications through its existing registration lookup, and do not retain the returned error map in request handling.
 
-- Pros: reduces bootstrap latency; isolates damaged or temporarily unavailable partitions; allows healthy partitions and the public service to start; reuses the existing request-driven recovery error lifecycle.
-- Cons: bootstrap may complete with one or more partitions still requiring full request-time recovery; operators must notice the initial-recovery error logs; concurrency and partial success make startup less deterministic.
+- Pros: reduces bootstrap latency; isolates failed partitions from commands and background workers; supplies deployment IDs directly and gives bootstrap each error needed for logging; reuses the existing unknown-partition behavior without retained error state.
+- Cons: failed partitions remain unavailable until a later successful bootstrap; readiness no longer implies that all partitions are deployed; operators use initial-recovery logs to diagnose why a partition was not deployed.
 - Confidence: user-provided
 
 Alternatives:
@@ -117,6 +117,10 @@ Alternatives:
    - Pros: maximizes checkpoint progress while reporting all failures.
    - Cons: still prevents service startup even though healthy partitions completed successfully.
    - Confidence: low
+4. Deploy failed partitions and rely on runtime recovery retries
+   - Pros: permits recovery without restarting the server.
+   - Cons: starts background workers on partitions whose checkpoint initialization failed and conflicts with the requested deployment gate.
+   - Confidence: superseded by user-provided selective-deployment policy
 
 ## Uncertainty: source of the initial-recovery concurrency bound
 
@@ -143,9 +147,9 @@ Alternatives:
 
 ## Ambiguity: initial-recovery errors that may stop bootstrap
 
-Decision: Only a pre-scheduling application setup failure or bootstrap context cancellation is fatal. Every error inside a scheduled partition attempt is isolated to that partition, even if the same dependency error affects all partitions. The server still starts and reports ready, allowing request-driven recovery to expose a persistent error to users through their requests.
+Decision: Only a pre-scheduling application setup failure or bootstrap context cancellation is fatal to an initial-recovery invocation. Every error inside a partition attempt is isolated to that partition, even if the same dependency error affects all partitions. The server still starts and reports ready with affected partitions undeployed, and their command requests return `500` with `partition not found`. Initial-recovery causes are returned to bootstrap in the partition-error map for logging, not passed into request handling. Existing bootstrap validation failures such as incompatible deployment descriptors remain fatal.
 
-- Pros: keeps the service reachable; gives users the actual error associated with their request; prevents a partition or shared storage failure from turning into an opaque non-running server whose cause is visible only in logs.
+- Pros: keeps the service reachable and healthy partitions usable; callers receive the existing unknown-partition error while initial-recovery logs contain the failure details.
 - Cons: readiness no longer means every partition has a usable checkpoint; an outage can produce repeated per-partition logs and request errors after startup.
 - Confidence: user-provided
 
@@ -157,5 +161,13 @@ Alternatives:
    - Confidence: low
 2. Treat shared-storage failures as fatal even when encountered by partition workers
    - Pros: stops startup early when a systemic outage is likely.
-   - Cons: requires unreliable local-versus-global error classification and prevents users from receiving the actual failure through request handling.
+   - Cons: requires unreliable local-versus-global error classification and prevents healthy partitions from serving requests after startup.
    - Confidence: medium
+
+## Dependency: bootstrap currently sends deployment commands through the cluster partition
+
+Decision: Apply the same initial-recovery deployment gate to the cluster partition. If it is excluded, bootstrap must avoid command retries against it. Share read-only persisted descriptor lookup/compatibility checks with cluster deployment so existing compatible apps can register locally, defer first-deployment/provisioning work that requires the unavailable cluster command path, and continue to readiness. Do not bypass descriptor incompatibility checks or create runtime workers for the excluded partition.
+
+- Pros: makes the startup guarantee hold for system partitions as well as user partitions; preserves compatibility validation and prevents startup from hanging on an unavailable dependency.
+- Cons: new deployment/provisioning work depending on the cluster partition waits for a later successful bootstrap.
+- Confidence: design inference needed to satisfy the user-provided all-partitions failure policy

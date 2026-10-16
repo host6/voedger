@@ -12,7 +12,7 @@ Normal offset and identifier issuance is specified separately in
   selected by initial recovery or the asynchronous checkpoint projector.
 - **Workspace checkpoint**: `wlogIDBearingOffset`, the latest ID-bearing WLog
   offset found by its producer. It need not be the latest ID-bearing event in
-  the WLog and is never treated as the WLog tail.
+  the WLog and is never treated as the WLog end.
 - **Zero-value initialization sentinel**: a present zero partition checkpoint
   marks an initialized empty PLog; a present zero workspace checkpoint marks an
   encountered workspace with no ID-bearing event. Either zero selects one scan
@@ -25,14 +25,26 @@ Normal offset and identifier issuance is specified separately in
 - **Initial-recovery completion marker**: presence of a partition checkpoint,
   including a zero-valued one. Workspace checkpoints derived from a partition
   are stored before this marker.
-- **Inclusive suffix scan**: `ReadPLog` or `ReadWLog` begins at the checkpointed
-  event and continues through the actual log tail.
+- **Deployable partition**: a declared partition whose existing completion marker was
+  read successfully or whose missing checkpoints were reconstructed and
+  persisted successfully by the current initial-recovery invocation.
+- **Undeployed partition**: a declared partition for which no runtime partition
+  has been created. An initial-recovery failure excludes that ID from deployment
+  for the current server run. The application remains registered for routing,
+  but no asynchronous actualizers or schedulers exist for the excluded ID.
+- **Inclusive log tail scan**: `ReadPLog` or `ReadWLog` begins at the checkpointed
+  event and continues through the actual log end.
 - **Checkpoint fallback**: one scan from `FirstOffset` after a nonzero checkpoint
   fails validation. Recovery does not repair the stored checkpoint.
 - **Partition recovery**: service-scoped, request-triggered restoration of the
   next PLog offset followed by reapplication of the final event.
 - **Workspace recovery**: lazy, request-triggered restoration of one workspace's
   next WLog offset and ordinary record-ID generator.
+
+Every WLog event originates in its partition's PLog. An empty PLog therefore
+implies empty WLogs for all workspaces in that partition. Empty-partition
+fixtures must preserve both logs; clearing only a provisioned PLog produces an
+impossible history and is not a recovery scenario.
 
 ## External actors
 
@@ -78,36 +90,77 @@ Application operations
 
 - `[Bootstrap operator]`
   - Registers each application with `[App partitions engine]`, invokes
-    `[Checkpoint initial recovery]`, and only then deploys the application's
-    partition workers. A returned setup or cancellation error stops bootstrap;
-    partition-scoped errors have already been logged and suppressed by the
-    initializer, so deployment and readiness continue.
+    `[Checkpoint initial recovery]`, logs each returned partition-error map
+    entry once with app QName and partition ID, and passes only the returned
+    deployable IDs to `DeployAppPartitions`. An empty ID slice skips that call.
+    The full declared partition count remains available for routing.
+  - A returned setup or cancellation error stops bootstrap without deploying
+    partitions from that invocation. Partition-scoped failures exclude only
+    the affected IDs; readiness remains successful even when no IDs are returned.
+  - Applies the same gate to cluster, built-in, and sidecar applications. The
+    bootstrap dependency path when the cluster partition is unavailable belongs
+    to [Apps deployment](./arch-deployment.md#bootstrap-failure-and-readiness);
+    bootstrap must not issue deployment commands to that excluded partition.
   - impl: [pkg/btstrp/impl.go](../../../../pkg/btstrp/impl.go)
 
 - `[Checkpoint initial recovery]`
-  - `checkpoints.IInitialRecovery.Ensure(ctx, appQName, numPartitions)` obtains
-    the application's event storage, samples `runtime.GOMAXPROCS(0)`, and checks
-    every declared partition in `0..numPartitions-1`.
-  - A present partition checkpoint skips that partition. Each missing partition
-    is scheduled under the sampled bound and scanned from `FirstOffset` through
-    the complete PLog. The attempt retains the actual final PLog offset and the
-    latest ID-bearing WLog offset for every WSID encountered.
+  - `checkpoints.IInitialRecovery.InitializeCheckpoints(ctx, appQName, numPartitions)` returns
+    `([]istructs.PartitionID, map[istructs.PartitionID]error, error)`: deployable
+    IDs, operation-specific errors keyed by failed partition ID, and an optional
+    fatal app-structures setup or context error. IDs belong to `0..numPartitions-1`.
+    When the fatal error is nil, the slice and map are disjoint and cover every
+    declared partition exactly once. An empty slice and a complete error map
+    with a nil fatal error are valid. A non-nil fatal error prevents deployment
+    from the returned IDs; collected partition errors can still be logged.
+  - Obtains the application's event storage and samples `runtime.GOMAXPROCS(0)`
+    once per call. A present partition checkpoint, including zero, makes that
+    partition deployable without scanning or rewriting it. Each missing partition
+    is scheduled concurrently under the sampled CPU bound and reads its PLog
+    sequentially from `FirstOffset` through the actual log end. The attempt
+    retains the final PLog offset and latest ID-bearing WLog offset for every
+    WSID encountered.
   - It stores a workspace checkpoint for every encountered WSID, using zero when
     no ID-bearing event was found, and stores the partition checkpoint last,
-    using zero for an empty PLog. A failed attempt therefore leaves no completion
-    marker and is repeated on a later bootstrap.
-  - It logs and suppresses every read or checkpoint-storage error inside a
-    scheduled partition attempt, waits for all scheduled attempts, and does not
-    cancel siblings. Only app-structures setup failure before scheduling or
-    bootstrap-context cancellation is returned.
+    using zero for an empty PLog. The partition is added to the deployable IDs
+    only after all these writes succeed. A failed reconstruction writes no
+    completion marker and is repeated on a later bootstrap.
+  - Every partition checkpoint-read, PLog-read, or checkpoint-write error omits
+    that ID from the deployable slice and adds it to the error map, retaining
+    the failed operation and wrapping the underlying cause. Concurrent attempts
+    collect their outcomes safely; the returned map is complete once all
+    scheduled attempts finish. A checkpoint-read failure never authorizes
+    deployment, even if a stored marker might exist. Partition-failure logging
+    belongs to `[Bootstrap operator]`;
+    the initializer does not duplicate those logs. No retained cause or
+    error-registration method is added to `[App partitions engine]` or
+    `[Command processor]`.
+  - Waits for all scheduled attempts without canceling siblings after a
+    partition-scoped failure. Only app-structures setup failure before scheduling
+    or bootstrap-context cancellation is returned as the fatal error.
   - decl: [pkg/checkpoints/types.go#IInitialRecovery](../../../../pkg/checkpoints/types.go)
 
-### Request recovery
+### Recovery on command request
 
 - `[Command processor]`
-  - Runs partition recovery admission after authentication/workspace checks and
-    workspace recovery admission after a recovered partition is available. A
-    command does not execute on the request that starts either recovery.
+  - Borrows the runtime partition before authentication and workspace checks.
+    When `Borrow` returns `appparts.ErrNotFound`, uses the existing
+    `IAppPartitions.AppPartsCount` registration lookup to distinguish a missing
+    application from a missing partition, without parsing error text or adding
+    a new app-partitions error contract. A missing application returns
+    `400 Bad Request` with `application not found`; a missing partition of a
+    registered application returns `500 Internal Server Error` with
+    `partition not found`. Neither message repeats application or partition
+    identifiers: command error logs carry `vapp=<appQName>` and
+    `partid=<partitionID>`, including when borrowing fails. Engine exhaustion
+    (`ErrNotAvailableEngines`) remains `503`.
+  - Repeated commands to an undeployed partition return the same not-found
+    error, even after its storage becomes healthy, and never reach runtime
+    recovery, command execution, offset allocation, or event writes. A later
+    bootstrap must successfully initialize the partition before it can deploy.
+  - For a deployed partition, runs partition recovery admission after
+    authentication/workspace checks and workspace recovery admission after a
+    recovered partition is available. A command does not execute on the request
+    that starts either recovery.
   - impl: [pkg/processors/command/provide.go](../../../../pkg/processors/command/provide.go)
   - impl: [pkg/processors/command/impl.go](../../../../pkg/processors/command/impl.go)
 
@@ -138,7 +191,7 @@ Application operations
 
 - `[Record ID generator]`
   - Starts at `FirstUserRecordID`; workspace recovery advances it from the latest
-    newly allocated non-singleton ID encountered in the complete WLog suffix.
+    newly allocated non-singleton ID encountered in the complete WLog tail scan.
   - impl: [pkg/istructsmem/idgenerator.go](../../../../pkg/istructsmem/idgenerator.go)
 
 ### Checkpointing
@@ -161,8 +214,9 @@ Application operations
 ### Application operations
 
 - `[Application events]`
-  - Supplies complete or inclusive-suffix PLog/WLog reads. Initial recovery reads
-    PLogs only; partition recovery reads a PLog; workspace recovery reads a WLog.
+  - Supplies complete PLog/WLog reads or inclusive log tail scans. Initial
+    recovery reads PLogs only; partition recovery reads a PLog; workspace
+    recovery reads a WLog.
   - decl: [pkg/istructs/interface.go](../../../../pkg/istructs/interface.go)
   - impl: [pkg/istructsmem/impl.go](../../../../pkg/istructsmem/impl.go)
 
@@ -172,9 +226,16 @@ Application operations
   - impl: [pkg/istructsmem/impl.go](../../../../pkg/istructsmem/impl.go)
 
 - `[App partitions engine]`
-  - Registers application structures before initial recovery, starts partition
-    actualizers and schedulers afterward, and invokes synchronous projectors when
-    partition recovery reapplies the final event.
+  - Registers application structures and the full declared partition count
+    before initial recovery. `DeployAppPartitions` creates runtime partitions
+    and starts actualizers and schedulers only for the supplied deployable IDs.
+    Excluded IDs therefore start no asynchronous projectors, checkpoint
+    projectors, or scheduled jobs, including after healthy partitions begin work.
+  - `Borrow` for an absent runtime partition keeps returning the existing
+    `ErrNotFound` error. The contract and errors are unchanged; no initial-recovery
+    failure state is stored here. Query response policy is unchanged.
+  - Invokes synchronous projectors when runtime partition recovery reapplies
+    the final event for a deployed partition.
   - decl: [pkg/appparts/interface.go](../../../../pkg/appparts/interface.go)
   - impl: [pkg/appparts/impl.go](../../../../pkg/appparts/impl.go)
 
@@ -187,13 +248,14 @@ Application operations
 ```text
 [Bootstrap operator]
   -> [App partitions engine]: register application with partitions 0..2
-  -> [Checkpoint initial recovery]: Ensure(application, 3)
+  -> [Checkpoint initial recovery]: InitializeCheckpoints(application, 3)
       -> [(Recovery checkpoint storage)]: partition 0 present -> skip
       -> [Application events]: scan complete PLogs for missing partitions 1 and 2
       -> [(Recovery checkpoint storage)]: partition 1 workspace checkpoints 10=6, 11=0
       -> [(Recovery checkpoint storage)]: partition 1 checkpoint=50 (completion marker)
       -> [(Recovery checkpoint storage)]: partition 2 checkpoint=0 (empty completion marker)
-  -> [App partitions engine]: deploy partitions 0..2
+      - return deployable IDs [0, 1, 2], empty error map, nil
+  -> [App partitions engine]: DeployAppPartitions(application, [0, 1, 2])
 ```
 
 Workspace writes for one partition complete before its partition marker. The
@@ -219,21 +281,59 @@ relative ordering of different partition attempts is unconstrained.
 [Checkpoint initial recovery]
   -> scheduled missing partitions, bounded by runtime.GOMAXPROCS(0)
       -> [Application events]: one or every PLog scan fails
-      - log each partition-scoped failure; do not write its partition marker
+      - collect each partition-scoped failure in the error map; write no marker for it
       - let every sibling attempt finish; wait for all scheduled attempts
-  -> [Bootstrap operator]: Ensure returns no partition-scoped error
-      -> [App partitions engine]: deploy all declared partitions; server ready
+  -> [Bootstrap operator]: return deployable IDs, partition-error map, nil
+      - log one bootstrap.initial_recovery.error per map entry with app QName and partition ID
+      -> [App partitions engine]: deploy only returned IDs; skip call if empty
+      - failed IDs have no runtime partitions, actualizers, or schedulers
+      - server ready even if every partition was excluded
 *Client
-  -> [Command processor]: command for failed partition
-      -> [Partition recovery manager]: start request recovery -> 503
-  -> [Command processor]: request after persistent failure -> 500 and one retry
-  -> [Command processor]: request while retry runs -> 503
+  -> [Command processor]: command for excluded partition
+      -> [App partitions engine]: Borrow -> existing ErrNotFound
+      - return 500: partition not found
+  -> [Command processor]: repeat command after storage becomes healthy
+      -> [App partitions engine]: Borrow -> same ErrNotFound -> 500
+      - no runtime recovery, deployment, or event writes
 ```
 
 If setup fails before partition scheduling or the bootstrap context is canceled,
-`Ensure` returns the error and `[Bootstrap operator]` does not deploy that
+`InitializeCheckpoints` returns a fatal error and `[Bootstrap operator]` does not deploy that
 application's partitions. Readiness is otherwise independent of how many
 scheduled partition attempts failed, including all of them.
+
+#### Healthy partitions continue while a failed partition remains undeployed
+
+```text
+[Bootstrap operator]
+  -> [Checkpoint initial recovery]: partition 1 fails; return [0, 2], {1: error}, nil
+  - log partition 1 error once with app QName and partition ID
+  -> [App partitions engine]: DeployAppPartitions(test1/app1, [0, 2])
+      - start configured actualizers and schedulers only for partitions 0 and 2
+*Client
+  -> [Command processor]: commands for deployed partitions 0 and 2
+      - follow existing runtime recovery scenarios; later retries succeed
+  -> [Command processor]: command for partition 1
+      -> [App partitions engine]: Borrow -> ErrNotFound -> 500
+      - partition 1 still has no asynchronous projectors or scheduled jobs
+```
+
+#### A later bootstrap deploys a previously failed partition after successful initial recovery
+
+```text
+[Bootstrap operator]
+  - restart after partition 1 storage becomes healthy
+  -> [App partitions engine]: register test1/app1 in the new server run
+  -> [Checkpoint initial recovery]: InitializeCheckpoints(test1/app1, 3)
+      -> [(Recovery checkpoint storage)]: partitions 0 and 2 present -> preserve
+      -> [Application events]: scan partition 1 from FirstOffset through PLog end
+      -> [(Recovery checkpoint storage)]: workspace checkpoints, then partition 1 marker
+      - return [0, 1, 2], empty error map, nil
+  -> [App partitions engine]: deploy partitions 0..2; server ready
+*Client
+  -> [Command processor]: command for deployed partition 1
+      - follow existing runtime recovery scenarios; later retry succeeds
+```
 
 ### Partition checkpoint
 
@@ -244,8 +344,8 @@ scheduled partition attempts failed, including all of them.
   -> [Command processor]: command
       -> [Partition recovery manager]: start -> 503
           -> [(Recovery checkpoint storage)]: absent, zero, or valid lastPLogOffset
-          -> [Application events]: ReadPLog(checkpoint or FirstOffset, through tail)
-          -> [Offsets bookkeeping]: nextPLogOffset = actual tail + 1
+          -> [Application events]: ReadPLog(checkpoint or FirstOffset, through log end)
+          -> [Offsets bookkeeping]: nextPLogOffset = actual log end + 1
           -> [Application records]: reapply final event when present
   -> [Command processor]: later request enters workspace recovery
 ```
@@ -258,10 +358,10 @@ must equal the first returned event offset.
 ```text
 [Partition recovery manager]
   -> [(Recovery checkpoint storage)]: nonzero lastPLogOffset
-  -> [Application events]: inclusive suffix returns no callback or a different first offset
+  -> [Application events]: inclusive log tail scan returns no callback or a different first offset
   - log cp.partition_recovery.checkpoint.invalid
-  -> [Application events]: one fallback ReadPLog(FirstOffset, through tail)
-  -> [Offsets bookkeeping]: restore nextPLogOffset from fallback's actual tail
+  -> [Application events]: one fallback ReadPLog(FirstOffset, through log end)
+  -> [Offsets bookkeeping]: restore nextPLogOffset from fallback's actual log end
 ```
 
 #### Empty PLog recovery starts at FirstOffset
@@ -269,7 +369,7 @@ must equal the first returned event offset.
 ```text
 [Partition recovery manager]
   -> [(Recovery checkpoint storage)]: absent or zero checkpoint
-  -> [Application events]: ReadPLog(FirstOffset, through tail) -> empty
+  -> [Application events]: ReadPLog(FirstOffset, through log end) -> empty
   -> [Offsets bookkeeping]: nextPLogOffset = FirstOffset
   - publish partition without reapplication or invalid-checkpoint log
 ```
@@ -293,29 +393,29 @@ must equal the first returned event offset.
   -> [Command processor]: command after partition recovery
       -> [Workspace recovery manager]: reserve slot; start -> 503
           -> [(Recovery checkpoint storage)]: absent, zero, or valid wlogIDBearingOffset
-          -> [Application events]: ReadWLog(checkpoint or FirstOffset, through tail)
-          -> [Offsets bookkeeping]: NextWLogOffset = actual tail + 1
-          -> [Record ID generator]: advance from latest ID-bearing event in suffix
+          -> [Application events]: ReadWLog(checkpoint or FirstOffset, through log end)
+          -> [Offsets bookkeeping]: NextWLogOffset = actual log end + 1
+          -> [Record ID generator]: advance from latest ID-bearing event found by the log tail scan
   -> [Command processor]: later retry succeeds with following offset and record ID
 ```
 
-#### Workspace recovery starts from an ID-bearing checkpoint at the WLog tail
+#### Workspace recovery starts from an ID-bearing checkpoint at the WLog end
 
 ```text
 [Workspace recovery manager]
-  -> [Application events]: ReadWLog(ID-bearing tail checkpoint, through tail)
+  -> [Application events]: ReadWLog(ID-bearing checkpoint at log end, through log end)
       - first and final callback are the checkpoint event
   -> [Offsets bookkeeping]: NextWLogOffset = checkpoint offset + 1
   -> [Record ID generator]: next ID = greatest new ordinary ID + 1
 ```
 
-#### Non-ID-bearing suffix events advance only the WLog offset
+#### Non-ID-bearing log tail events advance only the WLog offset
 
 ```text
 [Workspace recovery manager]
   -> [Application events]: scan from ID-bearing checkpoint through CUD-free,
-                           singleton-only, or existing-record-update suffix
-  -> [Offsets bookkeeping]: advance from the actual final suffix event
+                           singleton-only, or existing-record-update events at log end
+  -> [Offsets bookkeeping]: advance from the actual final event
   -> [Record ID generator]: advance only from the earlier ID-bearing event
 ```
 
@@ -324,7 +424,7 @@ must equal the first returned event offset.
 ```text
 [Workspace recovery manager]
   -> [Application events]: complete WLog scan finds no ID-bearing event
-  -> [Offsets bookkeeping]: NextWLogOffset = actual tail + 1
+  -> [Offsets bookkeeping]: NextWLogOffset = actual log end + 1
   -> [Record ID generator]: retain FirstUserRecordID
 ```
 
@@ -332,10 +432,10 @@ must equal the first returned event offset.
 
 ```text
 [Workspace recovery manager]
-  -> [Application events]: inclusive suffix from nonzero checkpoint
+  -> [Application events]: inclusive log tail scan from nonzero checkpoint
       - no callback, different first offset, or first event is not ID-bearing
   - log cp.workspace_recovery.checkpoint.invalid
-  -> [Application events]: one fallback ReadWLog(FirstOffset, through tail)
+  -> [Application events]: one fallback ReadWLog(FirstOffset, through log end)
   -> [Offsets bookkeeping] + [Record ID generator]: restore from complete fallback
 ```
 
@@ -346,7 +446,7 @@ must equal the first returned event offset.
 ```text
 [Workspace recovery manager]
   -> [(Recovery checkpoint storage)]: absent or zero checkpoint
-  -> [Application events]: ReadWLog(FirstOffset, through tail) -> empty
+  -> [Application events]: ReadWLog(FirstOffset, through log end) -> empty
   -> [Offsets bookkeeping]: NextWLogOffset = FirstOffset
   -> [Record ID generator]: next ID = FirstUserRecordID
 ```
@@ -416,7 +516,7 @@ sequenceDiagram
     participant Part as [Partition recovery manager]
     participant WS as [Workspace recovery manager]
 
-    Client->>CP: Command for unrecovered partition/workspace
+    Client->>CP: Command for deployed but unrecovered partition/workspace
     CP->>Part: getOrStart(partition)
     Part-->>CP: 503; recover partition asynchronously
     CP-->>Client: 503
@@ -435,8 +535,15 @@ sequenceDiagram
 ### Failure isolation and shutdown
 
 - Every scheduled `[Checkpoint initial recovery]` partition attempt owns its
-  read and writes; its failure leaves the partition marker absent, is logged,
-  and does not cancel sibling attempts or prevent readiness.
+  read and writes; its failure is returned in the partition-error map, excludes
+  its ID from deployment, and does not cancel sibling attempts or prevent
+  readiness. A failed reconstruction writes no partition completion marker.
+- Every `[Bootstrap operator]` invocation deploys only IDs returned without a
+  fatal initial-recovery error. No excluded ID has runtime actualizers or
+  schedulers; an empty ID slice starts no partition workers for that application.
+- Every command to an excluded partition fails at `[App partitions engine]`
+  borrowing with the existing not-found error, mapped to `500` before runtime
+  recovery starts. Commands never retry initial recovery or deploy a partition.
 - Every bootstrap-context cancellation stops scheduling, cancels in-flight
   initialization, waits for started work, and is returned to `[Bootstrap operator]`.
 - Every request-recovery attempt uses the VVM service context rather than request
@@ -454,22 +561,27 @@ sequenceDiagram
 - Every malformed checkpoint is logged before its single `FirstOffset` fallback;
   read, reapply, start, and completion stages follow
   [Logging](./logging--td.md#command-processor).
-- Every initial-recovery attempt log identifies the application and partition,
-  distinguishes PLog-read, workspace-checkpoint-write, and
-  partition-checkpoint-write failures, and states the partition-scoped outcome.
+- Every initial-recovery error map entry is logged once by `[Bootstrap operator]`
+  through `bootstrap.initial_recovery.error`, identifying the application and
+  partition. The initializer returns partition errors without logging them again.
+  Each error identifies a partition-checkpoint-read, PLog-read,
+  workspace-checkpoint-write, or partition-checkpoint-write failure.
   The application completion log is emitted only after every scheduled attempt
   has finished.
+- Every undeployed-partition rejection uses the standard not-found message
+  through `cp.error`; the initial-recovery cause remains only in the attempt log.
 
 ### Performance and persistence
 
 - Every application's initial recovery has at most the `runtime.GOMAXPROCS(0)`
-  value sampled for that `Ensure` call in flight; applications are initialized
+  value sampled for that `InitializeCheckpoints` call in flight; applications are initialized
   in bootstrap order.
 - Every workspace recovery manager admits at most `NumWSRecoverers` concurrent
   attempts for its partition and never queues rejected work.
 - Every nonzero recovery checkpoint is an inclusive scan start; correctness
-  requires reading through the actual tail. A long non-ID-bearing WLog suffix
-  therefore increases workspace recovery time without changing record-ID state.
+  requires a log tail scan through the actual log end. Many non-ID-bearing WLog
+  events after the checkpoint therefore increase workspace recovery time without
+  changing record-ID state.
 - Every checkpoint-storage write is last-write-wins. Initial recovery establishes
   missing completion markers; the asynchronous projector advances checkpoints;
   request-driven recovery never writes them.
@@ -480,9 +592,22 @@ sequenceDiagram
   [VIT recovery tests](../../../../pkg/sys/it/impl_recovery_test.go), with mocked
   command-processor coverage only for empty logs and lifecycle control that VIT
   cannot construct deterministically.
-- Initial-recovery scheduling, ordering, failure isolation, and cancellation are
-  covered by the planned `pkg/checkpoints/initial_recovery_test.go` tests and
-  [bootstrap tests](../../../../pkg/sys/it/impl_bootstrap_test.go).
+- The empty-partition case in "Missing checkpoints are computed for every
+  declared partition" is covered by
+  [initial-recovery tests](../../../../pkg/checkpoints/initial_recovery_test.go).
+  VIT provisioning creates both PLog and WLog events; those tests use an
+  unprovisioned mock partition rather than deleting a provisioned partition's PLog.
+- Initial-recovery deployable-ID/error-map outcomes, ordering, failure isolation,
+  and cancellation are covered by the planned
+  `pkg/checkpoints/initial_recovery_test.go` tests. Bootstrap logs each returned
+  error once and passes the deployable IDs directly to partition deployment;
+  this is covered by [bootstrap tests](../../../../pkg/sys/it/impl_bootstrap_test.go).
+- Selective deployment and the standard not-found error are covered by planned
+  [app-partitions tests](../../../../pkg/appparts/impl_test.go) and
+  [command tests](../../../../pkg/processors/command/impl_test.go). VIT scenarios
+  cover ready servers with one or all user-app partitions excluded, configured
+  projectors/jobs staying stopped, healthy commands, repeated `500` responses,
+  and successful initialization on a later bootstrap.
 - Generic deduplication, limits, retry, reset, stale completion, context, and
   shutdown behavior is covered by
   [recovery-manager tests](../../../../pkg/processors/command/recovery_manager_test.go).

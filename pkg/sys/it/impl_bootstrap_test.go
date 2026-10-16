@@ -6,11 +6,14 @@
 package sys_it
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log"
+	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
@@ -22,10 +25,13 @@ import (
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/checkpoints"
 	"github.com/voedger/voedger/pkg/cluster"
+	"github.com/voedger/voedger/pkg/coreutils"
+	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/extensionpoints"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/goutils/testingu"
+	"github.com/voedger/voedger/pkg/goutils/timeu"
 	"github.com/voedger/voedger/pkg/iblobstoragestg"
 	"github.com/voedger/voedger/pkg/istorage"
 	"github.com/voedger/voedger/pkg/istructs"
@@ -34,6 +40,7 @@ import (
 	"github.com/voedger/voedger/pkg/parser"
 	blobprocessor "github.com/voedger/voedger/pkg/processors/blobber"
 	"github.com/voedger/voedger/pkg/sys/sysprovide"
+	"github.com/voedger/voedger/pkg/sys/uniques"
 	it "github.com/voedger/voedger/pkg/vit"
 	"github.com/voedger/voedger/pkg/vvm"
 	builtinapps "github.com/voedger/voedger/pkg/vvm/builtin"
@@ -117,18 +124,26 @@ func TestBoostrap_BasicUsage(t *testing.T) {
 }
 
 func TestBootstrapInitialRecoveryOrchestration(t *testing.T) {
-	cfg := getTestCfg(2, 1)
+	cfg := getTestCfg(3, 1)
 	vit := it.NewVIT(t, &cfg)
 	defer vit.TearDown()
 	clusterApp, otherApps := bootstrapTestApps(vit)
 	require.NotEmpty(t, otherApps)
-	sidecarApps := []appparts.SidecarApp{{BuiltInApp: otherApps[len(otherApps)-1]}}
-	otherApps = otherApps[:len(otherApps)-1]
+	var sidecarApps []appparts.SidecarApp
+	for index, app := range otherApps {
+		if app.Name == istructs.AppQName_test1_app1 {
+			sidecarApps = []appparts.SidecarApp{{BuiltInApp: app}}
+			otherApps = append(otherApps[:index:index], otherApps[index+1:]...)
+			break
+		}
+	}
+	require.Len(t, sidecarApps, 1)
+	targetApp := sidecarApps[0].Name
 
 	t.Run("initializes every registered app before its partitions", func(t *testing.T) {
 		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
 		defer cleanup()
-		timeline := &bootstrapTimeline{}
+		timeline := &bootstrapOperationsOfApps{}
 		recordingParts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
 		initializer := newMockInitialRecovery(t, vit, timeline)
 
@@ -141,42 +156,100 @@ func TestBootstrapInitialRecoveryOrchestration(t *testing.T) {
 
 		// check operations order: registrered, initialized, partitions
 		for _, app := range apps {
-			order_DeployApp := timeline.index("DeployApp:" + app.Name.String())
-			order_Ensure := timeline.index("Ensure:" + app.Name.String())
-			order_DeployAppPartitions := timeline.index("DeployAppPartitions:" + app.Name.String())
-			require.NotEqual(t, -1, order_DeployApp, app.Name.String())
-			require.NotEqual(t, -1, order_Ensure, app.Name.String())
-			require.NotEqual(t, -1, order_DeployAppPartitions, app.Name.String())
-			require.Less(t, order_DeployApp, order_Ensure, app.Name.String())
-			require.Less(t, order_Ensure, order_DeployAppPartitions, app.Name.String())
+			order_DeployApp := timeline.requireOrder(operationDeployApp, app.Name)
+			order_InitializeCheckpoints := timeline.requireOrder(operationInitializeCheckpoints, app.Name)
+			order_DeployAppPartitions := timeline.requireOrder(operationDeployAppPartitions, app.Name)
+			require.Less(t, order_DeployApp, order_InitializeCheckpoints, app.Name.String())
+			require.Less(t, order_InitializeCheckpoints, order_DeployAppPartitions, app.Name.String())
 			require.Equal(t, app.NumParts, initializer.numPartitions(app.Name))
+			require.ElementsMatch(t, initializer.deployable[app.Name], timeline.partitionIDs(app.Name))
 		}
 	})
 
-	for _, failureScope := range []string{"one partition", "all partitions"} {
-		t.Run(failureScope+" failures do not stop deployment or readiness", func(t *testing.T) {
+	for _, test := range []struct {
+		name       string
+		failed     []istructs.PartitionID
+		deployable []istructs.PartitionID
+	}{
+		{"one partition", []istructs.PartitionID{1}, []istructs.PartitionID{0, 2}},
+		{"all partitions", []istructs.PartitionID{0, 1, 2}, nil},
+	} {
+		t.Run(test.name+" failures exclude partitions without stopping readiness", func(t *testing.T) {
 			appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
 			defer cleanup()
-			timeline := &bootstrapTimeline{}
+			timeline := &bootstrapOperationsOfApps{}
 			recordingParts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
 			initializer := newMockInitialRecovery(t, vit, timeline)
-			initializer.partitionFailures = map[appdef.AppQName]string{
-				otherApps[0].Name: failureScope + " failed",
+			initializer.partitionFailures = map[appdef.AppQName]map[istructs.PartitionID]error{
+				targetApp: {},
+			}
+			for _, id := range test.failed {
+				initializer.partitionFailures[targetApp][id] = errors.New("checkpoint read failed")
 			}
 			logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+			recordingParts.beforeDeploy = func(app appdef.AppQName) {
+				if app != targetApp {
+					return
+				}
+				for _, id := range test.failed {
+					logCap.HasLine("stage=bootstrap.initial_recovery.error", "app="+targetApp.String(),
+						fmt.Sprintf("partid=%d", id), "checkpoint read failed")
+				}
+			}
 
 			err := runBootstrap(t.Context(), vit, recordingParts, initializer, clusterApp, otherApps, sidecarApps)
 
 			require.NoError(t, err, "successful bootstrap is the readiness signal")
-			require.NotEqual(t, -1, timeline.index("DeployAppPartitions:"+otherApps[0].Name.String()))
-			logCap.HasLine("stage=bootstrap.initial_recovery.error", failureScope+" failed")
+			require.ElementsMatch(t, test.deployable, timeline.partitionIDs(targetApp))
+			require.Equal(t, len(test.deployable) == 0, timeline.notMade(operationDeployAppPartitions, targetApp))
+			for _, id := range test.failed {
+				logCap.HasLine("stage=bootstrap.initial_recovery.error", "level=ERROR", "app="+targetApp.String(),
+					fmt.Sprintf("partid=%d", id), "get partition checkpoint", "checkpoint read failed")
+				require.Equal(t, 1, countBootstrapLogLines(logCap.String(), "stage=bootstrap.initial_recovery.error",
+					"app="+targetApp.String(), fmt.Sprintf("partid=%d", id)), "bootstrap and initializer must not log twice")
+				partition, err := appParts.Borrow(targetApp, id, appparts.ProcessorKind_Command)
+				require.Nil(t, partition)
+				require.ErrorIs(t, err, appparts.ErrNotFound)
+			}
 		})
 	}
+
+	t.Run("unavailable cluster validates existing compatible apps without commands", func(t *testing.T) {
+		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+		defer cleanup()
+		timeline := &bootstrapOperationsOfApps{}
+		recordingParts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
+		initializer := newMockInitialRecovery(t, vit, timeline)
+		initializer.partitionFailures = map[appdef.AppQName]map[istructs.PartitionID]error{
+			istructs.AppQName_sys_cluster: {0: errors.New("cluster checkpoint unavailable")},
+		}
+		noCommands := &bootstrapNoCommandFederation{}
+		err := runBootstrap(t.Context(), vit, recordingParts, initializer, clusterApp, otherApps, sidecarApps, noCommands)
+		require.NoError(t, err)
+		require.True(t, timeline.notMade(operationDeployAppPartitions, istructs.AppQName_sys_cluster))
+		require.ElementsMatch(t, []istructs.PartitionID{0, 1, 2}, timeline.partitionIDs(targetApp))
+		require.Zero(t, noCommands.calls)
+	})
+
+	t.Run("unavailable cluster still rejects incompatible descriptors", func(t *testing.T) {
+		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+		defer cleanup()
+		initializer := newMockInitialRecovery(t, vit, nil)
+		initializer.partitionFailures = map[appdef.AppQName]map[istructs.PartitionID]error{
+			istructs.AppQName_sys_cluster: {0: errors.New("cluster checkpoint unavailable")},
+		}
+		incompatible := append([]appparts.SidecarApp(nil), sidecarApps...)
+		incompatible[0].NumParts++
+		noCommands := &bootstrapNoCommandFederation{}
+		err := runBootstrap(t.Context(), vit, appParts, initializer, clusterApp, otherApps, incompatible, noCommands)
+		require.ErrorContains(t, err, "num partitions changed")
+		require.Zero(t, noCommands.calls)
+	})
 
 	t.Run("application setup error stops partition deployment", func(t *testing.T) {
 		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
 		defer cleanup()
-		timeline := &bootstrapTimeline{}
+		timeline := &bootstrapOperationsOfApps{}
 		recordingParts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
 		setupErr := errors.New("application structures unavailable")
 		initializer := newMockInitialRecovery(t, vit, timeline)
@@ -187,13 +260,13 @@ func TestBootstrapInitialRecoveryOrchestration(t *testing.T) {
 		err := runBootstrap(t.Context(), vit, recordingParts, initializer, clusterApp, otherApps, sidecarApps)
 
 		require.ErrorIs(t, err, setupErr)
-		require.Equal(t, -1, timeline.index("DeployAppPartitions:"+otherApps[0].Name.String()))
+		require.True(t, timeline.notMade(operationDeployAppPartitions, otherApps[0].Name))
 	})
 
 	t.Run("bootstrap cancellation stops partition deployment", func(t *testing.T) {
 		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
 		defer cleanup()
-		timeline := &bootstrapTimeline{}
+		timeline := &bootstrapOperationsOfApps{}
 		recordingParts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
 		initializer := newMockInitialRecovery(t, vit, timeline)
 		ctx, cancel := context.WithCancel(t.Context())
@@ -202,8 +275,137 @@ func TestBootstrapInitialRecoveryOrchestration(t *testing.T) {
 		err := runBootstrap(ctx, vit, recordingParts, initializer, clusterApp, otherApps, sidecarApps)
 
 		require.ErrorIs(t, err, context.Canceled)
-		require.Equal(t, -1, timeline.index("DeployAppPartitions:"+istructs.AppQName_sys_cluster.String()))
+		require.True(t, timeline.notMade(operationDeployAppPartitions, istructs.AppQName_sys_cluster))
 	})
+
+	t.Run("cancellation after a completed partition prevents partial deployment", func(t *testing.T) {
+		appParts, cleanup := appparts.NewTestAppParts(vit.IAppStructsProvider)
+		defer cleanup()
+		timeline := &bootstrapOperationsOfApps{}
+		parts := &bootstrapRecordingAppParts{IAppPartitions: appParts, timeline: timeline}
+		initializer := newMockInitialRecovery(t, vit, timeline)
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		initializer.checkpointReadHook = func(app appdef.AppQName, id istructs.PartitionID) {
+			if app == targetApp && id == 0 {
+				cancel()
+			}
+		}
+		err := runBootstrap(ctx, vit, parts, initializer, clusterApp, otherApps, sidecarApps)
+		require.ErrorIs(t, err, context.Canceled)
+		require.True(t, timeline.notMade(operationDeployAppPartitions, targetApp))
+	})
+}
+
+type bootstrapNoCommandFederation struct {
+	federation.IFederationWithRetry
+	calls int
+}
+
+func TestBootstrapDefersFirstDeploymentWithoutClusterPartition(t *testing.T) {
+	// Fail only the cluster completion-marker read. Workspace setup remains usable,
+	// so the failure must exclude the partition without aborting startup.
+	keyCapture := &bootstrapCheckpointKeyCapture{}
+	_, _, err := vvmstorage.NewRecoveryCheckpointStorage(keyCapture).
+		GetPartitionCheckpoint(istructs.ClusterApps[istructs.AppQName_sys_cluster], 0)
+	require.NoError(t, err)
+	logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+	cfg := getTestCfg(3, 1, it.WithVVMConfig(func(cfg *vvm.VVMConfig) {
+		underlyingFactory := cfg.StorageFactory
+		cfg.StorageFactory = func(tm timeu.ITime) (istorage.IAppStorageFactory, error) {
+			factory, err := underlyingFactory(tm)
+			if err != nil {
+				return nil, err
+			}
+			return &bootstrapCheckpointFailureFactory{IAppStorageFactory: factory, key: keyCapture.key}, nil
+		}
+	}))
+	vit := it.NewVIT(t, &cfg)
+	defer vit.TearDown()
+	require.NotNil(t, vit.VoedgerVM, "partition-scoped cluster failure must not block readiness")
+	app := istructs.AppQName_test1_app1
+	count, err := vit.IAppPartitions.AppPartsCount(app)
+	require.NoError(t, err)
+	require.Equal(t, istructs.NumAppPartitions(3), count, "deferred app must remain registered for routing")
+	clusterStructs, err := vit.BuiltIn(istructs.AppQName_sys_cluster)
+	require.NoError(t, err)
+	id, err := uniques.GetRecordIDByUniqueCombination(clusterapp.ClusterAppWSID,
+		appdef.NewQName(cluster.ClusterPackage, "App"), clusterStructs, map[string]interface{}{cluster.Field_AppQName: app.String()})
+	require.NoError(t, err)
+	require.Equal(t, istructs.NullRecordID, id, "deferral must not create a deployment descriptor")
+	appStructs, err := vit.BuiltIn(app)
+	require.NoError(t, err)
+	appWSID := istructs.NewWSID(istructs.CurrentClusterID(), istructs.FirstBaseAppWSID)
+	workspace, err := appStructs.Records().GetSingleton(appWSID, appdef.QNameCDocWorkspaceDescriptor)
+	require.NoError(t, err)
+	require.Equal(t, appdef.NullQName, workspace.QName(), "deferred app workspaces must not be provisioned")
+	for partitionID := istructs.PartitionID(0); partitionID < 3; partitionID++ {
+		partition, err := vit.IAppPartitions.Borrow(app, partitionID, appparts.ProcessorKind_Command)
+		require.Nil(t, partition)
+		require.ErrorIs(t, err, appparts.ErrNotFound)
+	}
+	response := vit.PostApp(app, appWSID, "c.sys.CUD", "{}", httpu.WithNoRetryPolicy(), httpu.Expect500())
+	var responseError coreutils.SysError
+	require.ErrorAs(t, response.SysError, &responseError)
+	require.Equal(t, http.StatusInternalServerError, responseError.HTTPStatus)
+	require.Equal(t, "partition not found", responseError.Message)
+	logCap.HasLine("stage=bootstrap.initial_recovery.error", "app=sys/cluster", "partid=0", "cluster checkpoint unavailable")
+	require.Positive(t, countBootstrapLogLines(strings.ToLower(logCap.String()), "defer", app.String()))
+	logCap.NotContains("stage=cp.partition_recovery.start", "stage=cp.workspace_recovery.start")
+}
+
+type bootstrapCheckpointKeyCapture struct {
+	vvmstorage.ISysVvmStorage
+	key []byte
+}
+
+func (s *bootstrapCheckpointKeyCapture) Get(key, _ []byte, _ *[]byte) (bool, error) {
+	s.key = bytes.Clone(key)
+	return false, nil
+}
+
+type bootstrapCheckpointFailureFactory struct {
+	istorage.IAppStorageFactory
+	key []byte
+}
+
+func (f *bootstrapCheckpointFailureFactory) AppStorage(name istorage.SafeAppName) (istorage.IAppStorage, error) {
+	storage, err := f.IAppStorageFactory.AppStorage(name)
+	if err != nil || !strings.HasPrefix(name.String(), "sysvvm") {
+		return storage, err
+	}
+	return &bootstrapCheckpointFailureStorage{IAppStorage: storage, key: f.key}, nil
+}
+
+type bootstrapCheckpointFailureStorage struct {
+	istorage.IAppStorage
+	key []byte
+}
+
+func (s *bootstrapCheckpointFailureStorage) Get(key, columns []byte, value *[]byte) (bool, error) {
+	if bytes.Equal(key, s.key) {
+		return false, errors.New("cluster checkpoint unavailable")
+	}
+	return s.IAppStorage.Get(key, columns, value)
+}
+
+func (f *bootstrapNoCommandFederation) AdminFunc(string, string, ...httpu.ReqOptFunc) (*federation.FuncResponse, error) {
+	f.calls++
+	return nil, errors.New("unexpected command to excluded cluster partition")
+}
+
+func countBootstrapLogLines(logs string, fragments ...string) int {
+	count := 0
+	for _, line := range strings.Split(logs, "\n") {
+		matches := true
+		for _, fragment := range fragments {
+			matches = matches && strings.Contains(line, fragment)
+		}
+		if matches {
+			count++
+		}
+	}
+	return count
 }
 
 func bootstrapTestApps(vit *it.VIT) (btstrp.ClusterBuiltInApp, []appparts.BuiltInApp) {
@@ -215,39 +417,82 @@ func bootstrapTestApps(vit *it.VIT) (btstrp.ClusterBuiltInApp, []appparts.BuiltI
 		} else {
 			otherApps = append(otherApps, app.BuiltInApp)
 		}
-	}"DeployApp:"
+	}
 	return clusterApp, otherApps
 }
 
 func runBootstrap(ctx context.Context, vit *it.VIT, appParts appparts.IAppPartitions,
 	initializer checkpoints.IInitialRecovery, clusterApp btstrp.ClusterBuiltInApp,
-	otherApps []appparts.BuiltInApp, sidecarApps []appparts.SidecarApp) error {
+	otherApps []appparts.BuiltInApp, sidecarApps []appparts.SidecarApp,
+	federations ...federation.IFederationWithRetry) error {
 	postWiredInterfacePtrs := newPostWiredInterfacePtrs()
 	testBlobRequestHandler := blobprocessor.NewIRequestHandler(nil, 0, nil)
 	testRequestSender := bus.NewIRequestSender(testingu.MockTime, nil)
-	return btstrp.Bootstrap(ctx, vit.IFederation.WithRetry(), vit.IAppStructsProvider, vit.Time, appParts, initializer,
+	federationWithRetry := vit.IFederation.WithRetry()
+	if len(federations) > 0 {
+		federationWithRetry = federations[0]
+	}
+	return btstrp.Bootstrap(ctx, federationWithRetry, vit.IAppStructsProvider, vit.Time, appParts, initializer,
 		clusterApp, otherApps, sidecarApps, vit.ITokens, vit.IAppStorageProvider, postWiredInterfacePtrs,
 		testBlobRequestHandler, testRequestSender)
 }
 
+type bootstrapOperation int
+
+const (
+	operationDeployApp bootstrapOperation = iota
+	operationInitializeCheckpoints
+	operationDeployAppPartitions
+)
+
+type bootsrtapOperationOfApp struct {
+	operation    bootstrapOperation
+	appQName     appdef.AppQName
+	partitionIDs []istructs.PartitionID
+}
+
 // need to track the correct order of methods call:
-// DeployApp() -> Ensure() -> DeployAppPartitions()
-type bootstrapTimeline struct {
-	mu     sync.Mutex
-	events []string
+// DeployApp() -> InitializeCheckpoints() -> DeployAppPartitions()
+type bootstrapOperationsOfApps struct {
+	mu         sync.Mutex
+	operations []bootsrtapOperationOfApp
 }
 
-func (l *bootstrapTimeline) append(event string) {
+func (l *bootstrapOperationsOfApps) append(operation bootstrapOperation, appQName appdef.AppQName, ids ...istructs.PartitionID) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.events = append(l.events, event)
+	l.operations = append(l.operations, bootsrtapOperationOfApp{operation: operation, appQName: appQName,
+		partitionIDs: append([]istructs.PartitionID(nil), ids...)})
 }
 
-func (l *bootstrapTimeline) index(event string) int {
+func (l *bootstrapOperationsOfApps) partitionIDs(app appdef.AppQName) []istructs.PartitionID {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	for index, actual := range l.events {
-		if actual == event {
+	for _, operation := range l.operations {
+		if operation.operation == operationDeployAppPartitions && operation.appQName == app {
+			return append([]istructs.PartitionID(nil), operation.partitionIDs...)
+		}
+	}
+	return nil
+}
+
+func (l *bootstrapOperationsOfApps) requireOrder(operation bootstrapOperation, appQName appdef.AppQName) int {
+	index := l.index(operation, appQName)
+	if index < 0 {
+		panic(fmt.Sprintf("bootstrap operation %d was not made for app %s", operation, appQName))
+	}
+	return index
+}
+
+func (l *bootstrapOperationsOfApps) notMade(operation bootstrapOperation, appQName appdef.AppQName) bool {
+	return l.index(operation, appQName) < 0
+}
+
+func (l *bootstrapOperationsOfApps) index(operation bootstrapOperation, appQName appdef.AppQName) int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for index, actual := range l.operations {
+		if actual.operation == operation && actual.appQName == appQName {
 			return index
 		}
 	}
@@ -256,34 +501,40 @@ func (l *bootstrapTimeline) index(event string) int {
 
 type bootstrapRecordingAppParts struct {
 	appparts.IAppPartitions
-	timeline *bootstrapTimeline
+	timeline     *bootstrapOperationsOfApps
+	beforeDeploy func(appdef.AppQName)
 }
 
 func (p *bootstrapRecordingAppParts) DeployApp(name appdef.AppQName, extModuleURLs map[string]*url.URL,
 	def appdef.IAppDef, partsCount istructs.NumAppPartitions, numEngines [appparts.ProcessorKind_Count]uint,
 	numAppWorkspaces istructs.NumAppWorkspaces) {
-	p.timeline.append("DeployApp:" + name.String())
+	p.timeline.append(operationDeployApp, name)
 	p.IAppPartitions.DeployApp(name, extModuleURLs, def, partsCount, numEngines, numAppWorkspaces)
 }
 
 func (p *bootstrapRecordingAppParts) DeployAppPartitions(name appdef.AppQName, partitionIDs []istructs.PartitionID) {
-	p.timeline.append("DeployAppPartitions:" + name.String())
+	if p.beforeDeploy != nil {
+		p.beforeDeploy(name)
+	}
+	p.timeline.append(operationDeployAppPartitions, name, partitionIDs...)
 	p.IAppPartitions.DeployAppPartitions(name, partitionIDs)
 }
 
 type mockInitialRecovery struct {
 	checkpoints.IInitialRecovery
-	mu                sync.Mutex
-	timeline          *bootstrapTimeline
-	parts             map[appdef.AppQName]istructs.NumAppPartitions
-	setupErrors       map[appdef.AppQName]error
-	partitionFailures map[appdef.AppQName]string
-	appQNamesByID     map[istructs.ClusterAppID]appdef.AppQName
+	mu                 sync.Mutex
+	timeline           *bootstrapOperationsOfApps
+	parts              map[appdef.AppQName]istructs.NumAppPartitions
+	setupErrors        map[appdef.AppQName]error
+	partitionFailures  map[appdef.AppQName]map[istructs.PartitionID]error
+	appQNamesByID      map[istructs.ClusterAppID]appdef.AppQName
+	deployable         map[appdef.AppQName][]istructs.PartitionID
+	checkpointReadHook func(appdef.AppQName, istructs.PartitionID)
 }
 
 var _ checkpoints.IInitialRecovery = (*mockInitialRecovery)(nil)
 
-func newMockInitialRecovery(t *testing.T, vit *it.VIT, timeline *bootstrapTimeline) *mockInitialRecovery {
+func newMockInitialRecovery(t *testing.T, vit *it.VIT, timeline *bootstrapOperationsOfApps) *mockInitialRecovery {
 	t.Helper()
 	sysVVMStorage, err := vit.IAppStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
 	require.NoError(t, err)
@@ -291,6 +542,7 @@ func newMockInitialRecovery(t *testing.T, vit *it.VIT, timeline *bootstrapTimeli
 		timeline:      timeline,
 		parts:         map[appdef.AppQName]istructs.NumAppPartitions{},
 		appQNamesByID: map[istructs.ClusterAppID]appdef.AppQName{},
+		deployable:    map[appdef.AppQName][]istructs.PartitionID{},
 	}
 	appStructsProvider := &mockInitialRecoveryAppStructsProvider{
 		IAppStructsProvider: vit.IAppStructsProvider,
@@ -304,17 +556,20 @@ func newMockInitialRecovery(t *testing.T, vit *it.VIT, timeline *bootstrapTimeli
 	return recovery
 }
 
-func (r *mockInitialRecovery) Ensure(ctx context.Context, appQName appdef.AppQName,
-	numPartitions istructs.NumAppPartitions) error {
+func (r *mockInitialRecovery) InitializeCheckpoints(ctx context.Context, appQName appdef.AppQName,
+	numPartitions istructs.NumAppPartitions) ([]istructs.PartitionID, map[istructs.PartitionID]error, error) {
 	r.mu.Lock()
 	r.parts[appQName] = numPartitions
 	r.mu.Unlock()
 
-	err := r.Ensure(ctx, appQName, numPartitions)
+	deployable, failed, err := r.IInitialRecovery.InitializeCheckpoints(ctx, appQName, numPartitions)
+	r.mu.Lock()
+	r.deployable[appQName] = append([]istructs.PartitionID(nil), deployable...)
+	r.mu.Unlock()
 	if err == nil && r.timeline != nil {
-		r.timeline.append("Ensure:" + appQName.String())
+		r.timeline.append(operationInitializeCheckpoints, appQName)
 	}
-	return err
+	return deployable, failed, err
 }
 
 func (r *mockInitialRecovery) numPartitions(appQName appdef.AppQName) istructs.NumAppPartitions {
@@ -353,12 +608,16 @@ func (s *mockInitialRecoveryCheckpointStorage) GetPartitionCheckpoint(appID istr
 	partitionID istructs.PartitionID) (checkpoints.PartitionCheckpoint, bool, error) {
 	s.recovery.mu.Lock()
 	appQName := s.recovery.appQNamesByID[appID]
-	partitionFailure := s.recovery.partitionFailures[appQName]
+	partitionFailure := s.recovery.partitionFailures[appQName][partitionID]
 	s.recovery.mu.Unlock()
-	if partitionFailure == "all partitions failed" || partitionFailure == "one partition failed" && partitionID == 0 {
-		return checkpoints.PartitionCheckpoint{}, false, errors.New(partitionFailure)
+	if partitionFailure != nil {
+		return checkpoints.PartitionCheckpoint{}, false, partitionFailure
 	}
-	return s.IRecoveryCheckpointStorage.GetPartitionCheckpoint(appID, partitionID)
+	checkpoint, ok, err := s.IRecoveryCheckpointStorage.GetPartitionCheckpoint(appID, partitionID)
+	if s.recovery.checkpointReadHook != nil {
+		s.recovery.checkpointReadHook(appQName, partitionID)
+	}
+	return checkpoint, ok, err
 }
 
 func newPostWiredInterfacePtrs() btstrp.PostWireInterfacePtrs {
@@ -370,7 +629,7 @@ func newPostWiredInterfacePtrs() btstrp.PostWireInterfacePtrs {
 	}
 }
 
-func getTestCfg(numParts istructs.NumAppPartitions, numAppWS istructs.NumAppWorkspaces) it.VITConfig {
+func getTestCfg(numParts istructs.NumAppPartitions, numAppWS istructs.NumAppWorkspaces, opts ...it.VITConfigOptFunc) it.VITConfig {
 	fs := fstest.MapFS{
 		"app.vsql": &fstest.MapFile{
 			Data: []byte(`APPLICATION app1();`),
@@ -380,7 +639,7 @@ func getTestCfg(numParts istructs.NumAppPartitions, numAppWS istructs.NumAppWork
 		Path: it.App1PkgPath,
 		FS:   fs,
 	}
-	return it.NewOwnVITConfig(
+	return it.NewOwnVITConfig(append([]it.VITConfigOptFunc{
 		it.WithApp(istructs.AppQName_test1_app1, func(apis builtinapps.APIs, cfg *istructsmem.AppConfigType, ep extensionpoints.IExtensionPoint) builtinapps.Def {
 			sysPkg := sysprovide.Provide(cfg)
 			return builtinapps.Def{
@@ -391,7 +650,7 @@ func getTestCfg(numParts istructs.NumAppPartitions, numAppWS istructs.NumAppWork
 				Packages:         []parser.PackageFS{sysPkg, app1PackageFS},
 			}
 		}),
-	)
+	}, opts...)...)
 }
 
 func TestDeployAppErrors(t *testing.T) {

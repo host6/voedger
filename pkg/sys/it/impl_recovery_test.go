@@ -6,21 +6,22 @@
 package sys_it
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"net/http"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
 	"testing"
-	"time"
+	"testing/fstest"
 
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
 	appdefsys "github.com/voedger/voedger/pkg/appdef/sys"
+	"github.com/voedger/voedger/pkg/appparts"
 	"github.com/voedger/voedger/pkg/checkpoints"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/extensionpoints"
@@ -152,78 +153,6 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		t.Skip()
 	}
 
-	t.Run("recovery: scn: Missing checkpoints are computed for every declared partition", func(t *testing.T) {
-		// Given an application declares partition IDs 0 through 2
-		cfg := initialRecoveryVITConfig()
-		appQName := istructs.AppQName_test1_app1
-		appID := istructs.ClusterApps[appQName]
-		var workspaceWithIDs, workspaceWithoutIDs *it.AppWorkspace
-		var partitionTwoTail istructs.Offset
-
-		it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
-			FirstRun: func(t *testing.T, vit *it.VIT) {
-				owner := vit.GetPrincipal(appQName, recoveryTestLoginName)
-				workspaces := createWorkspacesInPartition(t, vit, owner, 1, 2)
-				workspaceWithIDs, workspaceWithoutIDs = workspaces[0], workspaces[1]
-
-				// And partition 1 PLog ends at offset 50 and contains workspace histories:
-				//   | WSID | latest ID-bearing WLog offset |
-				//   | 10   | 6                             |
-				//   | 11   | none                          |
-				fillWLogWithNonIDBearingEvents(t, vit, workspaceWithIDs, 5)
-				response := vit.PostWS(workspaceWithIDs, "c.sys.CUD", cudBody1Doc)
-				require.Equal(t, istructs.Offset(6), response.CurrentWLogOffset)
-				fillPartitionWithNonIDBearingEvents(t, vit, workspaceWithoutIDs, 50)
-				require.Equal(t, istructs.Offset(50), getLastPLogOffset(t, vit, appQName, 1))
-
-				// And partition 2 has no stored partition checkpoint
-				// And partition 2 PLog is empty
-				partitionTwoTail = getLastPLogOffset(t, vit, appQName, 2)
-			},
-			AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
-				checkpointAppStorage := storage.AppStorage(t, istructs.AppQName_sys_vvm)
-				checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(checkpointAppStorage)
-				for partitionID := istructs.PartitionID(0); partitionID < 3; partitionID++ {
-					removePartitionCheckpoint(t, checkpointStorage, checkpointAppStorage, appID, partitionID)
-				}
-				deleteWorkspaceCheckpoint(t, checkpointStorage, checkpointAppStorage, appID, workspaceWithIDs.WSID)
-				deleteWorkspaceCheckpoint(t, checkpointStorage, checkpointAppStorage, appID, workspaceWithoutIDs.WSID)
-				// And partition 0 has stored checkpoint lastPLogOffset 20
-				require.NoError(t, checkpointStorage.PutPartitionCheckpoint(appID, 0,
-					checkpoints.PartitionCheckpoint{LastPLogOffset: 20}))
-				deletePLogEvents(t, storage.AppStorage(t, appQName), 2, partitionTwoTail)
-				for _, partitionID := range []istructs.PartitionID{1, 2} {
-					_, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
-					require.NoError(t, err)
-					require.False(t, ok)
-				}
-			},
-			// When VAOperator starts the VVM
-			SecondRun: func(t *testing.T, vit *it.VIT) {
-				checkpointAppStorage, err := vit.IAppStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
-				require.NoError(t, err)
-				checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(checkpointAppStorage)
-
-				// Then partition 0 retains checkpoint lastPLogOffset 20
-				requirePartitionCheckpoint(t, checkpointStorage, appID, 0, 20)
-				// And workspace checkpoints for partition 1 are persisted before its partition checkpoint:
-				//   | WSID | wlogIDBearingOffset |
-				//   | 10   | 6                   |
-				//   | 11   | 0                   |
-				requireWorkspaceCheckpointOffset(t, checkpointStorage, appID, workspaceWithIDs.WSID, 6)
-				requireWorkspaceCheckpointOffset(t, checkpointStorage, appID, workspaceWithoutIDs.WSID, 0)
-				// And partition checkpoints are persisted:
-				//   | partition ID | lastPLogOffset |
-				//   | 1            | 50             |
-				//   | 2            | 0              |
-				requirePartitionCheckpoint(t, checkpointStorage, appID, 1, 50)
-				requirePartitionCheckpoint(t, checkpointStorage, appID, 2, 0)
-				// And the server becomes ready
-				require.NotNil(t, vit.VoedgerVM)
-			},
-		})
-	})
-
 	t.Run("recovery: scn: Initial recovery initializes checkpoints but not runtime sequence state", func(t *testing.T) {
 		cfg := initialRecoveryVITConfig()
 		appQName := istructs.AppQName_test1_app1
@@ -287,59 +216,447 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 	})
 
 	t.Run("recovery: scn: Initial recovery failures do not prevent server readiness: partition 1", func(t *testing.T) {
-		// | failed_partitions      | checkpoint_state                    | target_partition |
-		// | partition 1            | present for partitions 0 and 2 only | 1                |
-		// Given an application declares partition IDs 0 through 2 with no stored partition checkpoints
-		// And initial recovery fails for <failed_partitions> with "PLog read failed"
-		// failed_partitions = partition 1
+		// | failed_partitions      | checkpoint_state                    | deployed_partitions | target_partition |
+		// | partition 1            | present for partitions 0 and 2 only | 0 and 2             | 1                |
+		control := newInitialRecoveryReadFailure()
+		cfg := initialRecoveryFailureVITConfig(control, true)
+		appQName := istructs.AppQName_test1_app1
+		failed := []istructs.PartitionID{1}
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		var target *it.AppWorkspace
+		var lastPLogOffset istructs.Offset
+
 		// When VAOperator starts the VVM
-		// Then partition checkpoints are <checkpoint_state>
-		// checkpoint_state = present for partitions 0 and 2 only
-		// And initial-recovery error "PLog read failed" is logged for <failed_partitions>
-		// failed_partitions = partition 1
-		// And the server becomes ready
-		// When VAOperator submits a command to partition <target_partition>
-		// target_partition = 1
-		// Then response status is "503 Service Unavailable" while partition recovery runs
-		// When partition recovery fails with "PLog read failed"
-		// And VAOperator submits another command to partition <target_partition>
-		// target_partition = 1
-		// Then response status is "500 Internal Server Error"
-		// And response error is "partition <target_partition>: recovery failed: PLog read failed"
-		// target_partition = 1
-		// And exactly one retry of partition <target_partition> recovery starts
-		// target_partition = 1
-		// When VAOperator submits another command before that retry completes
-		// Then response status is "503 Service Unavailable" while the retry runs
-		runInitialRecoveryFailureScenario(t, []istructs.PartitionID{1}, 1)
+		it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
+			FirstRun: func(t *testing.T, vit *it.VIT) {
+				target, lastPLogOffset = prepareInitialRecoveryFailureHistory(t, vit, 1)
+				// And asynchronous projectors and scheduled jobs are configured for every partition
+				requireConfiguredInitialRecoveryWorkers(t, vit)
+			},
+			AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
+				// Given application "test1/app1" declares partition IDs 0 through 2 with no stored partition checkpoints
+				removeInitialRecoveryMarkers(t, storage)
+				// And initial recovery fails for <failed_partitions> with "PLog read failed"
+				// failed_partitions = partition 1
+				control.planInitialRecoveryFailure(failed)
+				logCap.Reset()
+			},
+			SecondRun: func(t *testing.T, vit *it.VIT) {
+				// Then partition checkpoints are <checkpoint_state>
+				// checkpoint_state = present for partitions 0 and 2 only
+				requireInitialRecoveryCheckpointPresence(t, vit, failed)
+				// And initial-recovery error "PLog read failed" is logged for <failed_partitions>
+				// failed_partitions = partition 1
+				requireInitialRecoveryFailureLogs(t, logCap, failed)
+				// And deployed partitions are <deployed_partitions>
+				// deployed_partitions = 0 and 2
+				require.ElementsMatch(t, []istructs.PartitionID{0, 2}, deployedInitialRecoveryPartitions(t, vit))
+				// And deployment is skipped for <failed_partitions>
+				// failed_partitions = partition 1
+				requireInitialRecoveryPartitionsExcluded(t, vit, failed)
+				// And no asynchronous projector or scheduled job runs for <failed_partitions>
+				// failed_partitions = partition 1
+				requireNoInitialRecoveryWorkers(t, vit, failed)
+				// And the server becomes ready
+				require.NotNil(t, vit.VoedgerVM)
+
+				// When VAOperator submits a command to partition <target_partition>
+				// target_partition = 1
+				response := vit.PostWS(target, "c.sys.CUD", cudBody1Doc, httpu.WithNoRetryPolicy(), httpu.Expect500())
+				// Then response status is "500 Internal Server Error"
+				require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
+				// And response error is "partition not found"
+				requireInitialRecoveryPartitionNotFound(t, response.SysError)
+
+				// When the PLog read failure is resolved without restarting the VVM
+				control.resolve()
+				// And VAOperator submits another command to partition <target_partition>
+				// target_partition = 1
+				response = vit.PostWS(target, "c.sys.CUD", cudBody1Doc, httpu.WithNoRetryPolicy(), httpu.Expect500())
+				// Then response status is "500 Internal Server Error"
+				require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
+				// And response error is "partition not found"
+				requireInitialRecoveryPartitionNotFound(t, response.SysError)
+				// And no partition or workspace recovery has started for partition <target_partition>
+				// target_partition = 1
+				requireNoInitialRecoveryRuntimeStarts(t, logCap, 1)
+				// And no command event has been appended for partition <target_partition>
+				// target_partition = 1
+				require.Equal(t, lastPLogOffset, getLastPLogOffset(t, vit, appQName, 1))
+				// And deployment is still skipped for <failed_partitions>
+				// failed_partitions = partition 1
+				requireInitialRecoveryPartitionsExcluded(t, vit, failed)
+				// And no asynchronous projector or scheduled job runs for <failed_partitions>
+				// failed_partitions = partition 1
+				requireNoInitialRecoveryWorkers(t, vit, failed)
+			},
+		})
 	})
 
-	t.Run("recovery: scn: Initial recovery failures do not prevent server readiness: partitions 0 through 2", func(t *testing.T) {
-		// | failed_partitions      | checkpoint_state                    | target_partition |
-		// | partitions 0 through 2 | absent for every partition          | 0                |
-		// Given an application declares partition IDs 0 through 2 with no stored partition checkpoints
-		// And initial recovery fails for <failed_partitions> with "PLog read failed"
-		// failed_partitions = partitions 0 through 2
+	t.Run("recovery: scn: Initial recovery failures do not prevent server readiness: partitions 0 through 2: target 0", func(t *testing.T) {
+		// | failed_partitions      | checkpoint_state                    | deployed_partitions | target_partition |
+		// | partitions 0 through 2 | absent for every partition          | none                | 0                |
+		control := newInitialRecoveryReadFailure()
+		cfg := initialRecoveryFailureVITConfig(control, true)
+		appQName := istructs.AppQName_test1_app1
+		failed := []istructs.PartitionID{0, 1, 2}
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		var target *it.AppWorkspace
+		var lastPLogOffset istructs.Offset
+
 		// When VAOperator starts the VVM
-		// Then partition checkpoints are <checkpoint_state>
-		// checkpoint_state = absent for every partition
-		// And initial-recovery error "PLog read failed" is logged for <failed_partitions>
-		// failed_partitions = partitions 0 through 2
-		// And the server becomes ready
-		// When VAOperator submits a command to partition <target_partition>
-		// target_partition = 0
-		// Then response status is "503 Service Unavailable" while partition recovery runs
-		// When partition recovery fails with "PLog read failed"
-		// And VAOperator submits another command to partition <target_partition>
-		// target_partition = 0
-		// Then response status is "500 Internal Server Error"
-		// And response error is "partition <target_partition>: recovery failed: PLog read failed"
-		// target_partition = 0
-		// And exactly one retry of partition <target_partition> recovery starts
-		// target_partition = 0
-		// When VAOperator submits another command before that retry completes
-		// Then response status is "503 Service Unavailable" while the retry runs
-		runInitialRecoveryFailureScenario(t, []istructs.PartitionID{0, 1, 2}, 0)
+		it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
+			FirstRun: func(t *testing.T, vit *it.VIT) {
+				target, lastPLogOffset = prepareInitialRecoveryFailureHistory(t, vit, 0)
+				// And asynchronous projectors and scheduled jobs are configured for every partition
+				requireConfiguredInitialRecoveryWorkers(t, vit)
+			},
+			AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
+				// Given application "test1/app1" declares partition IDs 0 through 2 with no stored partition checkpoints
+				removeInitialRecoveryMarkers(t, storage)
+				// And initial recovery fails for <failed_partitions> with "PLog read failed"
+				// failed_partitions = partitions 0 through 2
+				control.planInitialRecoveryFailure(failed)
+				logCap.Reset()
+			},
+			SecondRun: func(t *testing.T, vit *it.VIT) {
+				// Then partition checkpoints are <checkpoint_state>
+				// checkpoint_state = absent for every partition
+				requireInitialRecoveryCheckpointPresence(t, vit, failed)
+				// And initial-recovery error "PLog read failed" is logged for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireInitialRecoveryFailureLogs(t, logCap, failed)
+				// And deployed partitions are <deployed_partitions>
+				// deployed_partitions = none
+				require.ElementsMatch(t, []istructs.PartitionID{}, deployedInitialRecoveryPartitions(t, vit))
+				// And deployment is skipped for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireInitialRecoveryPartitionsExcluded(t, vit, failed)
+				// And no asynchronous projector or scheduled job runs for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireNoInitialRecoveryWorkers(t, vit, failed)
+				// And the server becomes ready
+				require.NotNil(t, vit.VoedgerVM)
+
+				// When VAOperator submits a command to partition <target_partition>
+				// target_partition = 0
+				response := vit.PostWS(target, "c.sys.CUD", cudBody1Doc, httpu.WithNoRetryPolicy(), httpu.Expect500())
+				// Then response status is "500 Internal Server Error"
+				require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
+				// And response error is "partition not found"
+				requireInitialRecoveryPartitionNotFound(t, response.SysError)
+
+				// When the PLog read failure is resolved without restarting the VVM
+				control.resolve()
+				// And VAOperator submits another command to partition <target_partition>
+				// target_partition = 0
+				response = vit.PostWS(target, "c.sys.CUD", cudBody1Doc, httpu.WithNoRetryPolicy(), httpu.Expect500())
+				// Then response status is "500 Internal Server Error"
+				require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
+				// And response error is "partition not found"
+				requireInitialRecoveryPartitionNotFound(t, response.SysError)
+				// And no partition or workspace recovery has started for partition <target_partition>
+				// target_partition = 0
+				requireNoInitialRecoveryRuntimeStarts(t, logCap, 0)
+				// And no command event has been appended for partition <target_partition>
+				// target_partition = 0
+				require.Equal(t, lastPLogOffset, getLastPLogOffset(t, vit, appQName, 0))
+				// And deployment is still skipped for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireInitialRecoveryPartitionsExcluded(t, vit, failed)
+				// And no asynchronous projector or scheduled job runs for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireNoInitialRecoveryWorkers(t, vit, failed)
+			},
+		})
+	})
+
+	t.Run("recovery: scn: Initial recovery failures do not prevent server readiness: partitions 0 through 2: target 1", func(t *testing.T) {
+		// | failed_partitions      | checkpoint_state                    | deployed_partitions | target_partition |
+		// | partitions 0 through 2 | absent for every partition          | none                | 1                |
+		control := newInitialRecoveryReadFailure()
+		cfg := initialRecoveryFailureVITConfig(control, true)
+		appQName := istructs.AppQName_test1_app1
+		failed := []istructs.PartitionID{0, 1, 2}
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		var target *it.AppWorkspace
+		var lastPLogOffset istructs.Offset
+
+		// When VAOperator starts the VVM
+		it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
+			FirstRun: func(t *testing.T, vit *it.VIT) {
+				target, lastPLogOffset = prepareInitialRecoveryFailureHistory(t, vit, 1)
+				// And asynchronous projectors and scheduled jobs are configured for every partition
+				requireConfiguredInitialRecoveryWorkers(t, vit)
+			},
+			AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
+				// Given application "test1/app1" declares partition IDs 0 through 2 with no stored partition checkpoints
+				removeInitialRecoveryMarkers(t, storage)
+				// And initial recovery fails for <failed_partitions> with "PLog read failed"
+				// failed_partitions = partitions 0 through 2
+				control.planInitialRecoveryFailure(failed)
+				logCap.Reset()
+			},
+			SecondRun: func(t *testing.T, vit *it.VIT) {
+				// Then partition checkpoints are <checkpoint_state>
+				// checkpoint_state = absent for every partition
+				requireInitialRecoveryCheckpointPresence(t, vit, failed)
+				// And initial-recovery error "PLog read failed" is logged for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireInitialRecoveryFailureLogs(t, logCap, failed)
+				// And deployed partitions are <deployed_partitions>
+				// deployed_partitions = none
+				require.ElementsMatch(t, []istructs.PartitionID{}, deployedInitialRecoveryPartitions(t, vit))
+				// And deployment is skipped for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireInitialRecoveryPartitionsExcluded(t, vit, failed)
+				// And no asynchronous projector or scheduled job runs for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireNoInitialRecoveryWorkers(t, vit, failed)
+				// And the server becomes ready
+				require.NotNil(t, vit.VoedgerVM)
+
+				// When VAOperator submits a command to partition <target_partition>
+				// target_partition = 1
+				response := vit.PostWS(target, "c.sys.CUD", cudBody1Doc, httpu.WithNoRetryPolicy(), httpu.Expect500())
+				// Then response status is "500 Internal Server Error"
+				require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
+				// And response error is "partition not found"
+				requireInitialRecoveryPartitionNotFound(t, response.SysError)
+
+				// When the PLog read failure is resolved without restarting the VVM
+				control.resolve()
+				// And VAOperator submits another command to partition <target_partition>
+				// target_partition = 1
+				response = vit.PostWS(target, "c.sys.CUD", cudBody1Doc, httpu.WithNoRetryPolicy(), httpu.Expect500())
+				// Then response status is "500 Internal Server Error"
+				require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
+				// And response error is "partition not found"
+				requireInitialRecoveryPartitionNotFound(t, response.SysError)
+				// And no partition or workspace recovery has started for partition <target_partition>
+				// target_partition = 1
+				requireNoInitialRecoveryRuntimeStarts(t, logCap, 1)
+				// And no command event has been appended for partition <target_partition>
+				// target_partition = 1
+				require.Equal(t, lastPLogOffset, getLastPLogOffset(t, vit, appQName, 1))
+				// And deployment is still skipped for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireInitialRecoveryPartitionsExcluded(t, vit, failed)
+				// And no asynchronous projector or scheduled job runs for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireNoInitialRecoveryWorkers(t, vit, failed)
+			},
+		})
+	})
+
+	t.Run("recovery: scn: Initial recovery failures do not prevent server readiness: partitions 0 through 2: target 2", func(t *testing.T) {
+		// | failed_partitions      | checkpoint_state                    | deployed_partitions | target_partition |
+		// | partitions 0 through 2 | absent for every partition          | none                | 2                |
+		control := newInitialRecoveryReadFailure()
+		cfg := initialRecoveryFailureVITConfig(control, true)
+		appQName := istructs.AppQName_test1_app1
+		failed := []istructs.PartitionID{0, 1, 2}
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		var target *it.AppWorkspace
+		var lastPLogOffset istructs.Offset
+
+		// When VAOperator starts the VVM
+		it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
+			FirstRun: func(t *testing.T, vit *it.VIT) {
+				target, lastPLogOffset = prepareInitialRecoveryFailureHistory(t, vit, 2)
+				// And asynchronous projectors and scheduled jobs are configured for every partition
+				requireConfiguredInitialRecoveryWorkers(t, vit)
+			},
+			AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
+				// Given application "test1/app1" declares partition IDs 0 through 2 with no stored partition checkpoints
+				removeInitialRecoveryMarkers(t, storage)
+				// And initial recovery fails for <failed_partitions> with "PLog read failed"
+				// failed_partitions = partitions 0 through 2
+				control.planInitialRecoveryFailure(failed)
+				logCap.Reset()
+			},
+			SecondRun: func(t *testing.T, vit *it.VIT) {
+				// Then partition checkpoints are <checkpoint_state>
+				// checkpoint_state = absent for every partition
+				requireInitialRecoveryCheckpointPresence(t, vit, failed)
+				// And initial-recovery error "PLog read failed" is logged for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireInitialRecoveryFailureLogs(t, logCap, failed)
+				// And deployed partitions are <deployed_partitions>
+				// deployed_partitions = none
+				require.ElementsMatch(t, []istructs.PartitionID{}, deployedInitialRecoveryPartitions(t, vit))
+				// And deployment is skipped for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireInitialRecoveryPartitionsExcluded(t, vit, failed)
+				// And no asynchronous projector or scheduled job runs for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireNoInitialRecoveryWorkers(t, vit, failed)
+				// And the server becomes ready
+				require.NotNil(t, vit.VoedgerVM)
+
+				// When VAOperator submits a command to partition <target_partition>
+				// target_partition = 2
+				response := vit.PostWS(target, "c.sys.CUD", cudBody1Doc, httpu.WithNoRetryPolicy(), httpu.Expect500())
+				// Then response status is "500 Internal Server Error"
+				require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
+				// And response error is "partition not found"
+				requireInitialRecoveryPartitionNotFound(t, response.SysError)
+
+				// When the PLog read failure is resolved without restarting the VVM
+				control.resolve()
+				// And VAOperator submits another command to partition <target_partition>
+				// target_partition = 2
+				response = vit.PostWS(target, "c.sys.CUD", cudBody1Doc, httpu.WithNoRetryPolicy(), httpu.Expect500())
+				// Then response status is "500 Internal Server Error"
+				require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
+				// And response error is "partition not found"
+				requireInitialRecoveryPartitionNotFound(t, response.SysError)
+				// And no partition or workspace recovery has started for partition <target_partition>
+				// target_partition = 2
+				requireNoInitialRecoveryRuntimeStarts(t, logCap, 2)
+				// And no command event has been appended for partition <target_partition>
+				// target_partition = 2
+				require.Equal(t, lastPLogOffset, getLastPLogOffset(t, vit, appQName, 2))
+				// And deployment is still skipped for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireInitialRecoveryPartitionsExcluded(t, vit, failed)
+				// And no asynchronous projector or scheduled job runs for <failed_partitions>
+				// failed_partitions = partitions 0 through 2
+				requireNoInitialRecoveryWorkers(t, vit, failed)
+			},
+		})
+	})
+
+	t.Run("recovery: scn: Healthy partitions continue while a failed partition remains undeployed", func(t *testing.T) {
+		// Given application "test1/app1" declares partition IDs 0 through 2
+		control := newInitialRecoveryReadFailure()
+		cfg := initialRecoveryFailureVITConfig(control, true)
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		workspaces := map[istructs.PartitionID]*it.AppWorkspace{}
+		it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
+			FirstRun: func(t *testing.T, vit *it.VIT) {
+				owner := vit.GetPrincipal(istructs.AppQName_test1_app1, recoveryTestLoginName)
+				for id := istructs.PartitionID(0); id < 3; id++ {
+					workspaces[id] = createWorkspacesInPartition(t, vit, owner, id, 1)[0]
+				}
+				// And asynchronous projectors and scheduled jobs are configured for every partition
+				requireConfiguredInitialRecoveryWorkers(t, vit)
+			},
+			AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
+				removeInitialRecoveryMarkers(t, storage)
+				control.planInitialRecoveryFailure([]istructs.PartitionID{1})
+				logCap.Reset()
+			},
+			SecondRun: func(t *testing.T, vit *it.VIT) {
+				// And the VVM has started with initial recovery failed for partition 1 with "PLog read failed"
+				logCap.HasLine("stage=bootstrap.initial_recovery.error", "app=test1/app1", "partid=1", "PLog read failed")
+				// And partitions 0 and 2 are deployed and the server is ready
+				require.ElementsMatch(t, []istructs.PartitionID{0, 2}, deployedInitialRecoveryPartitions(t, vit))
+				require.NotNil(t, vit.VoedgerVM)
+				// When VAOperator submits commands to partitions 0 and 2 until runtime recovery completes
+				var statuses []int
+				for _, id := range []istructs.PartitionID{0, 2} {
+					response := vit.PostWS(workspaces[id], "c.sys.CUD", cudBody1Doc)
+					statuses = append(statuses, response.HTTPResp.StatusCode)
+				}
+				// Then the commands succeed on partitions 0 and 2
+				require.Equal(t, []int{http.StatusOK, http.StatusOK}, statuses)
+				// And partition 1 remains undeployed
+				requireInitialRecoveryPartitionsExcluded(t, vit, []istructs.PartitionID{1})
+				// And no asynchronous projector or scheduled job runs for partition 1
+				requireNoInitialRecoveryWorkers(t, vit, []istructs.PartitionID{1})
+				// When VAOperator submits a command to partition 1
+				response := vit.PostWS(workspaces[1], "c.sys.CUD", cudBody1Doc, httpu.WithNoRetryPolicy(), httpu.Expect500())
+				// Then response status is "500 Internal Server Error"
+				require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
+				// And response error is "partition not found"
+				requireInitialRecoveryPartitionNotFound(t, response.SysError)
+			},
+		})
+	})
+
+	t.Run("recovery: scn: A later bootstrap deploys a previously failed partition after successful initial recovery", func(t *testing.T) {
+		// Given application "test1/app1" declares partition IDs 0 through 2
+		control := newInitialRecoveryReadFailure()
+		control.planInitialRecoveryFailure([]istructs.PartitionID{1})
+		// No login provisioning is requested: the first run deliberately excludes partition 1.
+		writes := &initialRecoveryCheckpointWrites{}
+		cfg := initialRecoveryFailureVITConfig(control, false, writes)
+		appQName := istructs.AppQName_test1_app1
+		appID := istructs.ClusterApps[appQName]
+		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+		preserved := map[istructs.PartitionID]checkpoints.PartitionCheckpoint{}
+		var appWSID istructs.WSID
+		it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
+			FirstRun: func(t *testing.T, vit *it.VIT) {
+				// And the VVM has started with initial recovery failed for partition 1 with "PLog read failed"
+				logCap.HasLine("stage=bootstrap.initial_recovery.error", "app=test1/app1", "partid=1", "PLog read failed")
+				store, err := vit.IAppStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
+				require.NoError(t, err)
+				checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(store)
+				// And partition 1 is undeployed and has no partition checkpoint
+				requireInitialRecoveryPartitionsExcluded(t, vit, []istructs.PartitionID{1})
+				_, present, err := checkpointStorage.GetPartitionCheckpoint(appID, 1)
+				require.NoError(t, err)
+				require.False(t, present)
+				// And partitions 0 and 2 have stored partition checkpoints
+				for _, id := range []istructs.PartitionID{0, 2} {
+					checkpoint, present, err := checkpointStorage.GetPartitionCheckpoint(appID, id)
+					require.NoError(t, err)
+					require.True(t, present)
+					preserved[id] = checkpoint
+				}
+				for index := istructs.WSID(0); index < 3; index++ {
+					wsid := istructs.NewWSID(istructs.CurrentClusterID(), istructs.FirstBaseAppWSID+index)
+					if coreutils.AppPartitionID(wsid, 3) == 1 {
+						appWSID = wsid
+					}
+				}
+				require.NotZero(t, appWSID)
+			},
+			AfterFirstStop: func(t *testing.T, _ it.RestartStorage) {
+				// When the PLog read failure is resolved and VAOperator restarts the VVM
+				control.resolve()
+				writes.reset()
+				logCap.Reset()
+			},
+			SecondRun: func(t *testing.T, vit *it.VIT) {
+				store, err := vit.IAppStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
+				require.NoError(t, err)
+				checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(store)
+				// Then partition 1 receives a partition checkpoint after its workspace checkpoints are persisted
+				_, present, err := checkpointStorage.GetPartitionCheckpoint(appID, 1)
+				require.NoError(t, err)
+				require.True(t, present)
+				_, present, err = checkpointStorage.GetWorkspaceCheckpoint(appID, appWSID)
+				require.NoError(t, err)
+				require.True(t, present)
+				workspaceKey, _ := vvmstorage.WorkspaceCheckpointKey(appID, appWSID)
+				keyCapture := &bootstrapCheckpointKeyCapture{}
+				_, _, err = vvmstorage.NewRecoveryCheckpointStorage(keyCapture).GetPartitionCheckpoint(appID, 1)
+				require.NoError(t, err)
+				workspaceOrder := writes.index(workspaceKey)
+				partitionOrder := writes.index(keyCapture.key)
+				require.GreaterOrEqual(t, workspaceOrder, 0)
+				require.Greater(t, partitionOrder, workspaceOrder)
+				// And the stored partition checkpoints for partitions 0 and 2 are unchanged
+				for id, checkpoint := range preserved {
+					actual, present, err := checkpointStorage.GetPartitionCheckpoint(appID, id)
+					require.NoError(t, err)
+					require.True(t, present)
+					require.Equal(t, checkpoint, actual)
+				}
+				// And partitions 0 through 2 are deployed
+				require.ElementsMatch(t, []istructs.PartitionID{0, 1, 2}, deployedInitialRecoveryPartitions(t, vit))
+				// And the server becomes ready
+				require.NotNil(t, vit.VoedgerVM)
+				// When VAOperator submits a command to partition 1 until runtime recovery completes
+				response := vit.PostApp(appQName, appWSID, "c.sys.CUD", `{"cuds":[]}`,
+					httpu.WithAuthorizeBy(vit.GetSystemPrincipal(appQName).Token))
+				// Then the command succeeds
+				require.Equal(t, http.StatusOK, response.HTTPResp.StatusCode)
+			},
+		})
 	})
 
 	t.Run("recovery: scn: Partition recovery starts from a checkpoint: absent", func(t *testing.T) {
@@ -387,7 +704,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		//                                     \___________ recovery scan __________/
 		//                                     ^                                    ^
 		//                                     |                                    |
-		//              checkpoint: stored lastPLogOffset                  actual tail offset
+		//              checkpoint: stored lastPLogOffset                  actual log end offset
 		//
 		// When VAOperator restarts the VVM and submits a command
 		// Then response status is "503 Service Unavailable" while partition recovery runs
@@ -412,7 +729,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		//                                        \_ recovery scan 50-50 inc.
 		//                                        ^
 		//                                        |
-		//                   stored lastPLogOffset / actual tail offset
+		//                   stored lastPLogOffset / actual log end offset
 		//
 		// When VAOperator restarts the VVM and submits a command
 		// Then response status is "503 Service Unavailable" while partition recovery runs
@@ -533,7 +850,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		//                                   \____________ recovery scan _________________/
 		//                                   ^                         ^                  ^
 		//                                   |                         |                  |
-		//                      stored wlogIDBearingOffset       latest recovered IDs     actual tail
+		//                      stored wlogIDBearingOffset       latest recovered IDs     actual log end
 		//                           valid but outdated
 		//
 		// And the VVM has restarted and completed partition recovery
@@ -562,7 +879,7 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		//                                                        \____ recovery scan ____/
 		//                                                        ^                       ^
 		//                                                        |                       |
-		//                                           stored wlogIDBearingOffset      actual tail
+		//                                           stored wlogIDBearingOffset      actual log end
 		//
 		// And the VVM has restarted and completed partition recovery
 		// When VAOperator submits an insert into the unrecovered workspace
@@ -574,9 +891,9 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointValid)
 	})
 
-	t.Run("recovery: scn: Workspace recovery starts from an ID-bearing checkpoint at the WLog tail", func(t *testing.T) {
+	t.Run("recovery: scn: Workspace recovery starts from an ID-bearing checkpoint at the WLog end", func(t *testing.T) {
 		// Given the WLog has allocated record IDs 200001 through 200005
-		// And its ID-bearing event at offset 10 is the WLog tail
+		// And its ID-bearing event at offset 10 is the WLog end
 		// And the stored workspace checkpoint is wlogIDBearingOffset 10
 		// And the VVM has restarted and completed partition recovery
 		// When VAOperator submits an insert into the unrecovered workspace
@@ -588,12 +905,12 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointAtWLogTail)
 	})
 
-	t.Run("recovery: scn: Non-ID-bearing suffix events advance only the WLog offset: CUD-free events", func(t *testing.T) {
-		// | suffix_events               |
+	t.Run("recovery: scn: Non-ID-bearing log tail events advance only the WLog offset: CUD-free events", func(t *testing.T) {
+		// | tail_events                 |
 		// | CUD-free events             |
 		// Given the WLog has allocated record IDs 200001 through 200005 at offset 10
-		// And the WLog has <suffix_events> from offset 11 through offset 14
-		// suffix_events = CUD-free events
+		// And the WLog has <tail_events> from offset 11 through offset 14
+		// tail_events = CUD-free events
 		// And the stored workspace checkpoint is wlogIDBearingOffset 10
 		// And the VVM has restarted and completed partition recovery
 		// When VAOperator submits an insert into the unrecovered workspace
@@ -605,12 +922,12 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointValid)
 	})
 
-	t.Run("recovery: scn: Non-ID-bearing suffix events advance only the WLog offset: singleton-only events", func(t *testing.T) {
-		// | suffix_events               |
+	t.Run("recovery: scn: Non-ID-bearing log tail events advance only the WLog offset: singleton-only events", func(t *testing.T) {
+		// | tail_events                 |
 		// | singleton-only events       |
 		// Given the WLog has allocated record IDs 200001 through 200005 at offset 10
-		// And the WLog has <suffix_events> from offset 11 through offset 14
-		// suffix_events = singleton-only events
+		// And the WLog has <tail_events> from offset 11 through offset 14
+		// tail_events = singleton-only events
 		// And the stored workspace checkpoint is wlogIDBearingOffset 10
 		// And the VVM has restarted and completed partition recovery
 		// When VAOperator submits an insert into the unrecovered workspace
@@ -622,12 +939,12 @@ func TestRecoveryFromCheckpoints(t *testing.T) {
 		runRecoveryCheckpointScenario(t, checkpointScopeWorkspace, checkpointSingletonSuffix)
 	})
 
-	t.Run("recovery: scn: Non-ID-bearing suffix events advance only the WLog offset: updates of existing records", func(t *testing.T) {
-		// | suffix_events               |
+	t.Run("recovery: scn: Non-ID-bearing log tail events advance only the WLog offset: updates of existing records", func(t *testing.T) {
+		// | tail_events                 |
 		// | updates of existing records |
 		// Given the WLog has allocated record IDs 200001 through 200005 at offset 10
-		// And the WLog has <suffix_events> from offset 11 through offset 14
-		// suffix_events = updates of existing records
+		// And the WLog has <tail_events> from offset 11 through offset 14
+		// tail_events = updates of existing records
 		// And the stored workspace checkpoint is wlogIDBearingOffset 10
 		// And the VVM has restarted and completed partition recovery
 		// When VAOperator submits an insert into the unrecovered workspace
@@ -898,7 +1215,7 @@ func runRecoveryCheckpointScenario(t *testing.T, scope checkpointScope, kind che
 			// WLog: -- 1 -- 2 -- 3 -- 4 -- 5 -- 6 -- 7 -- 8 -- 9 -- 10 -- 11 -- 12 -- 13 -- 14
 			//       init prefix            ^                         ^                      ^
 			//                              |                         |                      |
-			//                     first ID-bearing          wlogIDBearingOffset    actual tail offset
+			//                     first ID-bearing          wlogIDBearingOffset    actual log end offset
 			//
 			expectedWLogTail := recoveryTestWLogTail
 			nextRecordID := istructs.FirstUserRecordID
@@ -1068,12 +1385,18 @@ func initialRecoveryVITConfig() it.VITConfig {
 	))
 }
 
-func initialRecoveryFailureVITConfig(control *initialRecoveryReadFailure) it.VITConfig {
+func initialRecoveryFailureVITConfig(control *initialRecoveryReadFailure, withUser bool, observers ...*initialRecoveryCheckpointWrites) it.VITConfig {
 	appQName := istructs.AppQName_test1_app1
+	var writes *initialRecoveryCheckpointWrites
+	if len(observers) > 0 {
+		writes = observers[0]
+	}
+	var options []it.AppOptFunc
+	if withUser {
+		options = append(options, it.WithUserLogin(recoveryTestLoginName, recoveryTestLoginPassword))
+	}
 	return it.NewOwnVITConfig(
-		it.WithApp(appQName, provideRecoveryTestAppWithPartitions(3),
-			it.WithUserLogin(recoveryTestLoginName, recoveryTestLoginPassword),
-		),
+		it.WithApp(appQName, provideInitialRecoveryFailureTestApp, options...),
 		it.WithVVMConfig(func(cfg *vvm.VVMConfig) {
 			underlyingFactory := cfg.StorageFactory
 			cfg.StorageFactory = func(currentTime timeu.ITime) (istorage.IAppStorageFactory, error) {
@@ -1084,78 +1407,142 @@ func initialRecoveryFailureVITConfig(control *initialRecoveryReadFailure) it.VIT
 				return &initialRecoveryFailureFactory{
 					IAppStorageFactory: underlying,
 					control:            control,
+					checkpointWrites:   writes,
 				}, nil
 			}
 		}),
 	)
 }
 
-func runInitialRecoveryFailureScenario(t *testing.T, failedPartitions []istructs.PartitionID,
-	targetPartition istructs.PartitionID) {
+func provideInitialRecoveryFailureTestApp(apis builtinapps.APIs, cfg *istructsmem.AppConfigType, ep extensionpoints.IExtensionPoint) builtinapps.Def {
+	def := provideRecoveryTestAppWithPartitions(3)(apis, cfg, ep)
+	def.NumAppWorkspaces = 3 // Give every partition an app workspace and scheduled job.
+	schema, err := it.SchemaTestApp1FS.ReadFile("schemaTestApp1.vsql")
+	if err != nil {
+		panic(err)
+	}
+	for index := range def.Packages {
+		if def.Packages[index].Path == it.App1PkgPath {
+			def.Packages[index].FS = fstest.MapFS{
+				"schemaTestApp1.vsql": &fstest.MapFile{Data: schema},
+				"initial_recovery_job.vsql": &fstest.MapFile{Data: []byte(`ALTER WORKSPACE sys.AppWorkspaceWS (
+					EXTENSION ENGINE BUILTIN (JOB InitialRecoveryJob '@every 1h');
+				);`)},
+			}
+		}
+	}
+	cfg.AddJobs(istructsmem.BuiltinJob{Name: appdef.NewQName("app1pkg", "InitialRecoveryJob"),
+		Func: func(istructs.IState, istructs.IIntents) error { return nil }})
+	return def
+}
+
+func prepareInitialRecoveryFailureHistory(t *testing.T, vit *it.VIT, partitionID istructs.PartitionID) (*it.AppWorkspace, istructs.Offset) {
 	t.Helper()
-	appQName := istructs.AppQName_test1_app1
-	appID := istructs.ClusterApps[appQName]
-	control := newInitialRecoveryReadFailure()
-	cfg := initialRecoveryFailureVITConfig(control)
-	logCap := logger.StartCapture(t, logger.LogLevelVerbose)
-	var targetWorkspace *it.AppWorkspace
+	owner := vit.GetPrincipal(istructs.AppQName_test1_app1, recoveryTestLoginName)
+	workspace := createWorkspacesInPartition(t, vit, owner, partitionID, 1)[0]
+	vit.PostWS(workspace, nonIDBearingCommand, "{}")
+	return workspace, getLastPLogOffset(t, vit, istructs.AppQName_test1_app1, partitionID)
+}
 
-	it.TestRestartPreservingStorageWithHooks(t, &cfg, it.RestartPreservingStorageHooks{
-		FirstRun: func(t *testing.T, vit *it.VIT) {
-			owner := vit.GetPrincipal(appQName, recoveryTestLoginName)
-			targetWorkspace = createWorkspacesInPartition(t, vit, owner, targetPartition, 1)[0]
-			vit.PostWS(targetWorkspace, nonIDBearingCommand, "{}")
-		},
-		AfterFirstStop: func(t *testing.T, storage it.RestartStorage) {
-			checkpointAppStorage := storage.AppStorage(t, istructs.AppQName_sys_vvm)
-			checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(checkpointAppStorage)
-			for partitionID := istructs.PartitionID(0); partitionID < 3; partitionID++ {
-				removePartitionCheckpoint(t, checkpointStorage, checkpointAppStorage, appID, partitionID)
-				_, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
-				require.NoError(t, err)
-				require.False(t, ok)
-			}
-			control.planInitialRecoveryFailure(failedPartitions)
-			logCap.Reset()
-		},
-		SecondRun: func(t *testing.T, vit *it.VIT) {
-			checkpointAppStorage, err := vit.IAppStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
-			require.NoError(t, err)
-			checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(checkpointAppStorage)
+func requireInitialRecoveryCheckpointPresence(t *testing.T, vit *it.VIT, failed []istructs.PartitionID) {
+	t.Helper()
+	store, err := vit.IAppStorageProvider.AppStorage(istructs.AppQName_sys_vvm)
+	require.NoError(t, err)
+	checkpointStorage := vvmstorage.NewRecoveryCheckpointStorage(store)
+	for id := istructs.PartitionID(0); id < 3; id++ {
+		_, present, err := checkpointStorage.GetPartitionCheckpoint(istructs.ClusterApps[istructs.AppQName_test1_app1], id)
+		require.NoError(t, err)
+		require.Equal(t, !containsPartition(failed, id), present)
+	}
+}
 
-			for partitionID := istructs.PartitionID(0); partitionID < 3; partitionID++ {
-				_, ok, err := checkpointStorage.GetPartitionCheckpoint(appID, partitionID)
-				require.NoError(t, err)
-				require.Equal(t, !containsPartition(failedPartitions, partitionID), ok)
-			}
-			for _, partitionID := range failedPartitions {
-				logCap.HasLine("stage=bootstrap.initial_recovery.error", "read PLog: PLog read failed",
-					fmt.Sprintf("partid=%d", partitionID))
-			}
-			require.NotNil(t, vit.VoedgerVM)
+func requireInitialRecoveryFailureLogs(t *testing.T, logs logger.ILogCaptor, failed []istructs.PartitionID) {
+	t.Helper()
+	for _, id := range failed {
+		logs.HasLine("stage=bootstrap.initial_recovery.error", "app=test1/app1",
+			fmt.Sprintf("partid=%d", id), "read PLog", "PLog read failed")
+	}
+}
 
-			control.failRuntimeRecovery(targetPartition)
-			response := vit.PostWS(targetWorkspace, "c.sys.CUD", cudBody1Doc,
-				httpu.WithNoRetryPolicy(), httpu.Expect503())
-			require.Equal(t, http.StatusServiceUnavailable, response.HTTPResp.StatusCode)
+func removeInitialRecoveryMarkers(t *testing.T, storage it.RestartStorage) {
+	t.Helper()
+	store := storage.AppStorage(t, istructs.AppQName_sys_vvm)
+	checkpointsStorage := vvmstorage.NewRecoveryCheckpointStorage(store)
+	for id := istructs.PartitionID(0); id < 3; id++ {
+		removePartitionCheckpoint(t, checkpointsStorage, store, istructs.ClusterApps[istructs.AppQName_test1_app1], id)
+	}
+}
 
-			logCap.EventuallyHasLine("stage=cp.partition_recovery.readplog.error", "PLog read failed")
-			response = vit.PostWS(targetWorkspace, "c.sys.CUD", cudBody1Doc,
-				httpu.WithNoRetryPolicy(), httpu.Expect500())
-			require.Equal(t, http.StatusInternalServerError, response.HTTPResp.StatusCode)
-			var sysError coreutils.SysError
-			require.ErrorAs(t, response.SysError, &sysError)
-			require.Equal(t, fmt.Sprintf("partition %d: recovery failed: PLog read failed", targetPartition),
-				sysError.Message)
-			control.requireRetryStarted(t)
-			require.Equal(t, 2, control.runtimeReadCount())
+func deployedInitialRecoveryPartitions(t *testing.T, vit *it.VIT) []istructs.PartitionID {
+	t.Helper()
+	var deployed []istructs.PartitionID
+	for id := istructs.PartitionID(0); id < 3; id++ {
+		partition, err := vit.IAppPartitions.Borrow(istructs.AppQName_test1_app1, id, appparts.ProcessorKind_Command)
+		if errors.Is(err, appparts.ErrNotFound) {
+			continue
+		}
+		require.NoError(t, err)
+		partition.Release()
+		deployed = append(deployed, id)
+	}
+	return deployed
+}
 
-			response = vit.PostWS(targetWorkspace, "c.sys.CUD", cudBody1Doc,
-				httpu.WithNoRetryPolicy(), httpu.Expect503())
-			require.Equal(t, http.StatusServiceUnavailable, response.HTTPResp.StatusCode)
-			control.finishRetry()
-		},
-	})
+func requireInitialRecoveryPartitionsExcluded(t *testing.T, vit *it.VIT, ids []istructs.PartitionID) {
+	t.Helper()
+	count, err := vit.IAppPartitions.AppPartsCount(istructs.AppQName_test1_app1)
+	require.NoError(t, err)
+	require.Equal(t, istructs.NumAppPartitions(3), count)
+	for _, id := range ids {
+		partition, err := vit.IAppPartitions.Borrow(istructs.AppQName_test1_app1, id, appparts.ProcessorKind_Command)
+		require.Nil(t, partition)
+		require.ErrorIs(t, err, appparts.ErrNotFound)
+	}
+}
+
+func requireConfiguredInitialRecoveryWorkers(t *testing.T, vit *it.VIT) {
+	t.Helper()
+	actualizers := map[istructs.PartitionID][]appdef.QName{}
+	for id, names := range vit.IAppPartitions.WorkedActualizers(istructs.AppQName_test1_app1) {
+		actualizers[id] = names
+	}
+	jobs := map[istructs.PartitionID]bool{}
+	for id, names := range vit.IAppPartitions.WorkedSchedulers(istructs.AppQName_test1_app1) {
+		_, jobs[id] = names[appdef.NewQName("app1pkg", "InitialRecoveryJob")]
+	}
+	for id := istructs.PartitionID(0); id < 3; id++ {
+		require.Contains(t, actualizers[id], checkpoints.QNameProjectorRecoveryCheckpoint)
+		require.True(t, jobs[id], "partition %d must have a configured scheduler", id)
+	}
+}
+
+func requireNoInitialRecoveryWorkers(t *testing.T, vit *it.VIT, ids []istructs.PartitionID) {
+	t.Helper()
+	for id, names := range vit.IAppPartitions.WorkedActualizers(istructs.AppQName_test1_app1) {
+		if containsPartition(ids, id) {
+			require.Empty(t, names, "excluded partition %d has actualizers", id)
+		}
+	}
+	for id, jobs := range vit.IAppPartitions.WorkedSchedulers(istructs.AppQName_test1_app1) {
+		if containsPartition(ids, id) {
+			require.Empty(t, jobs, "excluded partition %d has schedulers", id)
+		}
+	}
+}
+
+func requireInitialRecoveryPartitionNotFound(t *testing.T, err error) {
+	t.Helper()
+	var responseError coreutils.SysError
+	require.ErrorAs(t, err, &responseError)
+	require.Equal(t, http.StatusInternalServerError, responseError.HTTPStatus)
+	require.Equal(t, "partition not found", responseError.Message)
+}
+
+func requireNoInitialRecoveryRuntimeStarts(t *testing.T, logs logger.ILogCaptor, id istructs.PartitionID) {
+	t.Helper()
+	for _, stage := range []string{"cp.partition_recovery.start", "cp.workspace_recovery.start"} {
+		require.Zero(t, countBootstrapLogLines(logs.String(), "stage="+stage, fmt.Sprintf("partid=%d", id)))
+	}
 }
 
 func containsPartition(partitions []istructs.PartitionID, target istructs.PartitionID) bool {
@@ -1169,11 +1556,15 @@ func containsPartition(partitions []istructs.PartitionID, target istructs.Partit
 
 type initialRecoveryFailureFactory struct {
 	istorage.IAppStorageFactory
-	control *initialRecoveryReadFailure
+	control          *initialRecoveryReadFailure
+	checkpointWrites *initialRecoveryCheckpointWrites
 }
 
 func (f *initialRecoveryFailureFactory) AppStorage(appName istorage.SafeAppName) (istorage.IAppStorage, error) {
 	storage, err := f.IAppStorageFactory.AppStorage(appName)
+	if err == nil && f.checkpointWrites != nil && strings.HasPrefix(appName.String(), "sysvvm") {
+		return &initialRecoveryCheckpointWriteStorage{IAppStorage: storage, writes: f.checkpointWrites}, nil
+	}
 	if err != nil || !strings.HasPrefix(appName.String(), "test1app1") {
 		return storage, err
 	}
@@ -1193,125 +1584,82 @@ func (s *initialRecoveryFailureStorage) Read(ctx context.Context, pKey, startCCo
 	return s.IAppStorage.Read(ctx, pKey, startCCols, finishCCols, callback)
 }
 
-// initialRecoveryReadFailure injects PLog read failures across two recovery phases:
+// initialRecoveryReadFailure controls only the storage dependency:
 //
-//	planInitialRecoveryFailure(partitions)
-//	                 |
-//	                 v
-//	second VVM startup: InitialRecovery -> Read(PLog)
-//	                                   | selected partition -> error
-//	                                   | other partition    -> real storage
-//	                                   v
-//	                         VVM starts and becomes ready
-//	                                   |
-//	                 failRuntimeRecovery(target)
-//	                                   |
-//	                                   v
-//	command processor recovery: target Read #1 -> error
-//	                            target Read #2 -> signal retryStarted
-//	                                                   |
-//	                                                   v
-//	                                             wait for retryRelease
-//	                                                   ^
-//	                                                   |
-//	                          test assertions -> finishRetry
+//	planInitialRecoveryFailure(ids) -> selected PLog keys return an error
+//	                                -> unrelated reads use real storage
+//	resolve()                       -> all reads use real storage
 //
-// Reads for unrelated PLog keys and callers continue to the underlying storage.
+// Resolving storage does not deploy excluded partitions; only a later bootstrap can.
 type initialRecoveryReadFailure struct {
-	mu                     sync.Mutex
-	initialRecoveryRunning bool
-	initialPartitions      map[string]struct{}
-	runtimePartition       string
-	runtimeReads           int
-	retryStarted           chan struct{}
-	retryRelease           chan struct{}
-	retryStartedOnce       sync.Once
-	retryReleaseOnce       sync.Once
+	mu         sync.Mutex
+	partitions map[string]bool
 }
 
 func newInitialRecoveryReadFailure() *initialRecoveryReadFailure {
-	return &initialRecoveryReadFailure{
-		initialPartitions: map[string]struct{}{},
-		retryStarted:      make(chan struct{}),
-		retryRelease:      make(chan struct{}),
-	}
+	return &initialRecoveryReadFailure{partitions: map[string]bool{}}
 }
 
-func (c *initialRecoveryReadFailure) planInitialRecoveryFailure(partitionIDs []istructs.PartitionID) {
+func (c *initialRecoveryReadFailure) planInitialRecoveryFailure(ids []istructs.PartitionID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.initialRecoveryRunning = true
-	for _, partitionID := range partitionIDs {
-		pKey, _ := istructsmem.PLogKey(partitionID, istructs.FirstOffset)
-		c.initialPartitions[string(pKey)] = struct{}{}
+	for _, id := range ids {
+		key, _ := istructsmem.PLogKey(id, istructs.FirstOffset)
+		c.partitions[string(key)] = true
 	}
 }
 
-func (c *initialRecoveryReadFailure) failRuntimeRecovery(partitionID istructs.PartitionID) {
+func (c *initialRecoveryReadFailure) readError(key []byte) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	pKey, _ := istructsmem.PLogKey(partitionID, istructs.FirstOffset)
-	c.initialRecoveryRunning = false
-	c.runtimePartition = string(pKey)
-	c.runtimeReads = 0
+	if c.partitions[string(key)] {
+		return errors.New("PLog read failed")
+	}
+	return nil
 }
 
-func (c *initialRecoveryReadFailure) readError(pKey []byte) error {
-	c.mu.Lock()
-	if c.initialRecoveryRunning {
-		_, fail := c.initialPartitions[string(pKey)]
-		c.mu.Unlock()
-		if fail {
-			return errors.New("PLog read failed")
-		}
-		return nil
-	}
-	if string(pKey) != c.runtimePartition || !calledByCommandProcessor() {
-		c.mu.Unlock()
-		return nil
-	}
-	c.runtimeReads++
-	readNumber := c.runtimeReads
-	c.mu.Unlock()
-	if readNumber == 2 {
-		c.retryStartedOnce.Do(func() { close(c.retryStarted) })
-		<-c.retryRelease
-	}
-	return errors.New("PLog read failed")
-}
-
-func calledByCommandProcessor() bool {
-	pcs := make([]uintptr, 32)
-	count := runtime.Callers(2, pcs)
-	frames := runtime.CallersFrames(pcs[:count])
-	for {
-		frame, more := frames.Next()
-		if strings.Contains(frame.Function, "/pkg/processors/command.") {
-			return true
-		}
-		if !more {
-			return false
-		}
-	}
-}
-
-func (c *initialRecoveryReadFailure) requireRetryStarted(t *testing.T) {
-	t.Helper()
-	select {
-	case <-c.retryStarted:
-	case <-time.After(time.Second):
-		t.Fatal("partition recovery retry did not start")
-	}
-}
-
-func (c *initialRecoveryReadFailure) runtimeReadCount() int {
+func (c *initialRecoveryReadFailure) resolve() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.runtimeReads
+	clear(c.partitions)
 }
 
-func (c *initialRecoveryReadFailure) finishRetry() {
-	c.retryReleaseOnce.Do(func() { close(c.retryRelease) })
+// Observe checkpoint persistence at the storage boundary without changing initializer behavior.
+type initialRecoveryCheckpointWriteStorage struct {
+	istorage.IAppStorage
+	writes *initialRecoveryCheckpointWrites
+}
+
+func (s *initialRecoveryCheckpointWriteStorage) Put(key, columns, value []byte) error {
+	if err := s.IAppStorage.Put(key, columns, value); err != nil {
+		return err
+	}
+	s.writes.mu.Lock()
+	defer s.writes.mu.Unlock()
+	s.writes.keys = append(s.writes.keys, bytes.Clone(key))
+	return nil
+}
+
+type initialRecoveryCheckpointWrites struct {
+	mu   sync.Mutex
+	keys [][]byte
+}
+
+func (c *initialRecoveryCheckpointWrites) reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.keys = nil
+}
+
+func (c *initialRecoveryCheckpointWrites) index(key []byte) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for index, written := range c.keys {
+		if bytes.Equal(written, key) {
+			return index
+		}
+	}
+	return -1
 }
 
 func createWorkspacesInPartition(t *testing.T, vit *it.VIT, owner *it.Principal,
@@ -1319,7 +1667,7 @@ func createWorkspacesInPartition(t *testing.T, vit *it.VIT, owner *it.Principal,
 	t.Helper()
 	result := make([]*it.AppWorkspace, 0, count)
 	for candidate := 0; len(result) < count; candidate++ {
-		workspace := vit.CreateWorkspace(it.SimpleWSParams(fmt.Sprintf("initial-recovery-%d", candidate)), owner)
+		workspace := vit.CreateWorkspace(it.SimpleWSParams(fmt.Sprintf("initial-recovery-%d-%d", partitionID, candidate)), owner)
 		actualPartitionID, err := vit.IAppPartitions.AppWorkspacePartitionID(workspace.AppQName(), workspace.WSID)
 		require.NoError(t, err)
 		if actualPartitionID == partitionID {
@@ -1327,37 +1675,6 @@ func createWorkspacesInPartition(t *testing.T, vit *it.VIT, owner *it.Principal,
 		}
 	}
 	return result
-}
-
-func fillPartitionWithNonIDBearingEvents(t *testing.T, vit *it.VIT, workspace *it.AppWorkspace,
-	tail istructs.Offset) {
-	t.Helper()
-	partitionID, err := vit.IAppPartitions.AppWorkspacePartitionID(workspace.AppQName(), workspace.WSID)
-	require.NoError(t, err)
-	current := getLastPLogOffset(t, vit, workspace.AppQName(), partitionID)
-	require.LessOrEqual(t, current, tail)
-	for current < tail {
-		response := vit.PostWS(workspace, nonIDBearingCommand, "{}")
-		require.Empty(t, response.NewIDs)
-		current++
-	}
-}
-
-func deletePLogEvents(t *testing.T, storage istorage.IAppStorage, partitionID istructs.PartitionID,
-	tail istructs.Offset) {
-	t.Helper()
-	for offset := istructs.FirstOffset; offset <= tail; offset++ {
-		pKey, cCols := istructsmem.PLogKey(partitionID, offset)
-		var value []byte
-		ok, err := storage.Get(pKey, cCols, &value)
-		require.NoError(t, err)
-		if !ok {
-			continue
-		}
-		ok, err = storage.CompareAndDelete(pKey, cCols, value)
-		require.NoError(t, err)
-		require.True(t, ok)
-	}
 }
 
 func removePartitionCheckpoint(t *testing.T, checkpointStorage checkpoints.IRecoveryCheckpointStorage,
@@ -1387,24 +1704,6 @@ func deleteWorkspaceCheckpoint(t *testing.T, checkpointStorage checkpoints.IReco
 	}
 	pKey, cCols := vvmstorage.WorkspaceCheckpointKey(appID, wsid)
 	deleteFromStorage(t, storage, pKey, cCols)
-}
-
-func requirePartitionCheckpoint(t *testing.T, storage checkpoints.IRecoveryCheckpointStorage,
-	appID istructs.ClusterAppID, partitionID istructs.PartitionID, expected istructs.Offset) {
-	t.Helper()
-	checkpoint, ok, err := storage.GetPartitionCheckpoint(appID, partitionID)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, expected, checkpoint.LastPLogOffset)
-}
-
-func requireWorkspaceCheckpointOffset(t *testing.T, storage checkpoints.IRecoveryCheckpointStorage,
-	appID istructs.ClusterAppID, wsid istructs.WSID, expected istructs.Offset) {
-	t.Helper()
-	checkpoint, ok, err := storage.GetWorkspaceCheckpoint(appID, wsid)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, expected, checkpoint.WLogIDBearingOffset)
 }
 
 func getLastPLogOffset(t *testing.T, vit *it.VIT, appQName appdef.AppQName,

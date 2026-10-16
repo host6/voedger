@@ -132,7 +132,8 @@ component-local `app=<appQName>` attribute. Every per-partition entry also uses
 - A missing partition is initialized successfully: level `Info`, stage
   `bootstrap.initial_recovery.partition.complete`, msg
   `lastPLogOffset <offset>, workspaceCheckpoints <count>`
-- A partition attempt fails: level `Error`, stage
+- Bootstrap alone emits one entry per partition-error map entry returned by
+  `IInitialRecovery.InitializeCheckpoints`: level `Error`, stage
   `bootstrap.initial_recovery.error`, msg `<operation>: <error message>`, where
   `<operation>` is one of `get partition checkpoint`, `read PLog`,
   `put workspace checkpoint`, or `put partition checkpoint`
@@ -140,13 +141,17 @@ component-local `app=<appQName>` attribute. Every per-partition entry also uses
   finished: level `Info`, stage `bootstrap.initial_recovery.complete`, msg
   `initialized <count>, skipped <count>, failed <count>`
 
-While the bootstrap context remains active, each partition attempt emits at most
-one `bootstrap.initial_recovery.error` entry and no completion entry after that
-error. The message identifies both the operation that failed and its underlying
-error. Such an error is isolated to the partition: it leaves the partition
-completion marker absent, does not cancel sibling attempts, is not returned as a
-bootstrap error, and does not prevent the application-completion entry or server
-readiness. Bootstrap-context cancellation takes precedence over classifying an
+The bootstrap failure entry uses `app=<appQName>` for the current application
+and `partid=<partitionID>` from the map key. The initializer returns
+operation-wrapped errors without logging them; failed attempts emit no
+partition-completion entry. The message preserves both the failed operation and
+its underlying cause, which remain in bootstrap logs rather than being retained
+in app partitions or included in command errors. Such an error is isolated to
+the partition: a failed reconstruction writes no partition completion marker,
+the failed partition is excluded from deployment, and sibling attempts continue.
+The error map is returned for logging rather than as a fatal bootstrap error, so
+these entries do not prevent the application-completion log or server readiness.
+Bootstrap-context cancellation takes precedence over classifying an
 operation error as partition-scoped; cancellation and application setup failure
 before partition scheduling are returned to bootstrap, and the
 application-completion entry is not emitted.
@@ -237,11 +242,16 @@ Log entries (when `BusyProcessorLogMode_Error`):
 
 **Request processing:**
 
-The context with attributes is received from Router
+The context with attributes is received from Router. Command error logging
+preserves that request context and sets `vapp=<appQName>` and
+`partid=<partitionID>` from the command message, including when borrowing the
+application partition fails.
 
 - Logs the event details right after successful write to PLog: calls `processors.LogEventAndCUDs()` (see [LogEventAndCUDs](#logeventandcuds)) with stage `cp.plog_saved`; per-CUD callback always returns `shouldLog=true`; `msgAdds` is `,oldfields={...}` for CUDs that arrived with the HTTP request, empty for CUDs created by the command; `eventMessageAdds` is empty
 - Right before sending the response to the bus:
-  - Command handling error: level `Error`, stage `cp.error`, msg `<error message>`, `body`=`<compacted request body>`
+  - Command handling error: level `Error`, stage `cp.error`, msg `<error message>, body: <compacted request body>`. Error-message variants:
+    - Missing partition of a registered application (`appparts.ErrNotFound`): `partition not found`; response `500 Internal Server Error`
+    - Missing application (`appparts.ErrNotFound`): `application not found`; response `400 Bad Request`
     - Partition recovery in progress: msg `partition <partitionID>: recovery is in progress`
     - Partition recovery admission limit reached: msg `partition <partitionID>: recovery concurrency limit is reached`
     - Partition recovery failed: msg `partition <partitionID>: recovery failed: <error message>`
@@ -249,6 +259,18 @@ The context with attributes is received from Router
     - Workspace recovery admission limit reached: msg `workspace <wsid>: recovery concurrency limit is reached`
     - Workspace recovery failed: msg `workspace <wsid>: recovery failed: <error message>`
   - Command executed successfully: level `Verbose`, stage `cp.success`, msg `<command result>`
+
+The not-found entries use the normal request context received from Router, not
+the `sys._Recovery` context. Their concise error text omits application and
+partition identifiers because `vapp` and `partid` identify the request. It also
+omits the initial-recovery cause. That cause is logged
+only by bootstrap as described in [Application deployment](#application-deployment).
+Repeated commands to an undeployed partition log the same standard not-found
+error and do not emit partition/workspace recovery start, failure, admission, or
+retry messages. The runtime recovery logs below apply only to deployed
+partitions; see [recovery request handling](./recovery--td.md#recovery-on-command-request)
+for the request lifecycle and status policy.
+
 - Additional log on errors:
   - if error happens on any of:
     - sync actualizers run

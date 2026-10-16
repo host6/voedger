@@ -6,11 +6,20 @@ Feature: Partition and workspace recovery
 
   Bootstrap isolates an initial-checkpoint failure to its partition: other
   partition attempts finish and bootstrap continues. The server becomes ready
-  even if every partition attempt fails. The affected partition's first command
-  enters the normal recovery and retained-error retry lifecycle, making a
-  persistent error observable to its caller.
+  even if every partition attempt fails. Failed partitions are not deployed and
+  run no asynchronous projectors or scheduled jobs. Their commands return the
+  standard partition-not-found error; initial-recovery failure details appear
+  only in logs. A later bootstrap retries partitions without completion markers.
+
+  Every WLog event originates in the partition's PLog. If a partition's PLog is
+  empty, all of its WLogs are empty too; recovery scenarios exclude an empty
+  PLog paired with a non-empty WLog.
 
   Rule: Initial recovery
+
+    The runtime-recovery scenarios under Partition checkpoint, Workspace
+    checkpoint, Empty WLog, and Workspace recovery admission apply to deployed
+    partitions. Commands to undeployed partitions do not enter that lifecycle.
 
     Scenario: Missing checkpoints are computed for every declared partition
       Given an application declares partition IDs 0 through 2
@@ -32,6 +41,7 @@ Feature: Partition and workspace recovery
         | partition ID | lastPLogOffset |
         | 1            | 50             |
         | 2            | 0              |
+      And partitions 0 through 2 are deployed
       And the server becomes ready
 
     Scenario: Initial recovery initializes checkpoints but not runtime sequence state
@@ -45,31 +55,65 @@ Feature: Partition and workspace recovery
       Then the command succeeds
 
     Scenario Outline: Initial recovery failures do not prevent server readiness
-      Given an application declares partition IDs 0 through 2 with no stored partition checkpoints
+      Given application "test1/app1" declares partition IDs 0 through 2 with no stored partition checkpoints
+      And asynchronous projectors and scheduled jobs are configured for every partition
       And initial recovery fails for <failed_partitions> with "PLog read failed"
       When VAOperator starts the VVM
       Then partition checkpoints are <checkpoint_state>
       And initial-recovery error "PLog read failed" is logged for <failed_partitions>
+      And deployed partitions are <deployed_partitions>
+      And deployment is skipped for <failed_partitions>
+      And no asynchronous projector or scheduled job runs for <failed_partitions>
       And the server becomes ready
       When VAOperator submits a command to partition <target_partition>
-      Then response status is "503 Service Unavailable" while partition recovery runs
-      When partition recovery fails with "PLog read failed"
+      Then response status is "500 Internal Server Error"
+      And response error is "partition not found"
+      When the PLog read failure is resolved without restarting the VVM
       And VAOperator submits another command to partition <target_partition>
       Then response status is "500 Internal Server Error"
-      And response error is "partition <target_partition>: recovery failed: PLog read failed"
-      And exactly one retry of partition <target_partition> recovery starts
-      When VAOperator submits another command before that retry completes
-      Then response status is "503 Service Unavailable" while the retry runs
+      And response error is "partition not found"
+      And no partition or workspace recovery has started for partition <target_partition>
+      And no command event has been appended for partition <target_partition>
+      And deployment is still skipped for <failed_partitions>
+      And no asynchronous projector or scheduled job runs for <failed_partitions>
 
       Examples:
-        | failed_partitions      | checkpoint_state                    | target_partition |
-        | partition 1            | present for partitions 0 and 2 only | 1                |
-        | partitions 0 through 2 | absent for every partition          | 0                |
+        | failed_partitions      | checkpoint_state                    | deployed_partitions | target_partition |
+        | partition 1            | present for partitions 0 and 2 only | 0 and 2             | 1                |
+        | partitions 0 through 2 | absent for every partition          | none                | 0                |
+        | partitions 0 through 2 | absent for every partition          | none                | 1                |
+        | partitions 0 through 2 | absent for every partition          | none                | 2                |
+
+    Scenario: Healthy partitions continue while a failed partition remains undeployed
+      Given application "test1/app1" declares partition IDs 0 through 2
+      And asynchronous projectors and scheduled jobs are configured for every partition
+      And the VVM has started with initial recovery failed for partition 1 with "PLog read failed"
+      And partitions 0 and 2 are deployed and the server is ready
+      When VAOperator submits commands to partitions 0 and 2 until runtime recovery completes
+      Then the commands succeed on partitions 0 and 2
+      And partition 1 remains undeployed
+      And no asynchronous projector or scheduled job runs for partition 1
+      When VAOperator submits a command to partition 1
+      Then response status is "500 Internal Server Error"
+      And response error is "partition not found"
+
+    Scenario: A later bootstrap deploys a previously failed partition after successful initial recovery
+      Given application "test1/app1" declares partition IDs 0 through 2
+      And the VVM has started with initial recovery failed for partition 1 with "PLog read failed"
+      And partition 1 is undeployed and has no partition checkpoint
+      And partitions 0 and 2 have stored partition checkpoints
+      When the PLog read failure is resolved and VAOperator restarts the VVM
+      Then partition 1 receives a partition checkpoint after its workspace checkpoints are persisted
+      And the stored partition checkpoints for partitions 0 and 2 are unchanged
+      And partitions 0 through 2 are deployed
+      And the server becomes ready
+      When VAOperator submits a command to partition 1 until runtime recovery completes
+      Then the command succeeds
 
   Rule: Partition checkpoint
 
     usable checkpoint ──────────────────> resume from checkpoint ──┐
-    absent or zero checkpoint ──────────> recover from FirstOffset ├─> actual PLog tail ──> later command succeeds after workspace recovery
+    absent or zero checkpoint ──────────> recover from FirstOffset ├─> actual PLog end ──> later command succeeds after workspace recovery
     invalid checkpoint ─> log error ────> recover from FirstOffset ┘
 
     An absent or zero partition checkpoint starts one scan at FirstOffset.
@@ -141,9 +185,9 @@ Feature: Partition and workspace recovery
 
   Rule: Workspace checkpoint
 
-    workspace checkpoint ──> recover actual WLog tail ─────────────> successful retry uses following WLog offset
+    workspace checkpoint ──> recover actual WLog end ──────────────> successful retry uses following WLog offset
                           └─> recover latest allocated user record ID ──> successful retry uses following record ID
-    non-ID-bearing suffix ──────────────────────────────────────────> advances the WLog offset only
+    non-ID-bearing log tail events ─────────────────────────────────> advances the WLog offset only
 
     An absent or zero workspace checkpoint starts one scan at FirstOffset.
     Zero is an initialization sentinel, not an event offset to validate, so this
@@ -170,9 +214,9 @@ Feature: Partition and workspace recovery
         | wlogIDBearingOffset 6     |
         | wlogIDBearingOffset 10    |
 
-    Scenario: Workspace recovery starts from an ID-bearing checkpoint at the WLog tail
+    Scenario: Workspace recovery starts from an ID-bearing checkpoint at the WLog end
       Given the WLog has allocated record IDs 200001 through 200005
-      And its ID-bearing event at offset 10 is the WLog tail
+      And its ID-bearing event at offset 10 is the WLog end
       And the stored workspace checkpoint is wlogIDBearingOffset 10
       And the VVM has restarted and completed partition recovery
       When VAOperator submits an insert into the unrecovered workspace
@@ -182,9 +226,9 @@ Feature: Partition and workspace recovery
       And the inserted record has ID 200006
       And no invalid workspace-checkpoint error is logged
 
-    Scenario Outline: Non-ID-bearing suffix events advance only the WLog offset
+    Scenario Outline: Non-ID-bearing log tail events advance only the WLog offset
       Given the WLog has allocated record IDs 200001 through 200005 at offset 10
-      And the WLog has <suffix_events> from offset 11 through offset 14
+      And the WLog has <tail_events> from offset 11 through offset 14
       And the stored workspace checkpoint is wlogIDBearingOffset 10
       And the VVM has restarted and completed partition recovery
       When VAOperator submits an insert into the unrecovered workspace
@@ -195,7 +239,7 @@ Feature: Partition and workspace recovery
       And no invalid workspace-checkpoint error is logged
 
       Examples:
-        | suffix_events               |
+        | tail_events                 |
         | CUD-free events             |
         | singleton-only events       |
         | updates of existing records |

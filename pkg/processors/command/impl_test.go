@@ -732,7 +732,7 @@ func TestRecoveryCheckpoints_RecordIDsRecovery(t *testing.T) {
 		)
 	})
 
-	t.Run("non-ID events after the checkpoint determine the actual WLog tail", func(t *testing.T) {
+	t.Run("non-ID events after the checkpoint determine the actual WLog end", func(t *testing.T) {
 		require := require.New(t)
 		storage := newTestCheckpointStorage()
 		app := setUpRecoveryTestApp(t, withCheckpointStorage(storage))
@@ -824,7 +824,7 @@ func TestRecoveryCheckpoints_RecordIDsRecovery(t *testing.T) {
 		require.NoError(app.recoveryTestControl.workspaces.wait(app.ctx, workspaceKey))
 	})
 
-	t.Run("partition checkpoint beyond the actual tail falls back to the first offset", func(t *testing.T) {
+	t.Run("partition checkpoint beyond the actual log end falls back to the first offset", func(t *testing.T) {
 		require := require.New(t)
 		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
 		storage := newTestCheckpointStorage()
@@ -856,7 +856,7 @@ func TestRecoveryCheckpoints_RecordIDsRecovery(t *testing.T) {
 		)
 	})
 
-	t.Run("workspace checkpoint beyond the actual tail falls back to the first offset", func(t *testing.T) {
+	t.Run("workspace checkpoint beyond the actual log end falls back to the first offset", func(t *testing.T) {
 		require := require.New(t)
 		logCap := logger.StartCapture(t, logger.LogLevelVerbose)
 		storage := newTestCheckpointStorage()
@@ -1605,7 +1605,7 @@ func (a *appStructsWithTestEvents) Events() istructs.IEvents {
 
 // pLogCheckpointSkippingEvents simulates a deleted checkpoint event while
 // retaining readable events after it. The fallback read from FirstOffset is
-// delegated unchanged so recovery can reconstruct the actual log tail.
+// delegated unchanged so recovery can reconstruct the actual log end.
 type pLogCheckpointSkippingEvents struct {
 	istructs.IEvents
 	partitionID      istructs.PartitionID
@@ -1793,7 +1793,7 @@ func TestErrors(t *testing.T) {
 		expectedMessageLike string
 		expectedStatusCode  int
 	}{
-		{"unknown app", bus.Request{AppQName: appdef.NewAppQName("untill", "unknown")}, "application untill/unknown not found", http.StatusServiceUnavailable},
+		{"unknown app", bus.Request{AppQName: appdef.NewAppQName("untill", "unknown")}, "application not found", http.StatusBadRequest},
 		{"bad request body", bus.Request{Body: []byte("{wrong")}, "failed to unmarshal request body: invalid character 'w' looking for beginning of object key string", http.StatusBadRequest},
 		{"unknown func", bus.Request{Resource: "c.sys.Unknown"}, "unknown function", http.StatusBadRequest},
 		{"args: field of wrong type provided", bus.Request{Body: []byte(`{"args":{"Text":42}}`)}, "wrong field type", http.StatusBadRequest},
@@ -1833,6 +1833,115 @@ func TestErrors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Only Borrow and the registration lookup are available: any attempt to access
+// runtime partition state through this double fails the test immediately.
+type failingBorrowAppParts struct {
+	appparts.IAppPartitions
+	borrowErr         error
+	registrationErr   error
+	registrationCalls int
+}
+
+func (p *failingBorrowAppParts) Borrow(appdef.AppQName, istructs.PartitionID, appparts.ProcessorKind) (appparts.IAppPartition, error) {
+	return nil, p.borrowErr
+}
+
+func (p *failingBorrowAppParts) AppPartsCount(appdef.AppQName) (istructs.NumAppPartitions, error) {
+	p.registrationCalls++
+	if p.registrationErr != nil {
+		return 0, p.registrationErr
+	}
+	return 2, nil
+}
+
+func TestBorrowErrorResponseAndLogging(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		borrowErr       error
+		registrationErr error
+		status          int
+		message         string
+	}{
+		{"missing application", fmt.Errorf("opaque lookup: %w", appparts.ErrNotFound), appparts.ErrNotFound,
+			http.StatusBadRequest, "application not found"},
+		{"missing partition", fmt.Errorf("opaque lookup: %w", appparts.ErrNotFound), nil,
+			http.StatusInternalServerError, "partition not found"},
+		{"engine exhaustion", appparts.ErrNotAvailableEngines, nil,
+			http.StatusServiceUnavailable, "no available engines"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			parts := &failingBorrowAppParts{borrowErr: test.borrowErr, registrationErr: test.registrationErr}
+			ctx := logger.WithContextAttrs(t.Context(), map[string]any{
+				logger.LogAttr_ReqID:     "borrow-test",
+				logger.LogAttr_WSID:      istructs.WSID(42),
+				logger.LogAttr_Extension: "c.sys.CUD",
+			})
+			cmd := &cmdWorkpiece{
+				appParts: parts,
+				cmdMes: NewCommandMessage(ctx, []byte("{}"), testAppName, 42, nil, 1,
+					istructs.QNameCommandCUD, "", "", 0, 0, "", ""),
+			}
+			logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+			for range 2 {
+				err := cmd.borrow()
+				var responseError coreutils.SysError
+				require.ErrorAs(t, err, &responseError)
+				require.Equal(t, test.status, responseError.HTTPStatus)
+				require.Equal(t, test.message, responseError.Message)
+				require.NotContains(t, responseError.Message, testAppName.String())
+				require.NotContains(t, responseError.Message, "opaque lookup")
+				require.Nil(t, cmd.appPart)
+				logHandlingError(cmd, err)
+			}
+			if errors.Is(test.borrowErr, appparts.ErrNotFound) {
+				require.Equal(t, 2, parts.registrationCalls, "classify by registration, not error text")
+			} else {
+				require.Zero(t, parts.registrationCalls, "engine exhaustion is not a registration failure")
+			}
+			logCap.HasLine("stage=cp.error", test.message, "vapp="+testAppName.String(), "partid=1",
+				"reqid=borrow-test", "wsid=42", "extension=c.sys.CUD")
+			logCap.NotContains("cp.partition_recovery", "cp.workspace_recovery", "sys._Recovery")
+		})
+	}
+}
+
+func TestRejectedCommandsDoNotRecoverOrWrite(t *testing.T) {
+	parts := &failingBorrowAppParts{borrowErr: appparts.ErrNotFound}
+	app := setUpRecoveryTestApp(t, func(options *testAppOptions) {
+		options.appPartsForProcessor = func(appparts.IAppPartitions) appparts.IAppPartitions { return parts }
+	})
+	defer tearDown(app)
+	partitionID := coreutils.AppPartitionID(1, app.numAppPartitions)
+	readOffsets := func() (plog, wlog []istructs.Offset) {
+		require.NoError(t, app.appStructs.Events().ReadPLog(app.ctx, partitionID, istructs.FirstOffset,
+			istructs.ReadToTheEnd, func(offset istructs.Offset, _ istructs.IPLogEvent) error {
+				plog = append(plog, offset)
+				return nil
+			}))
+		require.NoError(t, app.appStructs.Events().ReadWLog(app.ctx, 1, istructs.FirstOffset,
+			istructs.ReadToTheEnd, func(offset istructs.Offset, _ istructs.IWLogEvent) error {
+				wlog = append(wlog, offset)
+				return nil
+			}))
+		return
+	}
+	beforePLog, beforeWLog := readOffsets()
+	logCap := logger.StartCapture(t, logger.LogLevelVerbose)
+	for range 3 {
+		meta, _, err := bus.GetCommandResponse(app.ctx, app.rawRequestSender, newCUDRequest(1, app))
+		require.Equal(t, http.StatusInternalServerError, meta.StatusCode)
+		var responseError coreutils.SysError
+		require.ErrorAs(t, err, &responseError)
+		require.Equal(t, "partition not found", responseError.Message)
+	}
+	afterPLog, afterWLog := readOffsets()
+	require.Equal(t, beforePLog, afterPLog)
+	require.Equal(t, beforeWLog, afterWLog)
+	require.Zero(t, app.recoveryTestControl.partitions.startCount(recoveryKeyForTestApp(app, 1)))
+	require.Zero(t, app.recoveryTestControl.workspaces.startCount(recoveryWorkspaceKeyForTestApp(app, 1)))
+	logCap.NotContains("cp.partition_recovery", "cp.workspace_recovery", "cp.plog_saved")
 }
 
 func TestAuthnz(t *testing.T) {
@@ -2028,10 +2137,11 @@ type testApp struct {
 }
 
 type testAppOptions struct {
-	checkpointStorage checkpoints.IRecoveryCheckpointStorage
-	numWSRecoverers   uint
-	workspaceIDs      []istructs.WSID
-	numAppPartitions  istructs.NumAppPartitions
+	checkpointStorage    checkpoints.IRecoveryCheckpointStorage
+	numWSRecoverers      uint
+	workspaceIDs         []istructs.WSID
+	numAppPartitions     istructs.NumAppPartitions
+	appPartsForProcessor func(appparts.IAppPartitions) appparts.IAppPartitions
 }
 
 type testAppOption func(*testAppOptions)
@@ -2169,7 +2279,11 @@ func setUp(t *testing.T, prepare func(wsb appdef.IWorkspaceBuilder, cfg *istruct
 	require.NoError(err)
 	recoveryControl := newRecoveryTestControl()
 	partitionRecoveryHooks, workspaceRecoveryHooks, hooks := recoveryControl.testHooks()
-	cmdProcessorFactory := provideServiceFactory(appParts, tm, n10nBroker, imetrics.Provide(), "vvm",
+	processorParts := appparts.IAppPartitions(appParts)
+	if options.appPartsForProcessor != nil {
+		processorParts = options.appPartsForProcessor(appParts)
+	}
+	cmdProcessorFactory := provideServiceFactory(processorParts, tm, n10nBroker, imetrics.Provide(), "vvm",
 		iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter, iauthnzimpl.TestIsDeviceAllowedFuncs), secretReader,
 		options.checkpointStorage, options.numWSRecoverers, partitionRecoveryHooks, workspaceRecoveryHooks, hooks)
 	cmdProcService := cmdProcessorFactory(serviceChannel)
