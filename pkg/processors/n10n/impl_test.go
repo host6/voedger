@@ -83,30 +83,64 @@ func TestSubscriptionAuthorizationUsesEachWorkspace(t *testing.T) {
 	wsb.Grant([]appdef.OperationKind{appdef.OperationKind_Select}, filter.QNames(entity), nil, role)
 	app := adb.MustBuild()
 	as := &subscriptionApp{app: app, descriptor: descriptor}
-	var requests []iauthnz.AuthnRequest
-	var failure error
-	proc := &implIN10NProc{authenticator: subscriptionAuthenticator(func(req iauthnz.AuthnRequest) (iauthnz.AuthnResult, error) {
-		requests = append(requests, req)
-		if failure != nil {
-			return iauthnz.AuthnResult{}, failure
-		}
-		if req.RequestWSID == 100 {
-			return iauthnz.AuthnResult{Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: role}}}, nil
-		}
-		return iauthnz.AuthnResult{Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser}}}, nil
-	})}
-	wp := &n10nWorkpiece{appStructs: as, token: "same-token", host: "host", subscriptions: []subscription{{entity: entity, wsid: 100}}}
-	require.NoError(proc.authnzEntities(t.Context(), wp))
-	wp.subscriptions = append(wp.subscriptions, subscription{entity: entity, wsid: 200})
-	err := proc.authnzEntities(t.Context(), wp)
-	var sysErr coreutils.SysError
-	require.ErrorAs(err, &sysErr)
-	require.Equal(http.StatusForbidden, sysErr.HTTPStatus)
-	require.Equal([]iauthnz.AuthnRequest{{RequestWSID: 100, Host: "host", Token: "same-token"}, {RequestWSID: 100, Host: "host", Token: "same-token"}, {RequestWSID: 200, Host: "host", Token: "same-token"}}, requests)
-	failure = errors.New("Subject lookup failed")
-	err = proc.authnzEntities(t.Context(), wp)
-	require.ErrorAs(err, &sysErr)
-	require.Equal(http.StatusUnauthorized, sysErr.HTTPStatus)
+	for _, tc := range []struct {
+		name                string
+		workspaces          []istructs.WSID
+		authenticationError error
+		expectedStatus      int
+		expectedWorkspaces  []istructs.WSID
+	}{
+		{
+			name:       "Subscription is allowed in the authorized Workspace",
+			workspaces: []istructs.WSID{100}, expectedWorkspaces: []istructs.WSID{100},
+		},
+		{
+			name:       "Authorization in one Workspace does not grant access to another",
+			workspaces: []istructs.WSID{100, 200}, expectedWorkspaces: []istructs.WSID{100, 200},
+			expectedStatus: http.StatusForbidden,
+		},
+		{
+			name:       "Authentication failure rejects the subscription and stops further checks",
+			workspaces: []istructs.WSID{100, 200}, expectedWorkspaces: []istructs.WSID{100},
+			authenticationError: errors.New("Subject lookup failed"), expectedStatus: http.StatusUnauthorized,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var actualRequests []iauthnz.AuthnRequest
+			proc := &implIN10NProc{authenticator: subscriptionAuthenticator(func(request iauthnz.AuthnRequest) (iauthnz.AuthnResult, error) {
+				actualRequests = append(actualRequests, request)
+				if tc.authenticationError != nil {
+					return iauthnz.AuthnResult{}, tc.authenticationError
+				}
+				roleName := iauthnz.QNameRoleAuthenticatedUser
+				if request.RequestWSID == 100 {
+					roleName = role
+				}
+				return iauthnz.AuthnResult{Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: roleName}}}, nil
+			})}
+			wp := &n10nWorkpiece{appStructs: as, token: "same-token", host: "host"}
+			for _, wsid := range tc.workspaces {
+				wp.subscriptions = append(wp.subscriptions, subscription{entity: entity, wsid: wsid})
+			}
+			actualError := proc.authnzEntities(t.Context(), wp)
+
+			// Distinguish missing permissions from authentication failures in the subscription response
+			if tc.expectedStatus == 0 {
+				require.NoError(actualError)
+			} else {
+				var actualSysError coreutils.SysError
+				require.ErrorAs(actualError, &actualSysError)
+				require.Equal(tc.expectedStatus, actualSysError.HTTPStatus)
+			}
+
+			// Authenticate each target Workspace with the same credentials; stop after the first failure
+			expectedRequests := make([]iauthnz.AuthnRequest, 0, len(tc.expectedWorkspaces))
+			for _, wsid := range tc.expectedWorkspaces {
+				expectedRequests = append(expectedRequests, iauthnz.AuthnRequest{RequestWSID: wsid, Host: "host", Token: "same-token"})
+			}
+			require.Equal(expectedRequests, actualRequests)
+		})
+	}
 }
 
 type subscriptionAuthenticator func(iauthnz.AuthnRequest) (iauthnz.AuthnResult, error)

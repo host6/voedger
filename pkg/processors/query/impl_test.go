@@ -1404,16 +1404,21 @@ func (r *mockRecord) QName() appdef.QName         { return r.Called().Get(0).(ap
 func TestWorkpieceAuthenticationResult(t *testing.T) {
 	require := require.New(t)
 	wp := &queryWork{}
+	// Reuse one workpiece for different identities to detect state leaking between requests
 	for _, login := range []string{"first", "second"} {
-		result := iauthnz.AuthnResult{
+		expected := iauthnz.AuthnResult{
 			Payload:    payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: login, ProfileWSID: 42},
 			Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
 		}
-		wp.SetAuthnResult(result)
-		require.Equal(result, wp.GetAuthnResult())
-		require.Equal(result.Principals, wp.GetPrincipals())
+		wp.SetAuthnResult(expected)
+		// Both accessors must expose the current authentication result for downstream authorization
+		actual := wp.GetAuthnResult()
+		require.Equal(expected, actual)
+		require.Equal(expected.Principals, wp.GetPrincipals())
+
+		// Release must erase identity and principals before the workpiece serves another request
 		wp.Release()
-		require.Empty(wp.GetAuthnResult())
+		require.Equal(iauthnz.AuthnResult{}, wp.GetAuthnResult())
 		require.Empty(wp.GetPrincipals())
 	}
 }
