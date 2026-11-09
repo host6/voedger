@@ -9,10 +9,10 @@ import (
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
-	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/itokens"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/wneessen/go-mail"
 
 	"github.com/voedger/voedger/pkg/coreutils/federation"
@@ -24,7 +24,7 @@ type N10nFunc func(view appdef.QName, wsid istructs.WSID, offset istructs.Offset
 type AppStructsFunc func() istructs.IAppStructs
 type CUDFunc func() istructs.ICUD
 type ObjectBuilderFunc func() istructs.IObjectBuilder
-type PrincipalsFunc func() []iauthnz.Principal
+type PrincipalPayloadFunc func() payloads.PrincipalPayload
 type TokenFunc func() string
 type PLogEventFunc func() istructs.IPLogEvent
 type CommandPrepareArgsFunc func() istructs.CommandPrepareArgs
@@ -39,12 +39,12 @@ type PrepareArgsFunc func() istructs.PrepareArgs
 type ExecQueryCallbackFunc func() istructs.ExecQueryCallback
 type UnixTimeFunc func() int64
 type MockedStateFactory func(vvmCtx context.Context, intentsLimit int, appStructsFunc AppStructsFunc) IHostState
-type CommandProcessorStateFactory func(vvmCtx context.Context, appStructsFunc AppStructsFunc, wsidFunc WSIDFunc, secretReader isecrets.ISecretReader, cudFunc CUDFunc, principalPayloadFunc PrincipalsFunc, tokenFunc TokenFunc, intentsLimit int, cmdResultBuilderFunc ObjectBuilderFunc, execCmdArgsFunc CommandPrepareArgsFunc, argFunc ArgFunc, unloggedArgFunc UnloggedArgFunc, wlogOffsetFunc WLogOffsetFunc, stateOpts StateOpts, originFunc OriginFunc) IHostState
+type CommandProcessorStateFactory func(vvmCtx context.Context, appStructsFunc AppStructsFunc, wsidFunc WSIDFunc, secretReader isecrets.ISecretReader, cudFunc CUDFunc, principalPayloadFunc PrincipalPayloadFunc, tokenFunc TokenFunc, intentsLimit int, cmdResultBuilderFunc ObjectBuilderFunc, execCmdArgsFunc CommandPrepareArgsFunc, argFunc ArgFunc, unloggedArgFunc UnloggedArgFunc, wlogOffsetFunc WLogOffsetFunc, stateOpts StateOpts, originFunc OriginFunc) IHostState
 type SyncActualizerStateFactory func(vvmCtx context.Context, appStructsFunc AppStructsFunc, partitionIDFunc PartitionIDFunc, wsidFunc WSIDFunc, n10nFunc N10nFunc, secretReader isecrets.ISecretReader, eventFunc PLogEventFunc, intentsLimit int, stateOpts StateOpts) IHostState
 
 // requestCtx instead of vvmCtx because the query state is created per-request
 // other state factories receive vvmCtx for VVM-lifetime state.
-type QueryProcessorStateFactory func(requestCtx context.Context, appStructsFunc AppStructsFunc, wsidFunc WSIDFunc, secretReader isecrets.ISecretReader, principalPayloadFunc PrincipalsFunc, tokenFunc TokenFunc, itokens itokens.ITokens, execQueryArgsFunc PrepareArgsFunc, argFunc ArgFunc, resultBuilderFunc ObjectBuilderFunc, federation federation.IFederation, queryCallbackFunc ExecQueryCallbackFunc, stateOpts StateOpts, httpClient httpu.IHTTPClient) IHostState
+type QueryProcessorStateFactory func(requestCtx context.Context, appStructsFunc AppStructsFunc, wsidFunc WSIDFunc, secretReader isecrets.ISecretReader, principalPayloadFunc PrincipalPayloadFunc, tokenFunc TokenFunc, itokens itokens.ITokens, execQueryArgsFunc PrepareArgsFunc, argFunc ArgFunc, resultBuilderFunc ObjectBuilderFunc, federation federation.IFederation, queryCallbackFunc ExecQueryCallbackFunc, stateOpts StateOpts, httpClient httpu.IHTTPClient) IHostState
 type AsyncActualizerStateFactory func(vvmCtx context.Context, appStructsFunc AppStructsFunc, wsidFunc WSIDFunc, n10nFunc N10nFunc, secretReader isecrets.ISecretReader, eventFunc PLogEventFunc, tokensFunc itokens.ITokens, federationFunc federation.IFederation, intentsLimit, bundlesLimit int, stateOpts StateOpts, emailSender IEmailSender, httpClient httpu.IHTTPClient) IBundledHostState
 type SchedulerStateFactory func(vvmCtx context.Context, appStructsFunc AppStructsFunc, wsidFunc WSIDFunc, n10nFunc N10nFunc, secretReader isecrets.ISecretReader, tokensFunc itokens.ITokens, federationFunc federation.IFederation, unixTimeFunc UnixTimeFunc, intentsLimit int, optFuncs StateOpts, emailSender IEmailSender, httpClient httpu.IHTTPClient) IHostState
 

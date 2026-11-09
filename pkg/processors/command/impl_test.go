@@ -1350,3 +1350,86 @@ func TestSyncProjectorLogging(t *testing.T) {
 		logCap.EventuallyHasLine("stage=cp.partition_recovery", "partition will be restarted due of an error on writing to Log")
 	})
 }
+
+func TestWorkpieceAuthenticationResult(t *testing.T) {
+	require := require.New(t)
+	wp := &cmdWorkpiece{}
+	for _, login := range []string{"first", "second"} {
+		result := iauthnz.AuthnResult{
+			Payload:    payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: login, ProfileWSID: 42},
+			Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
+		}
+		wp.SetAuthnResult(result)
+		require.Equal(result, wp.GetAuthnResult())
+		require.Equal(result.Principals, wp.GetPrincipals())
+		wp.Release()
+		require.Empty(wp.GetAuthnResult())
+		require.Empty(wp.GetPrincipals())
+	}
+}
+
+func TestCommandAuthenticationResultAndFailure(t *testing.T) {
+	require := require.New(t)
+	adb := builder.New()
+	adb.AddPackage("test", "test.com/test")
+	wsName, command := appdef.NewQName("test", "workspace"), appdef.NewQName("test", "command")
+	adb.AddWorkspace(wsName).AddCommand(command)
+	app := adb.MustBuild()
+	result := iauthnz.AuthnResult{Payload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "canonical", ProfileWSID: 42},
+		Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
+	}
+	var failure error
+	proc := &cmdProc{authenticator: commandResultAuthenticator(func(req iauthnz.AuthnRequest) (iauthnz.AuthnResult, error) {
+		require.Equal(iauthnz.AuthnRequest{RequestWSID: 200, Token: "atoken", Host: "host"}, req)
+		return result, failure
+	})}
+	wp := &cmdWorkpiece{cmdQName: command, appStructs: &commandIdentityApp{app: app},
+		cmdMes: NewCommandMessage(t.Context(), nil, istructs.AppQName_test1_app1, 200, nil, 1, command, "atoken", "host", processors.APIPath_Commands, 0, http.MethodPost, "")}
+	require.NoError(proc.authenticate(t.Context(), wp))
+	require.Equal(result, wp.GetAuthnResult())
+	require.NoError(getPrincipalsRoles(t.Context(), wp))
+	require.Contains(wp.roles, iauthnz.QNameRoleSystem)
+	failure = errors.New("token invalid")
+	require.Error(proc.authenticate(t.Context(), wp))
+	require.Empty(wp.GetAuthnResult())
+	require.Empty(wp.GetPrincipals())
+}
+
+func TestLegacyFallbackLoggingPreservesContext(t *testing.T) {
+	require := require.New(t)
+	logs := logger.StartCapture(t, logger.LogLevelVerbose)
+	adb := builder.New()
+	adb.AddPackage("test", "test.com/test")
+	wsName, command := appdef.NewQName("test", "workspace"), appdef.NewQName("test", "command")
+	adb.AddWorkspace(wsName).AddCommand(command)
+	app := adb.MustBuild()
+	ctx := logger.WithContextAttrs(t.Context(), map[string]any{logger.LogAttr_WSID: 200, logger.LogAttr_VApp: istructs.AppQName_test1_app1})
+	wp := &cmdWorkpiece{cmdQName: command, iWorkspace: app.Workspace(wsName), appPart: &denyNewACLPartition{},
+		cmdMes: NewCommandMessage(ctx, nil, istructs.AppQName_test1_app1, 200, nil, 1, command, "secret-token", "host", processors.APIPath_Commands, 0, http.MethodPost, "")}
+	wp.SetAuthnResult(iauthnz.AuthnResult{Payload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "canonical", ProfileWSID: 42},
+		Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceOwner}}})
+	require.NoError(getPrincipalsRoles(t.Context(), wp))
+	require.NoError((&cmdProc{}).authorizeRequest(t.Context(), wp))
+	logs.HasLine("level=DEBUG", "newACL not ok, but oldACL ok", "test.command", "wsid=200", "profilewsid=42")
+	logs.NotContains("secret-token")
+}
+
+type commandResultAuthenticator func(iauthnz.AuthnRequest) (iauthnz.AuthnResult, error)
+
+func (f commandResultAuthenticator) Authenticate(_ context.Context, _ istructs.IAppStructs, _ istructs.IAppTokens, req iauthnz.AuthnRequest) (iauthnz.AuthnResult, error) {
+	return f(req)
+}
+
+type commandIdentityApp struct {
+	istructs.IAppStructs
+	app appdef.IAppDef
+}
+
+func (a *commandIdentityApp) AppDef() appdef.IAppDef       { return a.app }
+func (*commandIdentityApp) AppTokens() istructs.IAppTokens { return nil }
+
+type denyNewACLPartition struct{ appparts.IAppPartition }
+
+func (*denyNewACLPartition) IsOperationAllowed(appdef.IWorkspace, appdef.OperationKind, appdef.QName, []appdef.FieldName, []appdef.QName) (bool, error) {
+	return false, nil
+}

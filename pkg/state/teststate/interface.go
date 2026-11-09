@@ -9,8 +9,8 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/state"
 )
 
@@ -33,7 +33,7 @@ type ITestAPI interface {
 	PutFederationCmdHandler(state.FederationCommandHandler)
 	PutFederationBlobHandler(state.FederationBlobHandler)
 	PutUniquesHandler(state.UniquesHandler)
-	PutRequestSubject(principals []iauthnz.Principal, token string)
+	PutRequestSubject(payload payloads.PrincipalPayload, token string)
 	PutQuery(wsid istructs.WSID, name appdef.FullQName, argb QueryArgBuilderCallback)
 
 	GetRecord(wsid istructs.WSID, id istructs.RecordID) istructs.IRecord

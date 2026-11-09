@@ -109,7 +109,7 @@ func (p *implIN10NProc) authnzEntities(ctx context.Context, n10nWP *n10nWorkpiec
 			RequestWSID: s.wsid,
 			Token:       n10nWP.token,
 		}
-		principals, _, err := p.authenticator.Authenticate(ctx, n10nWP.appStructs, n10nWP.appTokens, authnzReq)
+		result, err := p.authenticator.Authenticate(ctx, n10nWP.appStructs, n10nWP.appTokens, authnzReq)
 		if err != nil {
 			// [~server.n10n/err.routerCreateChannelInvalidToken~impl]
 			// [~server.n10n/err.routerAddSubscriptionInvalidToken~impl]
@@ -117,7 +117,7 @@ func (p *implIN10NProc) authnzEntities(ctx context.Context, n10nWP *n10nWorkpiec
 			// notest: token is validated already, error could happen on e.g. subjects read failure
 			return coreutils.NewHTTPError(http.StatusUnauthorized, err)
 		}
-		roles := processors.GetRoles(principals)
+		roles := processors.GetRoles(result.Principals)
 		ok, err := acl.IsOperationAllowed(iWorkspace, appdef.OperationKind_Select, s.entity, nil, roles)
 		if err != nil {
 			return err

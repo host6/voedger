@@ -108,7 +108,7 @@ func (c *cmdWorkpiece) PLogOffset() istructs.Offset {
 }
 
 func (c *cmdWorkpiece) GetPrincipals() []iauthnz.Principal {
-	return c.principals
+	return c.authnResult.Principals
 }
 
 func (c *cmdWorkpiece) ResetRateLimit(resource appdef.QName, operation appdef.OperationKind) {
@@ -121,7 +121,7 @@ func (c *cmdWorkpiece) Roles() []appdef.QName {
 
 // https://github.com/voedger/voedger/issues/3163
 func (c *cmdWorkpiece) GetUserPrincipalName() string {
-	for _, prn := range c.principals {
+	for _, prn := range c.authnResult.Principals {
 		if prn.Kind == iauthnz.PrincipalKind_User {
 			return prn.Name
 		}
@@ -143,13 +143,14 @@ func (c *cmdWorkpiece) borrow() (err error) {
 }
 
 func (c *cmdWorkpiece) SetPrincipals(prns []iauthnz.Principal) {
-	c.principals = prns
+	c.authnResult.Principals = prns
 }
 
 // releases resources:
 //   - borrowed app partition
 //   - plog event
 func (c *cmdWorkpiece) Release() {
+	c.authnResult = iauthnz.AuthnResult{}
 	if ev := c.pLogEvent; ev != nil {
 		c.pLogEvent = nil
 		ev.Release()
@@ -534,7 +535,7 @@ func checkWSInitialized(_ context.Context, cmd *cmdWorkpiece) (err error) {
 			return nil
 		}
 		if cmd.cmdQName == istructs.QNameCommandCUD {
-			if iauthnz.IsSystemPrincipal(cmd.principals, cmd.cmdMes.WSID()) {
+			if iauthnz.IsSystemPrincipal(cmd.authnResult.Principals) {
 				// system -> allow any CUD to upload template, see https://github.com/voedger/voedger/issues/648
 				return nil
 			}
@@ -544,7 +545,7 @@ func checkWSInitialized(_ context.Context, cmd *cmdWorkpiece) (err error) {
 }
 
 func checkWSActive(_ context.Context, cmd *cmdWorkpiece) (err error) {
-	if iauthnz.IsSystemPrincipal(cmd.principals, cmd.cmdMes.WSID()) {
+	if iauthnz.IsSystemPrincipal(cmd.authnResult.Principals) {
 		// system -> allow to work in any case
 		return nil
 	}
@@ -567,7 +568,7 @@ func limitCallRate(_ context.Context, cmd *cmdWorkpiece) (err error) {
 }
 
 func (cmdProc *cmdProc) authenticate(_ context.Context, cmd *cmdWorkpiece) (err error) {
-	if processors.SetPrincipalsForAnonymousOnlyFunc(cmd.appStructs.AppDef(), cmd.cmdQName, cmd.cmdMes.WSID(), cmd) {
+	if processors.SetPrincipalsForAnonymousOnlyFunc(cmd.appStructs.AppDef(), cmd.cmdQName, cmd) {
 		// grant to anonymous -> set token == "" to avoid validating an expired token accidentally kept in cookies
 		return nil
 	}
@@ -576,15 +577,16 @@ func (cmdProc *cmdProc) authenticate(_ context.Context, cmd *cmdWorkpiece) (err 
 		RequestWSID: cmd.cmdMes.WSID(),
 		Token:       cmd.cmdMes.Token(),
 	}
-	if cmd.principals, _, err = cmdProc.authenticator.Authenticate(cmd.cmdMes.RequestCtx(), cmd.appStructs,
+	if cmd.authnResult, err = cmdProc.authenticator.Authenticate(cmd.cmdMes.RequestCtx(), cmd.appStructs,
 		cmd.appStructs.AppTokens(), req); err != nil {
+		cmd.authnResult = iauthnz.AuthnResult{}
 		return coreutils.NewHTTPError(http.StatusUnauthorized, err)
 	}
 	return nil
 }
 
 func getPrincipalsRoles(_ context.Context, cmd *cmdWorkpiece) (err error) {
-	cmd.roles = processors.GetRoles(cmd.principals)
+	cmd.roles = processors.GetRoles(cmd.authnResult.Principals)
 	return nil
 }
 
@@ -600,12 +602,12 @@ func (cmdProc *cmdProc) authorizeRequest(_ context.Context, cmd *cmdWorkpiece) (
 		return err
 	}
 	// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-	oldACLOk := oldacl.IsOperationAllowed(appdef.OperationKind_Execute, cmd.cmdQName, nil, oldacl.EnrichPrincipals(cmd.principals, cmd.cmdMes.WSID()))
+	oldACLOk := oldacl.IsOperationAllowed(cmd.cmdMes.RequestCtx(), appdef.OperationKind_Execute, cmd.cmdQName, nil, oldacl.EnrichPrincipals(cmd.authnResult.Principals), cmd.authnResult.Payload)
 	if !newACLOk && !oldACLOk {
 		return coreutils.NewHTTPErrorf(http.StatusForbidden)
 	}
 	if !newACLOk && oldACLOk && logger.IsVerbose() {
-		logger.VerboseCtx(cmd.cmdMes.RequestCtx(), "", "newACL not ok, but oldACL ok. ", appdef.OperationKind_Execute, cmd.cmdQName, cmd.roles)
+		logger.VerboseCtx(logger.WithContextAttrs(cmd.cmdMes.RequestCtx(), map[string]any{"profilewsid": cmd.authnResult.Payload.ProfileWSID}), "", "newACL not ok, but oldACL ok. ", appdef.OperationKind_Execute, cmd.cmdQName, cmd.roles)
 	}
 	return nil
 }
@@ -1003,12 +1005,12 @@ func (cmdProc *cmdProc) authorizeRequestCUDs(_ context.Context, cmd *cmdWorkpiec
 			return err
 		}
 		// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-		oldACLOk := oldacl.IsOperationAllowed(parsedCUD.opKind, parsedCUD.qName, fields, oldacl.EnrichPrincipals(cmd.principals, cmd.cmdMes.WSID()))
+		oldACLOk := oldacl.IsOperationAllowed(cmd.cmdMes.RequestCtx(), parsedCUD.opKind, parsedCUD.qName, fields, oldacl.EnrichPrincipals(cmd.authnResult.Principals), cmd.authnResult.Payload)
 		if !newACLOk && !oldACLOk {
 			return coreutils.NewHTTPError(http.StatusForbidden, parsedCUD.xPath.Errorf("operation forbidden"))
 		}
 		if !newACLOk && oldACLOk && logger.IsVerbose() {
-			logger.VerboseCtx(cmd.cmdMes.RequestCtx(), "", "newACL not ok, but oldACL ok. ", parsedCUD.opKind, parsedCUD.qName, cmd.roles)
+			logger.VerboseCtx(logger.WithContextAttrs(cmd.cmdMes.RequestCtx(), map[string]any{"profilewsid": cmd.authnResult.Payload.ProfileWSID}), "", "newACL not ok, but oldACL ok. ", parsedCUD.opKind, parsedCUD.qName, cmd.roles)
 		}
 	}
 	return nil
@@ -1112,3 +1114,6 @@ func nopHooks() *partitionRecoveryHooks {
 		attemptCompleted: func(partitionKey, error) {},
 	}
 }
+
+func (c *cmdWorkpiece) GetAuthnResult() iauthnz.AuthnResult       { return c.authnResult }
+func (c *cmdWorkpiece) SetAuthnResult(result iauthnz.AuthnResult) { c.authnResult = result }

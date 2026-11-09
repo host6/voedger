@@ -6,6 +6,7 @@
 package processors
 
 import (
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"testing"
 	"time"
 
@@ -14,6 +15,8 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appdef/builder"
 	"github.com/voedger/voedger/pkg/appdef/filter"
+	"github.com/voedger/voedger/pkg/iauthnz"
+	"github.com/voedger/voedger/pkg/istructs"
 )
 
 func TestRetryAfterSecondsOnLimitExceeded(t *testing.T) {
@@ -56,4 +59,36 @@ func TestRetryAfterSecondsOnLimitExceeded(t *testing.T) {
 		app, limit := buildApp(1, time.Hour) // 3600s / 1 = 3600
 		require.Equal(3600, RetryAfterSecondsOnLimitExceeded(app, limit))
 	})
+}
+
+func TestAnonymousOnlyAuthenticationResult(t *testing.T) {
+	require := require.New(t)
+	adb := builder.New()
+	adb.AddPackage("test", "test.com/test")
+	workspace := appdef.NewQName("test", "workspace")
+	command := appdef.NewQName("test", "anonymous")
+	other := appdef.NewQName("test", "other")
+	wsb := adb.AddWorkspace(workspace)
+	wsb.AddCommand(command)
+	wsb.AddCommand(other)
+	wsb.AddRole(iauthnz.QNameRoleAnonymous)
+	wsb.Grant([]appdef.OperationKind{appdef.OperationKind_Execute}, filter.QNames(command), nil, iauthnz.QNameRoleAnonymous)
+	app := adb.MustBuild()
+	setter := &authnResultSetter{result: iauthnz.AuthnResult{
+		Payload:    payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "previous", ProfileWSID: 42},
+		Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
+	}}
+	require.True(SetPrincipalsForAnonymousOnlyFunc(app, command, setter))
+	require.Equal([]iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAnonymous}}, setter.result.Principals)
+	require.Equal(payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: istructs.SysGuestLogin, ProfileWSID: istructs.GuestWSID}, setter.result.Payload)
+	before := setter.result
+	require.False(SetPrincipalsForAnonymousOnlyFunc(app, other, setter))
+	require.Equal(before, setter.result)
+}
+
+type authnResultSetter struct{ result iauthnz.AuthnResult }
+
+func (s *authnResultSetter) SetAuthnResult(result iauthnz.AuthnResult) { s.result = result }
+func (s *authnResultSetter) SetPrincipals(principals []iauthnz.Principal) {
+	s.result.Principals = principals
 }

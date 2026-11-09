@@ -24,6 +24,7 @@ type IProcessorWorkpiece interface {
 	AppPartitions() appparts.IAppPartitions
 	AppPartition() appparts.IAppPartition
 	GetPrincipals() []iauthnz.Principal
+	GetAuthnResult() iauthnz.AuthnResult
 	Roles() []appdef.QName
 	ResetRateLimit(appdef.QName, appdef.OperationKind)
 	LogCtx() context.Context

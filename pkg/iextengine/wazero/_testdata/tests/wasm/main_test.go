@@ -6,12 +6,12 @@
 package main
 
 import (
+ payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/voedger/voedger/pkg/appdef"
 	test "github.com/voedger/voedger/pkg/exttinygo/exttinygotests"
-	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/state/teststate"
@@ -84,7 +84,7 @@ func Test_CommandStorages(t *testing.T) {
 	test.PutEvent(testWSID, appdef.NewFullQName(testPkg, "CommandTestStorages"), func(arg istructs.IObjectBuilder, _ istructs.ICUD) {
 		arg.PutInt64("IdToRead", int64(newIds[0]))
 	})
-	test.PutRequestSubject([]iauthnz.Principal{{Kind: iauthnz.PrincipalKind_User, WSID: testWSID, Name: "ivan@gmail.com"}}, "atoken")
+	test.PutRequestSubject(payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, ProfileWSID: testWSID, Login: "ivan@gmail.com"}, "atoken")
 	CommandTestStorages()
 
 	test.RequireIntent(t, state.Result, appdef.NullFullQName, func(_ istructs.IStateKeyBuilder) {}).Equal(func(value istructs.IStateValueBuilder) {

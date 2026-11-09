@@ -5,10 +5,10 @@
 package query2
 
 import (
-	"maps"
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -54,7 +54,7 @@ func viewAuthorizeResult(_ context.Context, qw *queryWork) (err error) {
 		}
 	}
 	// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-	oldACLOk := oldacl.IsOperationAllowed(appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
+	oldACLOk := oldacl.IsOperationAllowed(qw.msg.RequestCtx(), appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, oldacl.EnrichPrincipals(qw.authnResult.Principals), qw.authnResult.Payload)
 	newACLOk := true
 	newACLCalculated := true
 	if newACLOk, err = qw.appPart.IsOperationAllowed(ws, appdef.OperationKind_Select, qw.resultType.QName(), requestedFields, qw.roles); err != nil {
@@ -67,7 +67,7 @@ func viewAuthorizeResult(_ context.Context, qw *queryWork) (err error) {
 		return coreutils.NewSysError(http.StatusForbidden)
 	}
 	if newACLCalculated && !newACLOk && oldACLOk {
-		logger.Verbose("newACL not ok, but oldACL ok.", appdef.OperationKind_Select, qw.resultType.QName(), qw.roles)
+		logger.VerboseCtx(logger.WithContextAttrs(qw.msg.RequestCtx(), map[string]any{"profilewsid": qw.authnResult.Payload.ProfileWSID}), "", "newACL not ok, but oldACL ok.", appdef.OperationKind_Select, qw.resultType.QName(), qw.roles)
 	}
 	return nil
 }

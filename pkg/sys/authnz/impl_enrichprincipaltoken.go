@@ -10,6 +10,7 @@ import (
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
+	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/sys/storages"
@@ -37,23 +38,25 @@ func provideExecQryEnrichPrincipalToken(atf payloads.IAppTokensFactory) istructs
 			return err
 		}
 
-		principalPayload, err := payloads.GetPrincipalPayload(appTokens, principalToken)
-		if err != nil {
-			return err
+		if principalToken == "" {
+			return itokens.ErrInvalidToken
 		}
+		result := args.Workpiece.(processors.IProcessorWorkpiece).GetAuthnResult()
+		principalPayload := result.Payload
+		principalPayload.Roles = slices.Clone(principalPayload.Roles)
 
 		scope := payloads.RoleScopeWorkspacesOwnedBy
 		if principalPayload.IsAPIToken {
 			scope = payloads.RoleScopeWorkspace
 		}
-		principals := args.Workpiece.(processors.IProcessorWorkpiece).GetPrincipals()
+		principals := result.Principals
 		for _, prn := range principals {
 			if prn.Kind != iauthnz.PrincipalKind_Role {
 				continue
 			}
 			newRole := payloads.RoleType{
 				Scope: scope,
-				WSID:  prn.WSID,
+				WSID:  args.WSID,
 				QName: prn.QName,
 			}
 			if !slices.Contains(principalPayload.Roles, newRole) {

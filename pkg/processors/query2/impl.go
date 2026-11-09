@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"net/http"
 	"time"
 
@@ -161,7 +162,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			return qw.apiPathHandler.checkRateLimit(ctx, qw)
 		}),
 		operator("authenticate query request", func(_ context.Context, qw *queryWork) (err error) {
-			if processors.SetPrincipalsForAnonymousOnlyFunc(qw.appStructs.AppDef(), qw.msg.QName(), qw.msg.WSID(), qw) {
+			if processors.SetPrincipalsForAnonymousOnlyFunc(qw.appStructs.AppDef(), qw.msg.QName(), qw) {
 				// grant to anonymous -> set token == "" to avoid validating an expired token accidentally kept in cookies
 				return nil
 			}
@@ -170,7 +171,10 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				RequestWSID: qw.msg.WSID(),
 				Token:       qw.msg.Token(),
 			}
-			qw.principals, qw.profileWSID, err = authn.Authenticate(qw.msg.RequestCtx(), qw.appStructs, qw.appStructs.AppTokens(), req)
+			qw.authnResult, err = authn.Authenticate(qw.msg.RequestCtx(), qw.appStructs, qw.appStructs.AppTokens(), req)
+			if err != nil {
+				qw.authnResult = iauthnz.AuthnResult{}
+			}
 			return coreutils.WrapSysError(err, http.StatusUnauthorized)
 		}),
 		operator("get workspace descriptor", func(_ context.Context, qw *queryWork) (err error) {
@@ -178,12 +182,12 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			return err
 		}),
 		operator("get principals roles", func(_ context.Context, qw *queryWork) (err error) {
-			qw.roles = processors.GetRoles(qw.principals)
+			qw.roles = processors.GetRoles(qw.authnResult.Principals)
 			return nil
 		}),
 		operator("check workspace active", func(_ context.Context, qw *queryWork) (err error) {
-			for _, prn := range qw.principals {
-				if prn.Kind == iauthnz.PrincipalKind_Role && prn.QName == iauthnz.QNameRoleSystem && prn.WSID == qw.msg.WSID() {
+			for _, prn := range qw.authnResult.Principals {
+				if prn.Kind == iauthnz.PrincipalKind_Role && prn.QName == iauthnz.QNameRoleSystem {
 					// system -> allow to work in any case
 					return nil
 				}
@@ -265,7 +269,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				func() istructs.IAppStructs { return qw.appStructs },
 				state.SimpleWSIDFunc(qw.msg.WSID()),
 				qw.secretReader,
-				func() []iauthnz.Principal { return qw.principals },
+				func() payloads.PrincipalPayload { return qw.authnResult.Payload },
 				func() string { return qw.msg.Token() },
 				itokens,
 				func() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs },

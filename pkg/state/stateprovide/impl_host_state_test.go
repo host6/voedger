@@ -6,6 +6,7 @@ package stateprovide
 
 import (
 	"context"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"math"
 	"testing"
 
@@ -48,6 +49,22 @@ func TestHostState_RequestContext(t *testing.T) {
 	hostState := newHostState(requestCtx, "ForTest", 10, nil)
 
 	require.Same(t, requestCtx, hostState.RequestContext())
+}
+
+func TestCommandStateRequestSubject(t *testing.T) {
+	require := require.New(t)
+	subject := payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_Device, Login: "device", ProfileWSID: 42}
+	token := "device-token"
+	host := ProvideCommandProcessorStateFactory()(t.Context(), mockedHostStateStructs, state.SimpleWSIDFunc(200), nil, nil,
+		func() payloads.PrincipalPayload { return subject }, func() string { return token }, 1, nil, nil, nil, nil, nil, state.NullOpts, nil)
+	key, err := host.KeyBuilder(sys.Storage_RequestSubject, appdef.NullQName)
+	require.NoError(err)
+	value, err := host.MustExist(key)
+	require.NoError(err)
+	require.Equal("device", value.AsString(sys.Storage_RequestSubject_Field_Name))
+	require.Equal(int32(istructs.SubjectKind_Device), value.AsInt32(sys.Storage_RequestSubject_Field_Kind))
+	require.Equal(int64(42), value.AsInt64(sys.Storage_RequestSubject_Field_ProfileWSID))
+	require.Equal(token, value.AsString(sys.Storage_RequestSubject_Field_Token))
 }
 
 func mockedHostStateStructs() istructs.IAppStructs {

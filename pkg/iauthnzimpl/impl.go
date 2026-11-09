@@ -15,220 +15,105 @@ import (
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 )
 
-func (i *implIAuthenticator) Authenticate(requestContext context.Context, as istructs.IAppStructs, appTokens istructs.IAppTokens, req iauthnz.AuthnRequest) (principals []iauthnz.Principal, profileWSID istructs.WSID, err error) {
-	var principalPayload payloads.PrincipalPayload
+func (i *implIAuthenticator) Authenticate(ctx context.Context, as istructs.IAppStructs, appTokens istructs.IAppTokens, req iauthnz.AuthnRequest) (result iauthnz.AuthnResult, err error) {
 	defer func() {
-		if !principalPayload.IsAPIToken {
-			principals = append(principals, iauthnz.Principal{
-				Kind: iauthnz.PrincipalKind_Host,
-				Name: req.Host,
-			})
+		if err != nil {
+			result = iauthnz.AuthnResult{}
+		} else if !result.Payload.IsAPIToken {
+			result.Principals = append(result.Principals, iauthnz.Principal{Kind: iauthnz.PrincipalKind_Host, Name: req.Host})
 		}
 	}()
-
-	if len(req.Token) == 0 {
-		principals = append(principals,
-			// add user with login "sys.Guest"
-			iauthnz.Principal{
-				Kind: iauthnz.PrincipalKind_User,
-				WSID: istructs.GuestWSID,
-				Name: istructs.SysGuestLogin,
-			},
-			// role.sys.Anonymous
-			iauthnz.Principal{
-				Kind:  iauthnz.PrincipalKind_Role,
-				QName: iauthnz.QNameRoleAnonymous,
-			},
-		)
-
-		// copy roles from subjects
-		rolesFromSubjects, err := i.rolesFromSubjects(requestContext, istructs.SysGuestLogin, as, req.RequestWSID)
+	addRole := func(qname appdef.QName) {
+		principal := iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: qname}
+		if !slices.Contains(result.Principals, principal) {
+			result.Principals = append(result.Principals, principal)
+		}
+	}
+	if req.Token == "" {
+		result.Payload = iauthnz.GuestPayload()
+		result.Principals = append(result.Principals, iauthnz.Principal{Kind: iauthnz.PrincipalKind_User, Name: istructs.SysGuestLogin})
+		addRole(iauthnz.QNameRoleAnonymous)
+		roles, err := i.subjectRolesGetter(ctx, istructs.SysGuestLogin, as, req.RequestWSID)
 		if err != nil {
-			return nil, istructs.NullWSID, err
+			return result, err
 		}
-		principals = append(principals, rolesFromSubjects...)
-
-		return principals, istructs.NullWSID, nil
-	}
-
-	if _, err = appTokens.ValidateToken(req.Token, &principalPayload); err != nil {
-		return nil, istructs.NullWSID, err
-	}
-
-	principals = append(principals, iauthnz.Principal{
-		Kind:  iauthnz.PrincipalKind_Role,
-		WSID:  req.RequestWSID,
-		QName: iauthnz.QNameRoleAuthenticatedUser,
-	})
-
-	if principalPayload.IsAPIToken {
-		for _, role := range principalPayload.Roles {
-			if role.Scope != payloads.RoleScopeWorkspace || role.WSID != req.RequestWSID {
-				continue
-			}
-			principals = append(principals, iauthnz.Principal{
-				Kind:  iauthnz.PrincipalKind_Role,
-				WSID:  req.RequestWSID,
-				QName: role.QName,
-			})
+		for _, role := range roles {
+			addRole(role)
 		}
-		return principals, profileWSID, nil
+		return result, nil
 	}
-
-	// apply global roles
-	// [~server.authnz.groles/tuc.UseGlobalRolesInAuthz~impl]
-	if len(principalPayload.GlobalRoles) > 0 {
-		for _, role := range principalPayload.GlobalRoles {
-			prn := iauthnz.Principal{
-				Kind:  iauthnz.PrincipalKind_Role,
-				WSID:  req.RequestWSID,
-				QName: role,
-			}
-			if !slices.Contains(principals, prn) {
-				principals = append(principals, prn)
+	pp := &result.Payload
+	if _, err = appTokens.ValidateToken(req.Token, pp); err != nil {
+		return result, err
+	}
+	addRole(iauthnz.QNameRoleAuthenticatedUser)
+	if pp.IsAPIToken {
+		for _, role := range pp.Roles {
+			if role.Scope == payloads.RoleScopeWorkspace && role.WSID == req.RequestWSID {
+				addRole(role.QName)
 			}
 		}
+		return result, nil
 	}
-
-	// read roles from cdoc.sys.Subjects from the current workspace
-	// resolve against both the canonical login and the active alias so role assignment matches
-	// regardless of which identifier a subject was registered under
-	subjectLogins := []string{principalPayload.Login}
-	if principalPayload.Alias != "" && principalPayload.Alias != principalPayload.Login {
-		subjectLogins = append(subjectLogins, principalPayload.Alias)
+	for _, role := range pp.GlobalRoles {
+		addRole(role)
 	}
-	for _, subjectLogin := range subjectLogins {
-		rolesFromSubjects, err := i.rolesFromSubjects(requestContext, subjectLogin, as, req.RequestWSID)
+	logins := []string{pp.Login}
+	if pp.Alias != "" && pp.Alias != pp.Login {
+		logins = append(logins, pp.Alias)
+	}
+	for _, login := range logins {
+		roles, err := i.subjectRolesGetter(ctx, login, as, req.RequestWSID)
 		if err != nil {
-			return nil, istructs.NullWSID, err
+			return result, err
 		}
-		for _, prn := range rolesFromSubjects {
-			if !slices.Contains(principals, prn) {
-				principals = append(principals, prn)
-			}
+		for _, role := range roles {
+			addRole(role)
 		}
 	}
-
-	profileWSID = principalPayload.ProfileWSID // for user and device subject kinds
-	pkt := iauthnz.PrincipalKind_NULL
-	loginName := ""
-	switch principalPayload.SubjectKind {
+	kind := iauthnz.PrincipalKind_User
+	name := pp.Login
+	switch pp.SubjectKind {
 	case istructs.SubjectKind_User:
-		pkt = iauthnz.PrincipalKind_User
-		loginName = principalPayload.Login
 	case istructs.SubjectKind_Device:
-		pkt = iauthnz.PrincipalKind_Device
+		kind, name = iauthnz.PrincipalKind_Device, ""
 	default:
-		return nil, istructs.NullWSID, fmt.Errorf("unsupported subject kind: %v", principalPayload)
+		return result, fmt.Errorf("unsupported subject kind: %v", pp.SubjectKind)
 	}
-
-	// system role
-	sysPrn := iauthnz.Principal{
-		Kind:  iauthnz.PrincipalKind_Role,
-		WSID:  req.RequestWSID,
-		QName: iauthnz.QNameRoleSystem,
+	if iauthnz.IsSystemPrincipal(result.Principals) {
+		return result, nil
 	}
-	if slices.Contains(principals, sysPrn) {
-		return principals, profileWSID, nil // nothing else matters
-	} else if profileWSID == istructs.NullWSID {
-		principals = append(principals, sysPrn)
-		return principals, profileWSID, nil
+	if pp.ProfileWSID == istructs.NullWSID {
+		addRole(iauthnz.QNameRoleSystem)
+		return result, nil
 	}
-
-	// user or device principal
-	prn := iauthnz.Principal{
-		Kind: pkt,
-		WSID: profileWSID,
-		Name: loginName,
-	}
-	if !slices.Contains(principals, prn) {
-		principals = append(principals, prn)
-	}
-
-	prnWSOwner := iauthnz.Principal{
-		Kind:  iauthnz.PrincipalKind_Role,
-		WSID:  req.RequestWSID,
-		QName: iauthnz.QNameRoleWorkspaceOwner,
-	}
-
-	wsDesc, err := as.Records().GetSingleton(req.RequestWSID, appdef.QNameCDocWorkspaceDescriptor)
+	result.Principals = append(result.Principals, iauthnz.Principal{Kind: kind, Name: name})
+	descriptor, err := as.Records().GetSingleton(req.RequestWSID, appdef.QNameCDocWorkspaceDescriptor)
 	if err != nil {
-		return nil, istructs.NullWSID, err
+		return result, err
 	}
-
-	if req.RequestWSID == profileWSID {
-		// allow user or device to work in its profile
-		prnProfileOwner := iauthnz.Principal{
-			Kind:  iauthnz.PrincipalKind_Role,
-			WSID:  req.RequestWSID,
-			QName: iauthnz.QNameRoleProfileOwner,
-		}
-		if !slices.Contains(principals, prnProfileOwner) {
-			principals = append(principals, prnProfileOwner)
+	if req.RequestWSID == pp.ProfileWSID {
+		addRole(iauthnz.QNameRoleProfileOwner)
+	} else if kind == iauthnz.PrincipalKind_User {
+		if descriptor.QName() != appdef.NullQName && istructs.WSID(descriptor.AsInt64(field_OwnerWSID)) == pp.ProfileWSID {
+			addRole(iauthnz.QNameRoleWorkspaceOwner)
 		}
 	} else {
-		// not the profile -> check if we could work in that workspace
-		switch pkt {
-		case iauthnz.PrincipalKind_User:
-			if wsDesc.QName() != appdef.NullQName {
-				ownerWSID := wsDesc.AsInt64(field_OwnerWSID)
-				if ownerWSID == int64(profileWSID) && !slices.Contains(principals, prnWSOwner) { // nolint G115
-					principals = append(principals, prnWSOwner)
-				}
-			}
-		case iauthnz.PrincipalKind_Device:
-			deviceProfileWSID := principalPayload.ProfileWSID
-			prnWSDevice := iauthnz.Principal{
-				Kind:  iauthnz.PrincipalKind_Role,
-				WSID:  deviceProfileWSID,
-				QName: iauthnz.QNameRoleWorkspaceDevice,
-			}
-			if !slices.Contains(principals, prnWSDevice) {
-				isDeviceAllowed := i.isDeviceAllowedFuncs[as.AppQName()]
-				deviceAllowed, err := isDeviceAllowed(as, req.RequestWSID, deviceProfileWSID)
-				if err != nil {
-					return nil, istructs.NullWSID, err
-				}
-				if deviceAllowed {
-					principals = append(principals, prnWSDevice)
-				}
+		allowed, err := i.isDeviceAllowedFuncs[as.AppQName()](as, req.RequestWSID, pp.ProfileWSID)
+		if err != nil {
+			return result, err
+		}
+		if allowed {
+			addRole(iauthnz.QNameRoleWorkspaceDevice)
+		}
+	}
+	if descriptor.QName() != appdef.NullQName {
+		owner := istructs.WSID(descriptor.AsInt64(field_OwnerWSID))
+		for _, role := range pp.Roles {
+			if role.Scope == payloads.RoleScopeWorkspacesOwnedBy && role.WSID == owner {
+				addRole(role.QName)
 			}
 		}
 	}
-
-	// emit principals from roles from token
-	if wsDesc.QName() != appdef.NullQName {
-		ownerWSID := wsDesc.AsInt64(field_OwnerWSID)
-		for _, role := range principalPayload.Roles {
-			if role.Scope != payloads.RoleScopeWorkspacesOwnedBy || role.WSID != istructs.WSID(ownerWSID) { // nolint G115
-				continue
-			}
-			prn := iauthnz.Principal{
-				Kind:  iauthnz.PrincipalKind_Role,
-				WSID:  req.RequestWSID,
-				QName: role.QName,
-			}
-			if !slices.Contains(principals, prn) {
-				principals = append(principals, prn)
-			}
-		}
-	}
-
-	return principals, profileWSID, nil
-}
-
-func (i *implIAuthenticator) rolesFromSubjects(requestContext context.Context, name string, as istructs.IAppStructs, wsid istructs.WSID) (res []iauthnz.Principal, err error) {
-	// read roles from cdoc.sys.Subjects from the current workspace
-	subjectRoles, err := i.subjectRolesGetter(requestContext, name, as, wsid)
-	if err != nil {
-		return nil, err
-	}
-	for _, sr := range subjectRoles {
-		res = append(res, iauthnz.Principal{
-			Kind:  iauthnz.PrincipalKind_Role,
-			WSID:  wsid,
-			QName: sr,
-		})
-	}
-	return res, nil
+	return result, nil
 }

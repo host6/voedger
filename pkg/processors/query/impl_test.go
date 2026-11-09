@@ -7,6 +7,7 @@ package queryprocessor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"net/http"
@@ -1399,3 +1400,99 @@ type mockRecord struct {
 
 func (r *mockRecord) AsString(name string) string { return r.Called(name).String(0) }
 func (r *mockRecord) QName() appdef.QName         { return r.Called().Get(0).(appdef.QName) }
+
+func TestWorkpieceAuthenticationResult(t *testing.T) {
+	require := require.New(t)
+	wp := &queryWork{}
+	for _, login := range []string{"first", "second"} {
+		result := iauthnz.AuthnResult{
+			Payload:    payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: login, ProfileWSID: 42},
+			Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
+		}
+		wp.SetAuthnResult(result)
+		require.Equal(result, wp.GetAuthnResult())
+		require.Equal(result.Principals, wp.GetPrincipals())
+		wp.Release()
+		require.Empty(wp.GetAuthnResult())
+		require.Empty(wp.GetPrincipals())
+	}
+}
+
+func TestAuthenticationResultReachesQueryExtension(t *testing.T) {
+	require := require.New(t)
+	query := appdef.NewQName(pkgBo, "IdentityProbe")
+	resultType := appdef.NewQName(pkgBo, "IdentityResult")
+	type observation struct {
+		result  iauthnz.AuthnResult
+		login   string
+		profile int64
+		token   string
+	}
+	observed := make(chan observation, 2)
+	appParts, cleanup, _, resources := deployTestAppWithSecretToken(require, func(_ appdef.IAppDefBuilder, wsb appdef.IWorkspaceBuilder) {
+		wsb.AddObject(resultType).AddField("login", appdef.DataKind_string, true)
+		wsb.AddQuery(query).SetResult(resultType)
+		wsb.Grant([]appdef.OperationKind{appdef.OperationKind_Execute}, filter.QNames(query), nil, iauthnz.QNameRoleWorkspaceOwner)
+	}, func(cfg *istructsmem.AppConfigType) {
+		cfg.Resources.Add(istructsmem.NewQueryFunction(query, func(_ context.Context, args istructs.ExecQueryArgs, _ istructs.ExecQueryCallback) error {
+			key, err := args.State.KeyBuilder(sys.Storage_RequestSubject, appdef.NullQName)
+			if err != nil {
+				return err
+			}
+			value, err := args.State.MustExist(key)
+			if err != nil {
+				return err
+			}
+			observed <- observation{result: args.Workpiece.(processors.IProcessorWorkpiece).GetAuthnResult(), login: value.AsString(sys.Storage_RequestSubject_Field_Name),
+				profile: value.AsInt64(sys.Storage_RequestSubject_Field_ProfileWSID), token: value.AsString(sys.Storage_RequestSubject_Field_Token)}
+			return nil
+		}))
+	})
+	defer cleanup()
+	makeResult := func(login string) iauthnz.AuthnResult {
+		return iauthnz.AuthnResult{Payload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: login, ProfileWSID: 42},
+			Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceOwner}},
+		}
+	}
+	authn := queryResultAuthenticator(func(req iauthnz.AuthnRequest) (iauthnz.AuthnResult, error) {
+		if req.Token == "bad" {
+			return makeResult("partial"), errors.New("invalid token")
+		}
+		return makeResult(req.Token), nil
+	})
+	channel := make(iprocbus.ServiceChannel)
+	service := ProvideServiceFactory()(channel, appParts, 3, imetrics.Provide(), "vvm", authn, itokensjwt.TestTokensJWT(), nil, resources, isecretsimpl.TestSecretReader, state.StateOpts{}, nil)
+	ctx, cancel := context.WithCancel(t.Context())
+	var wg sync.WaitGroup
+	wg.Go(func() { service.Run(ctx) })
+	defer func() { cancel(); wg.Wait() }()
+	for _, token := range []string{"first", "bad", "second"} {
+		requestSender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, _ bus.Request, responder bus.IResponder) {
+			channel <- NewQueryMessage(requestCtx, appName, partID, wsID, responder, []byte(`{"args":{},"elements":[{"fields":["login"]}]}`), query, "host", token)
+		})
+		rows, meta, responseErr, err := requestSender.SendRequest(ctx, bus.Request{})
+		require.NoError(err)
+		for range rows {
+		}
+		if token == "bad" {
+			require.Equal(http.StatusUnauthorized, meta.StatusCode)
+			require.Error(*responseErr)
+			require.Empty(observed)
+			continue
+		}
+		require.Equal(http.StatusOK, meta.StatusCode)
+		require.NoError(*responseErr)
+		require.Len(observed, 1)
+		result := <-observed
+		require.Equal(makeResult(token), result.result)
+		require.Equal(token, result.login)
+		require.Equal(int64(42), result.profile)
+		require.Equal(token, result.token)
+	}
+}
+
+type queryResultAuthenticator func(iauthnz.AuthnRequest) (iauthnz.AuthnResult, error)
+
+func (f queryResultAuthenticator) Authenticate(_ context.Context, _ istructs.IAppStructs, _ istructs.IAppTokens, req iauthnz.AuthnRequest) (iauthnz.AuthnResult, error) {
+	return f(req)
+}

@@ -77,7 +77,7 @@ func implProvideQueryProcessorState(
 	appStructsFunc state.AppStructsFunc,
 	wsidFunc state.WSIDFunc,
 	secretReader isecrets.ISecretReader,
-	principalsFunc state.PrincipalsFunc,
+	payloadFunc state.PrincipalPayloadFunc,
 	tokenFunc state.TokenFunc,
 	itokens itokens.ITokens,
 	execQueryArgsFunc state.PrepareArgsFunc,
@@ -103,7 +103,7 @@ func implProvideQueryProcessorState(
 	state.addStorage(sys.Storage_FederationCommand, storages.NewFederationCommandStorage(appStructsFunc, wsidFunc, federation, itokens, stateOpts.FederationCommandHandler), S_GET)
 	state.addStorage(sys.Storage_FederationBlob, storages.NewFederationBlobStorage(appStructsFunc, wsidFunc, federation, itokens, stateOpts.FederationBlobHandler), S_READ)
 	state.addStorage(sys.Storage_AppSecret, storages.NewAppSecretsStorage(secretReader), S_GET)
-	state.addStorage(sys.Storage_RequestSubject, storages.NewSubjectStorage(principalsFunc, tokenFunc), S_GET)
+	state.addStorage(sys.Storage_RequestSubject, storages.NewSubjectStorage(payloadFunc, tokenFunc), S_GET)
 	state.addStorage(sys.Storage_QueryContext, storages.NewQueryContextStorage(argFunc, wsidFunc), S_GET)
 	state.addStorage(sys.Storage_Response, storages.NewResponseStorage(), S_INSERT)
 	state.addStorage(sys.Storage_Result, storages.NewResultStorage(resultBuilderFunc), S_INSERT)
