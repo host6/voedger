@@ -36,8 +36,8 @@ type Principal struct {
 }
 
 type AuthnResult struct {
-	Payload    payloads.PrincipalPayload
-	Principals []Principal
+	PrincipalPayload payloads.PrincipalPayload
+	Principals       []Principal
 }
 
 type PrincipalKindType byte

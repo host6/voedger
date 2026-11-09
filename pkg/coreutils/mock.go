@@ -461,3 +461,48 @@ func (m *MockIntents) UpdateValue(key istructs.IStateKeyBuilder, existingValue i
 	args := m.Called(key, existingValue)
 	return args.Get(0).(istructs.IStateValueBuilder), args.Error(1)
 }
+
+func mockResult[T any](value any) (result T) {
+	if value != nil {
+		result = value.(T)
+	}
+	return result
+}
+
+type MockAppStructs struct {
+	istructs.IAppStructs
+	mock.Mock
+}
+
+func (m *MockAppStructs) AppQName() appdef.AppQName {
+	return m.Called().Get(0).(appdef.AppQName)
+}
+func (m *MockAppStructs) AppDef() appdef.IAppDef {
+	return mockResult[appdef.IAppDef](m.Called().Get(0))
+}
+func (m *MockAppStructs) Events() istructs.IEvents {
+	return mockResult[istructs.IEvents](m.Called().Get(0))
+}
+func (m *MockAppStructs) Records() istructs.IRecords {
+	return mockResult[istructs.IRecords](m.Called().Get(0))
+}
+func (m *MockAppStructs) ViewRecords() istructs.IViewRecords {
+	return mockResult[istructs.IViewRecords](m.Called().Get(0))
+}
+
+type MockRecords struct {
+	istructs.IRecords
+	mock.Mock
+}
+
+func (m *MockRecords) Get(workspace istructs.WSID, highConsistency bool, id istructs.RecordID) (istructs.IRecord, error) {
+	args := m.Called(workspace, highConsistency, id)
+	return mockResult[istructs.IRecord](args.Get(0)), args.Error(1)
+}
+func (m *MockRecords) GetBatch(workspace istructs.WSID, highConsistency bool, items []istructs.RecordGetBatchItem) error {
+	return m.Called(workspace, highConsistency, items).Error(0)
+}
+func (m *MockRecords) GetSingleton(workspace istructs.WSID, entity appdef.QName) (istructs.IRecord, error) {
+	args := m.Called(workspace, entity)
+	return mockResult[istructs.IRecord](args.Get(0)), args.Error(1)
+}

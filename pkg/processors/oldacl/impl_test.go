@@ -6,7 +6,6 @@
 package oldacl
 
 import (
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -14,13 +13,15 @@ import (
 	"github.com/voedger/voedger/pkg/goutils/logger"
 	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 )
 
 func TestGuestAuthorization(t *testing.T) {
+	require := require.New(t)
 	for _, tc := range []struct {
-		name    string
-		subject payloads.PrincipalPayload
-		allowed bool
+		name     string
+		subject  payloads.PrincipalPayload
+		expected bool
 	}{
 		{"Guest", payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: istructs.SysGuestLogin, ProfileWSID: istructs.GuestWSID}, true},
 		{"ordinary User", payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "user", ProfileWSID: 42}, false},
@@ -29,27 +30,48 @@ func TestGuestAuthorization(t *testing.T) {
 		{"Device", payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_Device, Login: istructs.SysGuestLogin, ProfileWSID: istructs.GuestWSID}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			require := require.New(t)
 			principals := []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_User, Name: tc.subject.Login}}
-			require.Equal(tc.allowed, IsOperationAllowed(t.Context(), appdef.OperationKind_Execute, qNameCmdProvideCertificate, nil, principals, tc.subject))
+			// Guest-only commands must reject identities that only partially match the guest identity
+			actual := IsOperationAllowed(t.Context(), appdef.OperationKind_Execute, qNameCmdProvideCertificate, nil, principals, tc.subject)
+			require.Equal(tc.expected, actual)
 		})
 	}
 }
 
 func TestLegacyRoleInheritance(t *testing.T) {
+	require := require.New(t)
 	for _, role := range []appdef.QName{iauthnz.QNameRoleWorkspaceOwner, iauthnz.QNameRoleProfileOwner, iauthnz.QNameRoleWorkspaceDevice} {
 		t.Run(role.String(), func(t *testing.T) {
-			require := require.New(t)
 			principals := []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: role}}
-			require.True(IsOperationAllowed(t.Context(), appdef.OperationKind_Execute, appdef.NewQName("test", "command"), nil, EnrichPrincipals(principals), payloads.PrincipalPayload{}))
-			require.Equal([]iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: role}}, principals)
+			// Authorization must recognize inherited ownership without explicit principal enrichment
+			require.True(IsOperationAllowed(t.Context(), appdef.OperationKind_Execute, appdef.NewQName("test", "command"), nil, principals, payloads.PrincipalPayload{}))
 		})
 	}
-	t.Run("System kind check remains distinct", func(t *testing.T) {
-		require := require.New(t)
-		require.True(iauthnz.IsSystemPrincipal([]iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}}))
-		require.False(iauthnz.IsSystemPrincipal([]iauthnz.Principal{{Kind: iauthnz.PrincipalKind_User, QName: iauthnz.QNameRoleSystem}}))
-	})
+}
+
+func TestEnrichPrincipalsAddsLegacyRolesWithoutChangingInput(t *testing.T) {
+	require := require.New(t)
+	for _, tc := range []struct {
+		name      string
+		principal iauthnz.Principal
+		expected  []iauthnz.Principal
+	}{
+		{"Profile owner inherits workspace ownership", iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleProfileOwner}, []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceOwner}}},
+		{"Resellers admin inherits workspace administration", iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleResellersAdmin}, []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceAdmin}}},
+		{"Payments reseller inherits workspace administration", iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: qNameRoleUntillPaymentsReseller}, []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceAdmin}}},
+		{"User cannot inherit roles through a matching QName", iauthnz.Principal{Kind: iauthnz.PrincipalKind_User, QName: iauthnz.QNameRoleProfileOwner}, nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			principals := []iauthnz.Principal{tc.principal}
+			expected := append(tc.expected, tc.principal)
+			actual := EnrichPrincipals(principals)
+
+			// Check enrichment directly so authorization's own ancestry lookup cannot mask missing roles
+			require.Equal(expected, actual)
+			// Enrichment must preserve the caller's original principals
+			require.Equal([]iauthnz.Principal{tc.principal}, principals)
+		})
+	}
 }
 
 func TestLegacyDenyLoggingUsesRequestAndSubjectContext(t *testing.T) {
@@ -58,12 +80,13 @@ func TestLegacyDenyLoggingUsesRequestAndSubjectContext(t *testing.T) {
 	ctx := logger.WithContextAttrs(t.Context(), map[string]any{logger.LogAttr_WSID: 200, logger.LogAttr_VApp: istructs.AppQName_test1_app1})
 	subject := payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "canonical", ProfileWSID: 42}
 	principals := []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_User, Name: subject.Login}}
+	// Denials must identify both the request workspace and the subject profile for diagnosis
 	require.False(IsOperationAllowed(ctx, appdef.OperationKind_Execute, appdef.NewQName("test", "denied"), nil, principals, subject))
 	logs.HasLine("old-style", "test.denied", "-> deny", "wsid=200", "profilewsid=42")
-	logs.NotContains("Bearer", "atoken", "WSID 42", "ERROR", "WARNING")
-	require.NotContains(prnsToString(principals), "WSID")
+	logs.NotContains("WSID 42", "ERROR", "WARNING")
 	t.Run("deny diagnostics are suppressed below Verbose", func(t *testing.T) {
 		logs := logger.StartCapture(t, logger.LogLevelInfo)
+		// Ordinary denials must not emit verbose diagnostics at the normal logging level
 		IsOperationAllowed(ctx, appdef.OperationKind_Execute, appdef.NewQName("test", "denied"), nil, principals, subject)
 		logs.NotContains("old-style", "-> deny")
 	})

@@ -19,7 +19,7 @@ func (i *implIAuthenticator) Authenticate(ctx context.Context, as istructs.IAppS
 	defer func() {
 		if err != nil {
 			result = iauthnz.AuthnResult{}
-		} else if !result.Payload.IsAPIToken {
+		} else if !result.PrincipalPayload.IsAPIToken {
 			result.Principals = append(result.Principals, iauthnz.Principal{Kind: iauthnz.PrincipalKind_Host, Name: req.Host})
 		}
 	}()
@@ -31,7 +31,7 @@ func (i *implIAuthenticator) Authenticate(ctx context.Context, as istructs.IAppS
 	}
 	if req.Token == "" {
 		// add user with login "sys.Guest"
-		result.Payload = iauthnz.GuestPrincipalPayload()
+		result.PrincipalPayload = iauthnz.GuestPrincipalPayload()
 		result.Principals = append(result.Principals, iauthnz.Principal{Kind: iauthnz.PrincipalKind_User, Name: istructs.SysGuestLogin})
 
 		// role.sys.Anonymous
@@ -47,7 +47,7 @@ func (i *implIAuthenticator) Authenticate(ctx context.Context, as istructs.IAppS
 		}
 		return result, nil
 	}
-	pp := &result.Payload
+	pp := &result.PrincipalPayload
 	if _, err = appTokens.ValidateToken(req.Token, pp); err != nil {
 		return result, err
 	}

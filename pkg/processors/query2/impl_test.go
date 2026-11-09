@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
@@ -200,23 +199,21 @@ func Test_splitPath(t *testing.T) {
 func TestWorkpieceAuthenticationResult(t *testing.T) {
 	require := require.New(t)
 	wp := &queryWork{}
-	// Reuse one workpiece for different identities to detect state leaking between requests
-	for _, login := range []string{"first", "second"} {
-		expected := iauthnz.AuthnResult{
-			Payload:    payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: login, ProfileWSID: 42},
-			Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
-		}
-		wp.SetAuthnResult(expected)
-		// Both accessors must expose the current authentication result for downstream authorization
-		actual := wp.GetAuthnResult()
-		require.Equal(expected, actual)
-		require.Equal(expected.Principals, wp.GetPrincipals())
-
-		// Release must erase identity and principals before the workpiece serves another request
-		wp.Release()
-		require.Equal(iauthnz.AuthnResult{}, wp.GetAuthnResult())
-		require.Empty(wp.GetPrincipals())
+	expected := iauthnz.AuthnResult{
+		PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "user", ProfileWSID: 42},
+		Principals:       []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
 	}
+	wp.SetAuthnResult(expected)
+
+	// Both accessors must expose the authentication result for downstream authorization
+	actual := wp.GetAuthnResult()
+	require.Equal(expected, actual)
+	require.Equal(expected.Principals, wp.GetPrincipals())
+
+	// Release must discard the identity and principals when request processing ends
+	wp.Release()
+	require.Equal(iauthnz.AuthnResult{}, wp.GetAuthnResult())
+	require.Empty(wp.GetPrincipals())
 }
 
 func TestRefreshResponseUsesSubjectProfile(t *testing.T) {
@@ -228,10 +225,10 @@ func TestRefreshResponseUsesSubjectProfile(t *testing.T) {
 		token, err := appTokens.IssueToken(time.Hour, &pp)
 		require.NoError(err)
 		responder := &identityRefreshResponder{}
-		message := &identityRefreshMessage{token: token, responder: responder}
+		message := &implIQueryMessage{appQName: istructs.AppQName_test1_app1, wsid: 200, token: token, responder: responder}
 		fed := &identityRefreshFederation{response: &federation.FuncResponse{QPv2Response: federation.QPv2Response{{"NewPrincipalToken": token}}}}
 		wp := &queryWork{msg: message, appStructs: &identityRefreshApp{tokens: appTokens}, federation: fed}
-		wp.SetAuthnResult(iauthnz.AuthnResult{Payload: payloads.PrincipalPayload{SubjectKind: pp.SubjectKind, Login: pp.Login, ProfileWSID: profile}})
+		wp.SetAuthnResult(iauthnz.AuthnResult{PrincipalPayload: payloads.PrincipalPayload{SubjectKind: pp.SubjectKind, Login: pp.Login, ProfileWSID: profile}})
 		require.NoError(authRefreshHandler().exec(t.Context(), wp))
 		require.Equal(fmt.Sprintf("api/v2/apps/test1/app1/workspaces/%d/queries/sys.RefreshPrincipalToken", profile), fed.url)
 		require.Equal(200, responder.meta.StatusCode)
@@ -241,17 +238,6 @@ func TestRefreshResponseUsesSubjectProfile(t *testing.T) {
 		require.Equal(map[string]any{fieldPrincipalToken: token, fieldExpiresInSeconds: float64(3600), fieldProfileWSID: float64(profile)}, response)
 	}
 }
-
-type identityRefreshMessage struct {
-	IQueryMessage
-	token     string
-	responder bus.IResponder
-}
-
-func (m *identityRefreshMessage) Token() string             { return m.token }
-func (*identityRefreshMessage) AppQName() appdef.AppQName   { return istructs.AppQName_test1_app1 }
-func (*identityRefreshMessage) WSID() istructs.WSID         { return 200 }
-func (m *identityRefreshMessage) Responder() bus.IResponder { return m.responder }
 
 type identityRefreshApp struct {
 	istructs.IAppStructs

@@ -98,7 +98,7 @@ func TestBasicUsage(t *testing.T) {
 		require.Equal(iauthnz.PrincipalKind_Host, principals[3].Kind)
 		require.Equal("127.0.0.1", principals[3].Name)
 
-		require.Equal(pp.ProfileWSID, result.Payload.ProfileWSID)
+		require.Equal(pp.ProfileWSID, result.PrincipalPayload.ProfileWSID)
 	})
 
 	t.Run("authenticate in the owned workspace", func(t *testing.T) {
@@ -125,7 +125,7 @@ func TestBasicUsage(t *testing.T) {
 		require.Equal(iauthnz.PrincipalKind_Host, principals[3].Kind)
 		require.Equal("127.0.0.1", principals[3].Name)
 
-		require.Equal(pp.ProfileWSID, result.Payload.ProfileWSID)
+		require.Equal(pp.ProfileWSID, result.PrincipalPayload.ProfileWSID)
 	})
 
 	t.Run("authenticate in the child workspace", func(t *testing.T) {
@@ -164,7 +164,7 @@ func TestBasicUsage(t *testing.T) {
 
 		require.Equal(iauthnz.PrincipalKind_Host, principals[3].Kind)
 		require.Equal("127.0.0.1", principals[3].Name)
-		require.Equal(pp.ProfileWSID, result.Payload.ProfileWSID)
+		require.Equal(pp.ProfileWSID, result.PrincipalPayload.ProfileWSID)
 	})
 }
 
@@ -475,7 +475,7 @@ func TestAuthenticate(t *testing.T) {
 			iauthnz.AuthnRequest{RequestWSID: 2, Token: apiKeyToken})
 		require.NoError(err)
 		principals := result.Principals
-		require.Equal(istructs.WSID(1), result.Payload.ProfileWSID)
+		require.Equal(istructs.WSID(1), result.PrincipalPayload.ProfileWSID)
 		require.Equal([]iauthnz.Principal{
 			{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
 			{Kind: iauthnz.PrincipalKind_Role, QName: testRole},
@@ -501,7 +501,7 @@ func TestAuthenticate(t *testing.T) {
 				iauthnz.AuthnRequest{RequestWSID: 2, Token: tc.token})
 			require.NoError(err)
 			principals := result.Principals
-			require.Equal(tc.profile, result.Payload.ProfileWSID)
+			require.Equal(tc.profile, result.PrincipalPayload.ProfileWSID)
 			require.Len(principals, 3)
 			require.Contains(principals, iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem})
 		})
@@ -632,7 +632,7 @@ func TestSubjectRolesResolveAgainstLoginAndAlias(t *testing.T) {
 			Token:       token,
 		})
 		require.NoError(err)
-		require.Equal(canonicalLogin, result.Payload.Login)
+		require.Equal(canonicalLogin, result.PrincipalPayload.Login)
 		return result.Principals
 	}
 
@@ -701,7 +701,7 @@ func TestAuthenticationPayload(t *testing.T) {
 			require.NoError(err)
 
 			// Effective role filtering must not remove unmatched grants from the returned token claims
-			require.Equal(expectedPayload, actual.Payload)
+			require.Equal(expectedPayload, actual.PrincipalPayload)
 
 			// Both identifiers must be queried so alias-based subject assignments are considered
 			expectedLogins := []string{"canonical", "alias"}
@@ -743,7 +743,7 @@ func TestAuthenticationPayload(t *testing.T) {
 		actual, err := authn.Authenticate(t.Context(), as, nil, iauthnz.AuthnRequest{RequestWSID: 200, Host: "host"})
 		require.NoError(err)
 		expected := payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: istructs.SysGuestLogin, ProfileWSID: istructs.GuestWSID}
-		require.Equal(expected, actual.Payload)
+		require.Equal(expected, actual.PrincipalPayload)
 	})
 
 	for _, source := range []string{"Global System role", "Subject System role", "Null profile", "API token"} {
@@ -776,7 +776,7 @@ func TestAuthenticationPayload(t *testing.T) {
 			require.NoError(err)
 
 			// Every early return must preserve login, alias, subject kind, profile, and token grants
-			require.Equal(expectedPayload, actual.Payload)
+			require.Equal(expectedPayload, actual.PrincipalPayload)
 
 			// API tokens skip subjects and host binding; regular tokens retain the System role and host principal
 			expectedSubjectLookups := 2
@@ -833,7 +833,7 @@ func TestLegacyAuthenticationPayload(t *testing.T) {
 			actual, err := NewDefaultAuthenticator(TestSubjectRolesGetter, nil).Authenticate(t.Context(), as, appTokens, iauthnz.AuthnRequest{RequestWSID: 200, Token: legacyToken})
 			require.NoError(err)
 			// Legacy grants must acquire the scope implied by token kind while preserving identity, role order, and values
-			require.Equal(expected, actual.Payload)
+			require.Equal(expected, actual.PrincipalPayload)
 		})
 	}
 }
@@ -858,7 +858,7 @@ func TestDeviceEligibilityIsRequiredWithoutRoleGrant(t *testing.T) {
 	require.NotContains(actual.Principals, iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceDevice})
 
 	// Eligibility restricts effective roles without erasing the authenticated device claims
-	require.Equal(expectedPayload, actual.Payload)
+	require.Equal(expectedPayload, actual.PrincipalPayload)
 }
 
 func TestSubjectLookupFailureDiscardsAuthenticationResult(t *testing.T) {
@@ -923,7 +923,7 @@ func (r *implIRecords) Get(wsid istructs.WSID, _ bool, id istructs.RecordID) (is
 		for qName, qNameRecs := range wsData {
 			for recID, recData := range qNameRecs {
 				if recID == id {
-					return &implIRecord{Data: recData, qName: qName}, nil
+					return &coreutils.TestObject{Name: qName, Data: recData}, nil
 				}
 			}
 		}
@@ -938,7 +938,7 @@ func (r *implIRecords) GetSingleton(wsid istructs.WSID, qName appdef.QName) (rec
 				panic(">1 records for a singleton")
 			}
 			for _, data := range qNameRecs {
-				return &implIRecord{qName: qName, Data: data}, nil
+				return &coreutils.TestObject{Name: qName, Data: data}, nil
 			}
 		}
 	}
@@ -955,7 +955,7 @@ func (r *implIRecords) GetSingletonID(qName appdef.QName) (istructs.RecordID, er
 				panic(">1 records for a singleton")
 			}
 			for _, data := range qNameRecs {
-				iRecord := &implIRecord{qName: qName, Data: data}
+				iRecord := &coreutils.TestObject{Name: qName, Data: data}
 				return iRecord.ID(), nil
 			}
 		}
@@ -963,18 +963,6 @@ func (r *implIRecords) GetSingletonID(qName appdef.QName) (istructs.RecordID, er
 
 	return istructs.NullRecordID, nil
 }
-
-type implIRecord struct {
-	coreutils.TestObject
-	qName appdef.QName
-}
-
-func (r *implIRecord) QName() appdef.QName                                     { return r.qName }
-func (r *implIRecord) ID() istructs.RecordID                                   { return r.AsRecordID(appdef.SystemField_ID) }
-func (*implIRecord) Parent() istructs.RecordID                                 { panic("") }
-func (*implIRecord) Container() string                                         { panic("") }
-func (*implIRecord) RecordIDs(bool) func(func(string, istructs.RecordID) bool) { panic("") }
-func (r *implIRecord) Fields(cb func(iField appdef.IField) bool)               { r.TestObject.Fields(cb) }
 
 type implIViewRecords struct {
 	records *implIRecords
@@ -1009,7 +997,7 @@ func (vr *implIViewRecords) GetBatch(workspace istructs.WSID, kv []istructs.View
 					}
 					if len(kb.Data) == matchedFields {
 						kv[biIdx].Ok = true
-						kv[biIdx].Value = &implIValue{Data: qNameRec}
+						kv[biIdx].Value = &coreutils.TestValue{TestObject: &coreutils.TestObject{Data: qNameRec}}
 						break
 					}
 				}
@@ -1033,10 +1021,3 @@ func (kb *implIKeyBuilder) Equals(istructs.IKeyBuilder) bool       { panic("impl
 func (kb *implIKeyBuilder) ToBytes(istructs.WSID) (pk []byte, cc []byte, err error) {
 	return nil, nil, nil
 }
-
-type implIValue struct {
-	coreutils.TestObject
-}
-
-func (v *implIValue) AsRecord(name string) (record istructs.IRecord) { panic("") }
-func (v *implIValue) AsEvent(name string) (event istructs.IDbEvent)  { panic("") }

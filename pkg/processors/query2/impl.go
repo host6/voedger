@@ -8,9 +8,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"net/http"
 	"time"
+
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
@@ -269,7 +270,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				func() istructs.IAppStructs { return qw.appStructs },
 				state.SimpleWSIDFunc(qw.msg.WSID()),
 				qw.secretReader,
-				func() payloads.PrincipalPayload { return qw.authnResult.Payload },
+				func() payloads.PrincipalPayload { return qw.authnResult.PrincipalPayload },
 				func() string { return qw.msg.Token() },
 				itokens,
 				func() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs },

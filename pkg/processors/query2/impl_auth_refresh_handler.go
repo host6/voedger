@@ -26,7 +26,7 @@ func authRefreshHandler() apiPathHandler {
 			}
 
 			url := fmt.Sprintf("api/v2/apps/%s/%s/workspaces/%d/queries/sys.RefreshPrincipalToken", qw.msg.AppQName().Owner(), qw.msg.AppQName().Name(),
-				qw.authnResult.Payload.ProfileWSID)
+				qw.authnResult.PrincipalPayload.ProfileWSID)
 			resp, err := qw.federation.Query(url, httpu.WithAuthorizeBy(qw.msg.Token()))
 			if err != nil {
 				return err
@@ -47,7 +47,7 @@ func authRefreshHandler() apiPathHandler {
 				return err
 			}
 			expiresInSeconds := gp.Duration.Seconds()
-			json := jsonu.Jprintf(`{%q: "%s", %q: %d, %q: %d}`, fieldPrincipalToken, newToken, fieldExpiresInSeconds, int(expiresInSeconds), fieldProfileWSID, qw.authnResult.Payload.ProfileWSID)
+			json := jsonu.Jprintf(`{%q: "%s", %q: %d, %q: %d}`, fieldPrincipalToken, newToken, fieldExpiresInSeconds, int(expiresInSeconds), fieldProfileWSID, qw.authnResult.PrincipalPayload.ProfileWSID)
 			return qw.msg.Responder().Respond(bus.ResponseMeta{ContentType: httpu.ContentType_ApplicationJSON, StatusCode: http.StatusOK}, json)
 		},
 	}

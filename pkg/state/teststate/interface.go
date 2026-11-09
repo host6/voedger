@@ -33,7 +33,7 @@ type ITestAPI interface {
 	PutFederationCmdHandler(state.FederationCommandHandler)
 	PutFederationBlobHandler(state.FederationBlobHandler)
 	PutUniquesHandler(state.UniquesHandler)
-	PutRequestSubject(payload payloads.PrincipalPayload, token string)
+	PutRequestSubject(principalPayload payloads.PrincipalPayload, token string)
 	PutQuery(wsid istructs.WSID, name appdef.FullQName, argb QueryArgBuilderCallback)
 
 	GetRecord(wsid istructs.WSID, id istructs.RecordID) istructs.IRecord
