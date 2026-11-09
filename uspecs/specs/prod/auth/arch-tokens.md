@@ -66,7 +66,7 @@ Payload contract
   - impl: [pkg/sys/authnz/impl_refreshprincipaltoken.go#provideRefreshPrincipalTokenExec](../../../../pkg/sys/authnz/impl_refreshprincipaltoken.go)
 
 - `[q.sys.EnrichPrincipalToken]`
-  - Requires the request bearer token, takes AuthnResult from IProcessorWorkpiece, and copies Payload with a cloned Roles slice before appending grants
+  - Requires the request bearer token, takes AuthnResult from IProcessorWorkpiece, and copies PrincipalPayload with a cloned Roles slice before appending grants
   - Each effective Role Principal contributes RoleType{Scope, WSID: request Workspace, QName}; Scope is RoleScopeWorkspacesOwnedBy for regular tokens and RoleScopeWorkspace for API tokens, independently of origin
   - Preserves original grants, including unmatched grants, and appends only tuples absent under [RoleGrant equality](./context.md#rolegrant)
   - New WorkspaceDevice grants use the request Workspace rather than the Device profile; existing carried grants keep their original binding
@@ -156,8 +156,8 @@ The `Login` and `Alias` fields are taken verbatim from the decoded payload and a
 @Client POST q.sys.EnrichPrincipalToken (Authorization: Bearer <current token>, WorkspaceOwner)
   -> [q.sys.EnrichPrincipalToken]
        -> require a nonempty bearer token in request state
-       -> read AuthnResult (Payload, Principals) from the request workpiece
-       -> copy Payload and clone its Roles slice
+       -> read AuthnResult (PrincipalPayload, Principals) from the request workpiece
+       -> copy PrincipalPayload and clone its Roles slice
        -> for each effective Role Principal:
             construct grant with the request Workspace and the token-kind scope
             append only if absent under RoleGrant equality
@@ -165,7 +165,7 @@ The `Login` and `Alias` fields are taken verbatim from the decoded payload and a
   -> @Client: EnrichedToken
 ```
 
-The endpoint does not reauthenticate, reread Subject records, recheck Device eligibility, or mutate the workpiece's original Payload. Delegation and repeated enrichment follow the [PrincipalToken enrichment rules](./context.md#principaltoken).
+The endpoint does not reauthenticate, reread Subject records, recheck Device eligibility, or mutate the workpiece's original PrincipalPayload. Delegation and repeated enrichment follow the [PrincipalToken enrichment rules](./context.md#principaltoken).
 
 ### Validate principal token
 
