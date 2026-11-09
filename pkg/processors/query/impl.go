@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"net/http"
 	"runtime/debug"
 	"slices"
@@ -200,7 +201,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			return coreutils.NewHTTPErrorf(http.StatusTooManyRequests).AddHeader(httpu.RetryAfter, strconv.Itoa(retryAfter))
 		}),
 		operator("authenticate query request", func(_ context.Context, qw *queryWork) (err error) {
-			if processors.SetPrincipalsForAnonymousOnlyFunc(qw.appStructs.AppDef(), qw.msg.QName(), qw.msg.WSID(), qw) {
+			if processors.SetPrincipalsForAnonymousOnlyFunc(qw.appStructs.AppDef(), qw.msg.QName(), qw) {
 				// grant to anonymous -> set token == "" to avoid validating an expired token accidentally kept in cookies
 				return nil
 			}
@@ -209,7 +210,10 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				RequestWSID: qw.msg.WSID(),
 				Token:       qw.msg.Token(),
 			}
-			qw.principals, _, err = authn.Authenticate(qw.msg.RequestCtx(), qw.appStructs, qw.appStructs.AppTokens(), req)
+			qw.authnResult, err = authn.Authenticate(qw.msg.RequestCtx(), qw.appStructs, qw.appStructs.AppTokens(), req)
+			if err != nil {
+				qw.authnResult = iauthnz.AuthnResult{}
+			}
 			return coreutils.WrapSysError(err, http.StatusUnauthorized)
 		}),
 		operator("get workspace descriptor", func(_ context.Context, qw *queryWork) (err error) {
@@ -217,12 +221,12 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 			return err
 		}),
 		operator("get principals roles", func(_ context.Context, qw *queryWork) (err error) {
-			qw.roles = processors.GetRoles(qw.principals)
+			qw.roles = processors.GetRoles(qw.authnResult.Principals)
 			return nil
 		}),
 		operator("check workspace active", func(_ context.Context, qw *queryWork) (err error) {
-			for _, prn := range qw.principals {
-				if prn.Kind == iauthnz.PrincipalKind_Role && prn.QName == iauthnz.QNameRoleSystem && prn.WSID == qw.msg.WSID() {
+			for _, prn := range qw.authnResult.Principals {
+				if prn.Kind == iauthnz.PrincipalKind_Role && prn.QName == iauthnz.QNameRoleSystem {
 					// system -> allow to work in any case
 					return nil
 				}
@@ -260,12 +264,12 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				return err
 			}
 			// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-			oldACLOk := oldacl.IsOperationAllowed(appdef.OperationKind_Execute, qw.msg.QName(), nil, oldacl.EnrichPrincipals(qw.principals, qw.msg.WSID()))
+			oldACLOk := oldacl.IsOperationAllowed(qw.msg.RequestCtx(), appdef.OperationKind_Execute, qw.msg.QName(), nil, oldacl.EnrichPrincipals(qw.authnResult.Principals), qw.authnResult.Payload)
 			if !newACLOk && !oldACLOk {
 				return coreutils.WrapSysError(errors.New(""), http.StatusForbidden)
 			}
 			if !newACLOk && oldACLOk {
-				logger.Verbose("newACL not ok, but oldACL ok.", appdef.OperationKind_Execute, qw.msg.QName(), qw.roles)
+				logger.VerboseCtx(logger.WithContextAttrs(qw.msg.RequestCtx(), map[string]any{"profilewsid": qw.authnResult.Payload.ProfileWSID}), "", "newACL not ok, but oldACL ok.", appdef.OperationKind_Execute, qw.msg.QName(), qw.roles)
 			}
 			return nil
 		}),
@@ -329,7 +333,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				func() istructs.IAppStructs { return qw.appStructs },
 				state.SimpleWSIDFunc(qw.msg.WSID()),
 				qw.secretReader,
-				func() []iauthnz.Principal { return qw.principals },
+				func() payloads.PrincipalPayload { return qw.authnResult.Payload },
 				func() string { return qw.msg.Token() },
 				itokens,
 				func() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs },
@@ -445,7 +449,7 @@ type queryWork struct {
 	rowsProcessor        pipeline.IAsyncPipeline
 	rowsProcessorErrCh   chan error // will contain the first error from rowProcessor if any. The rest of errors in rowsProcessor will be just logged
 	metrics              IMetrics
-	principals           []iauthnz.Principal
+	authnResult          iauthnz.AuthnResult
 	roles                []appdef.QName
 	secretReader         isecrets.ISecretReader
 	iWorkspace           appdef.IWorkspace
@@ -477,7 +481,7 @@ func (qw *queryWork) ResetRateLimit(resource appdef.QName, operation appdef.Oper
 
 // need for q.sys.EnrichPrincipalToken
 func (qw *queryWork) GetPrincipals() []iauthnz.Principal {
-	return qw.principals
+	return qw.authnResult.Principals
 }
 
 // need for various funcs of sys package
@@ -496,6 +500,7 @@ func (qw *queryWork) borrow() (err error) {
 
 // releases borrowed app partition
 func (qw *queryWork) Release() {
+	qw.authnResult = iauthnz.AuthnResult{}
 	if ap := qw.appPart; ap != nil {
 		qw.appStructs = nil
 		qw.appPart = nil
@@ -524,7 +529,7 @@ func (qw *queryWork) Roles() []appdef.QName {
 }
 
 func (qw *queryWork) SetPrincipals(prns []iauthnz.Principal) {
-	qw.principals = prns
+	qw.authnResult.Principals = prns
 }
 
 func (qw *queryWork) LogCtx() context.Context {
@@ -727,3 +732,6 @@ func newFieldsKinds(t appdef.IType) FieldsKinds {
 	}
 	return res
 }
+
+func (qw *queryWork) GetAuthnResult() iauthnz.AuthnResult       { return qw.authnResult }
+func (qw *queryWork) SetAuthnResult(result iauthnz.AuthnResult) { qw.authnResult = result }

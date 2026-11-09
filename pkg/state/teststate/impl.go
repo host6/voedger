@@ -20,7 +20,6 @@ import (
 	wsdescutil "github.com/voedger/voedger/pkg/coreutils/testwsdesc"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
 	"github.com/voedger/voedger/pkg/goutils/testingu"
-	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/isecrets"
 	"github.com/voedger/voedger/pkg/istorage/mem"
 	"github.com/voedger/voedger/pkg/state/stateprovide"
@@ -54,7 +53,7 @@ type testState struct {
 	federationBlobHandler state.FederationBlobHandler
 	uniquesHandler        state.UniquesHandler
 	emailSender           state.IEmailSender
-	principals            []iauthnz.Principal
+	principalPayload      payloads.PrincipalPayload
 	token                 string
 	queryWsid             istructs.WSID
 	queryName             appdef.FullQName
@@ -228,8 +227,8 @@ func (ts *testState) PutQuery(wsid istructs.WSID, name appdef.FullQName, argb Qu
 	}
 }
 
-func (ts *testState) PutRequestSubject(principals []iauthnz.Principal, token string) {
-	ts.principals = principals
+func (ts *testState) PutRequestSubject(payload payloads.PrincipalPayload, token string) {
+	ts.principalPayload = payload
 	ts.token = token
 }
 
@@ -302,8 +301,8 @@ func (ts *testState) buildState(processorKind int) {
 	resultBuilderFunc := func() istructs.IObjectBuilder {
 		return ts.ResultBuilder()
 	}
-	principalsFunc := func() []iauthnz.Principal {
-		return ts.principals
+	payloadFunc := func() payloads.PrincipalPayload {
+		return ts.principalPayload
 	}
 	tokenFunc := func() string {
 		return ts.token
@@ -344,7 +343,7 @@ func (ts *testState) buildState(processorKind int) {
 		stateOpts := state.StateOpts{
 			UniquesHandler: ts.emulateUniquesHandler,
 		}
-		ts.IState = stateprovide.ProvideCommandProcessorStateFactory()(ts.stateCtx, appFunc, wsidFunc, ts.secretReader, cudFunc, principalsFunc, tokenFunc,
+		ts.IState = stateprovide.ProvideCommandProcessorStateFactory()(ts.stateCtx, appFunc, wsidFunc, ts.secretReader, cudFunc, payloadFunc, tokenFunc,
 			IntentsLimit, resultBuilderFunc, commandPrepareArgs, argFunc, unloggedArgFunc, wlogOffsetFunc, stateOpts, originFunc)
 	case ProcKind_QueryProcessor:
 		stateOpts := state.StateOpts{
@@ -352,7 +351,7 @@ func (ts *testState) buildState(processorKind int) {
 			UniquesHandler:           ts.emulateUniquesHandler,
 			FederationBlobHandler:    ts.emulateFederationBlob,
 		}
-		ts.IState = stateprovide.ProvideQueryProcessorStateFactory()(ts.stateCtx, appFunc, wsidFunc, ts.secretReader, principalsFunc, tokenFunc, nil,
+		ts.IState = stateprovide.ProvideQueryProcessorStateFactory()(ts.stateCtx, appFunc, wsidFunc, ts.secretReader, payloadFunc, tokenFunc, nil,
 			execQueryArgsFunc, argFunc, qryResultBuilderFunc, nil, execQueryCallback, stateOpts, ts.httpClient)
 	}
 }

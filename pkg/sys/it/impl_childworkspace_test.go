@@ -88,7 +88,6 @@ func TestBasicUsage_ChildWorkspaces(t *testing.T) {
 }
 
 func TestForeignAuthorization(t *testing.T) {
-	require := require.New(t)
 	vit := it.NewVIT(t, &it.SharedConfig_App1)
 	defer vit.TearDown()
 
@@ -120,7 +119,7 @@ func TestForeignAuthorization(t *testing.T) {
 		// now the foreign login could work in the workspace
 		vit.PostWS(parentWS, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(newPrn.Token))
 
-		// deactivate cdoc.Subject
+		// deactivate cdoc.Payload
 		body = fmt.Sprintf(`{"cuds": [{"sys.ID": %d,"fields": {"sys.IsActive": false}}]}`, cdocSubjectID)
 		vit.PostWS(parentWS, "c.sys.CUD", body)
 
@@ -129,6 +128,7 @@ func TestForeignAuthorization(t *testing.T) {
 	})
 
 	t.Run("enrich principal token", func(t *testing.T) {
+		require := require.New(t)
 		// 403 forbidden on try to execute a stricted operation in the child workspace using the non-enriched token
 		body = `{"cuds": [{"fields": {"sys.ID": 1,"sys.QName": "app1pkg.articles","name": "cola","article_manual": 1,"article_hash": 2,"hideonhold": 3,"time_active": 4,"control_active": 5}}]}`
 		vit.PostWS(childWS, "c.sys.CUD", body, httpu.Expect403())
@@ -149,6 +149,12 @@ func TestForeignAuthorization(t *testing.T) {
 		body = `{"cuds": [{"fields": {"sys.ID": 1,"sys.QName": "app1pkg.articles","name": "cola","article_manual": 1,"article_hash": 2,"hideonhold": 3,"time_active": 4,"control_active": 5}}]}`
 		vit.PostWS(childWS, "c.sys.CUD", body, httpu.WithAuthorizeBy(enrichedToken))
 		enrichedPrincipalPayload, enrichedGenericPayload := decodeScopedPrincipalToken(t, require, vit, enrichedToken)
+		var originalPayload payloads.PrincipalPayload
+		_, err := vit.ValidateToken(parentWS.Owner.Token, &originalPayload)
+		require.NoError(err)
+		require.Subset(enrichedPrincipalPayload.Roles, originalPayload.Roles)
+		originalPayload.Roles = enrichedPrincipalPayload.Roles
+		require.Equal(originalPayload, enrichedPrincipalPayload)
 		require.Contains(enrichedPrincipalPayload.Roles, payloads.RoleType{
 			Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: parentWS.WSID, QName: iauthnz.QNameRoleWorkspaceOwner,
 		})
@@ -183,14 +189,26 @@ func TestForeignAuthorization(t *testing.T) {
 		nextToken := vit.PostWS(childWS, "q.sys.EnrichPrincipalToken", enrichBody,
 			httpu.WithAuthorizeBy(refreshedToken)).SectionRow()[0].(string)
 		nextPayload, _ := decodeScopedPrincipalToken(t, require, vit, nextToken)
-		require.Subset(nextPayload.Roles, refreshedPayload.Roles)
+		expectedGrants := append([]payloads.RoleType(nil), refreshedPayload.Roles...)
+		expectedGrants = append(expectedGrants,
+			payloads.RoleType{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: childWS.WSID, QName: iauthnz.QNameRoleAuthenticatedUser},
+			payloads.RoleType{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: childWS.WSID, QName: iauthnz.QNameRoleWorkspaceOwner})
+		require.ElementsMatch(expectedGrants, nextPayload.Roles)
+		expectedPayload := refreshedPayload
+		expectedPayload.Roles = nextPayload.Roles
+		require.Equal(expectedPayload, nextPayload)
 		require.Contains(nextPayload.Roles, payloads.RoleType{
 			Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: childWS.WSID, QName: iauthnz.QNameRoleWorkspaceOwner,
 		})
 		vit.PostWS(grandchildWS, "c.sys.CUD", body, httpu.WithAuthorizeBy(nextToken))
+		nextRepeatedToken := vit.PostWS(childWS, "q.sys.EnrichPrincipalToken", enrichBody,
+			httpu.WithAuthorizeBy(nextToken)).SectionRow()[0].(string)
+		nextRepeatedPayload, _ := decodeScopedPrincipalToken(t, require, vit, nextRepeatedToken)
+		require.Equal(nextPayload, nextRepeatedPayload)
 	})
 
 	t.Run("API token", func(t *testing.T) {
+		require := require.New(t)
 		// 403 forbidden on try to execute a stricted operation in the child workspace
 		body = `{"args":{"Schema":"app1pkg.articles"},"elements":[{"fields":["sys.ID"]}]}`
 		vit.PostWS(childWS, "q.sys.Collection", body, httpu.Expect403())

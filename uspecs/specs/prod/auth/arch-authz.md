@@ -17,7 +17,7 @@ Systems:
 ## Scenarios overview
 
 - **`Authenticate request`**
-  - `*apps` calls `[Auth boundary].Authenticate(ctx, app, appTokens, AuthnRequest{Host, RequestWSID, Token})`; the subsystem validates the token via [Token management](./arch-tokens.md), composes principals from the four role sources, and returns `(principals, profileWSID)` for ACL evaluation.
+  - `*apps` calls `[Auth boundary].Authenticate(ctx, app, appTokens, AuthnRequest{Host, RequestWSID, Token})`; the subsystem returns one authentication result containing Payload and effective Principals, or an error
 
 - **`Compose principals - anonymous`**
   - When the request has no token, the `Guest` user, the `Anonymous` role, the `Host` principal, and any `[(cdoc.sys.Subject)]` rows that match `sys.Guest` in `RequestWSID` are emitted.
@@ -64,6 +64,9 @@ Role sources
 
 - `[Auth boundary]`
   - Shared concept; see [arch.md#shared-concepts](./arch.md#shared-concepts). The single programmatic surface exposed to `*apps`; implemented by `implIAuthenticator.Authenticate`.
+  - Effective Principals contain no WSID; the Application and RequestWSID stay in request context, and profile identity comes from [Payload](./context.md#authnresult)
+  - A successful result carries identity even when API-token or System composition omits User and Device Principals; failed authentication must not expose a partial result for authorization
+  - AuthnResult has exactly Payload (the original validated PrincipalPayload) and Principals (effective request-local authorization inputs); composition leaves payload grants unchanged and deduplicates effective Principals by Kind, Name, QName, and ID
 
 ### Composition
 
@@ -72,8 +75,8 @@ Role sources
   - impl: [pkg/iauthnzimpl/impl.go#Authenticate](../../../../pkg/iauthnzimpl/impl.go)
 
 - `[Subjects reader]`
-  - Reads `[(cdoc.sys.Subject)]` from `RequestWSID` for the resolved subject (or `sys.Guest` when anonymous) through the injected `subjectRolesGetter`, matching rows against both `PrincipalPayload.Login` and `PrincipalPayload.Alias` so an invite under either identifier resolves, and emits one `Principal{Kind: Role, WSID: RequestWSID, QName: role}` per matched role.
-  - impl: [pkg/iauthnzimpl/impl.go#rolesFromSubjects](../../../../pkg/iauthnzimpl/impl.go)
+  - Reads Subject roles for the canonical Login and token-snapshotted Alias in RequestWSID, or sys.Guest for anonymous requests, and emits WSID-free Role Principals
+  - impl: [pkg/iauthnzimpl/impl.go#Authenticate](../../../../pkg/iauthnzimpl/impl.go)
 
 - `[Workspace role deriver]`
   - Reads the workspace descriptor (`appdef.QNameCDocWorkspaceDescriptor`) for `RequestWSID`, compares its `OwnerWSID` against `ProfileWSID`, and emits `ProfileOwner` (same), `WorkspaceOwner` (user owner match), or `WorkspaceDevice` (device, per app's `isDeviceAllowed`); always emits `Host` (unless API token) and `AuthenticatedUser` (when token is present).
@@ -89,11 +92,10 @@ Four sources by origin contribute to a request's principal set; each is enumerat
 
 - `[Invite-granted]`
   - Origin: `[[Workspace membership]]` writes `[(cdoc.sys.Subject)]` rows in the inviting workspace as part of the join flow; see [arch-membership.md](./arch-membership.md).
-  - Composition: `[Subjects reader]` reads `[(cdoc.sys.Subject)]` rows in `RequestWSID` matching either `PrincipalPayload.Login` or `PrincipalPayload.Alias` and emits one `Principal{Kind: Role, WSID: RequestWSID, QName: role}` per matched role.
 
 - `[Token-carried]`
+  - Composition: regular tokens emit GlobalRoles and matching owned-by roles; API tokens emit matching exact-Workspace roles, with all source grants retained unchanged in Payload
   - Origin: `[[Authentication]]` snapshots `GlobalRoles` at sign-in, including updates made through `[c.registry.UpdateGlobalRoles]`; see [arch-authn.md](./arch-authn.md). Token role grants are populated by API-token issuance and `[q.sys.EnrichPrincipalToken]`; their lifecycle and scope encoding are defined in [Token management](./arch-tokens.md)
-  - Composition: normalized `PrincipalPayload.Roles []{Scope, WSID, QName}` are matched using the scope table below. A matching grant produces `Principal{Kind: Role, WSID: RequestWSID, QName: role.QName}`, retaining the existing token-role principal WSID. `PrincipalPayload.GlobalRoles []QName` continues to apply in any Workspace when `IsAPIToken=false`
   - The existing composition stages remain intact: API tokens process exact-Workspace grants before returning, while regular User/Device tokens process owned-by grants after their existing System short-circuits and descriptor-based role derivation. Scope does not introduce new role sources, descriptor reads, or token-kind and scope combinations in this change
 
 - `[Request-context]`
@@ -101,7 +103,7 @@ Four sources by origin contribute to a request's principal set; each is enumerat
   - Composition: `Host` (unless API token), `AuthenticatedUser` (when token is present), `ProfileOwner` (when `RequestWSID==ProfileWSID`), `WorkspaceOwner` (user, descriptor's `OwnerWSID==ProfileWSID`), `WorkspaceDevice` (device, `isDeviceAllowed` true), and the `System` short-circuit (when principals already include `role.sys.System` or when `ProfileWSID==NullWSID`).
 
 - `[Anonymous-grants]`
-  - Origin: emitted when no token is presented; combines the reserved `Anonymous` role and the `Guest` user (`sys.Guest @ GuestWSID`) defined in [pkg/iauthnz/authn-types.go](../../../../pkg/iauthnz/authn-types.go) with any `[(cdoc.sys.Subject)]` rows in `RequestWSID` that match `sys.Guest`.
+  - Origin: emitted when no token is presented; combines the reserved Anonymous role and Guest User Principal with roles from Subject rows matching `sys.Guest`; Guest's ProfileWSID belongs to Payload, not the Principal
   - Composition: `Anonymous` and `Guest` are added unconditionally on the no-token branch; the `[Subjects reader]` is invoked with the `sys.Guest` login so any guest-bound role grants persisted by `[[Workspace membership]]` apply.
 
 Token-carried role matching:
@@ -111,7 +113,6 @@ Token-carried role matching:
 | `RoleScopeWorkspace`         | `role.WSID == RequestWSID`                                                      | API token                  |
 | `RoleScopeWorkspacesOwnedBy` | The request Workspace descriptor exists and `role.WSID == descriptor.OwnerWSID` | Regular User/Device token  |
 
-Owned-by matching uses immediate ownership. Missing scopes, explicit zero, and invalid scope claims are handled by the [principal payload validation contract](./arch-tokens.md#payload-contract) before composition. Derived principals retain their current WSIDs, including the device ProfileWSID on `WorkspaceDevice`.
 
 VSQL role inheritance (e.g., `ProfileOwner -> WorkspaceOwner`) is expanded later by the ACL engine, not during composition; see `[Role inheritance map]` above.
 
@@ -120,42 +121,42 @@ VSQL role inheritance (e.g., `ProfileOwner -> WorkspaceOwner`) is expanded later
 ### Authenticate request and compose principals
 
 ```text
-*apps (command/query/actualizer processor)
-  -> [Auth boundary].Authenticate(ctx, app, appTokens, AuthnRequest{Host, RequestWSID, Token})
-       -> if Token == "":
-            emit [Anonymous-grants]: User(sys.Guest @ GuestWSID), Role(Anonymous)
-            emit [Anonymous-grants] via [Subjects reader] for sys.Guest in RequestWSID
-            emit [Request-context]: Host
-            return (principals, NullWSID)
-       -> [Token validator]: appTokens.ValidateToken(Token, &PrincipalPayload) -> normalized role scopes
-       -> emit [Request-context]: Role(AuthenticatedUser @ RequestWSID)
-       -> if PrincipalPayload.IsAPIToken:
-            emit [Token-carried] RoleScopeWorkspace grants matched by the scope table; WSID = RequestWSID
-            return (principals, NullWSID)
-       -> emit [Token-carried] PrincipalPayload.GlobalRoles in RequestWSID
-       -> emit [Invite-granted] via [Subjects reader] for PrincipalPayload.Login and PrincipalPayload.Alias in RequestWSID
-       -> profileWSID = PrincipalPayload.ProfileWSID
-       -> if Role(System) already in principals: return
-       -> if profileWSID == NullWSID: emit Role(System), return
-       -> emit User|Device principal at profileWSID
-       -> read cdoc.WorkspaceDescriptor in RequestWSID
-       -> emit [Request-context]: ProfileOwner (if RequestWSID==profileWSID), WorkspaceOwner (user, OwnerWSID==profileWSID), WorkspaceDevice (device, app's isDeviceAllowed)
-       -> emit [Token-carried] RoleScopeWorkspacesOwnedBy grants matched by the scope table; WSID = RequestWSID
-       -> emit [Request-context]: Host
-       -> return (principals, profileWSID)
+*apps
+  -> [Auth boundary].Authenticate(ctx, app, appTokens, request)
+       -> if no bearer token:
+            initialize Guest Payload
+            emit Guest User Principal, Anonymous, matching Guest Subject roles, and Host
+            return AuthnResult
+       -> [Token validator]: validate into result.Payload
+       -> emit AuthenticatedUser
+       -> if API token: emit matching exact-Workspace roles and return
+       -> emit GlobalRoles
+       -> [Subjects reader]: emit roles matching canonical Login and Alias
+       -> validate SubjectKind using the existing regular-token rules
+       -> if System role exists: emit Host and return
+       -> if Payload.ProfileWSID is null: emit System and Host and return
+       -> emit User or Device Principal
+       -> [Workspace role deriver]: read Workspace descriptor and derive contextual roles
+       -> emit matching owned-by token roles
+       -> emit Host
+       -> return AuthnResult containing original Payload and effective Principals
 ```
+
+Device eligibility is evaluated in its existing stage even when GlobalRoles or Subject roles already supplied WorkspaceDevice. A successful check contributes the same effective Role value, which is deduplicated. The result carries no source or enrichment metadata. Enrichment uses the [uniform binding policy](./context.md#principaltoken) without repeating eligibility checks or Subject reads.
 
 ### ACL evaluation by \*apps
 
 ```text
 *apps (command/query processor)
-  -> [Auth boundary].Authenticate -> principals
-  -> appdef ACL engine: evaluate rule.AllowedRoles vs principals (applying [Role inheritance map])
+  -> [Auth boundary].Authenticate -> authentication result
+  -> check System role within this request's effective Principals
+  -> evaluate rule.AllowedRoles vs effective Principals, applying [Role inheritance map]
   -> on deny: 403; on allow: proceed to extension
 ```
 
 ## Notes
 
-The `System` short-circuit (line ~118 of `pkg/iauthnzimpl/impl.go`) returns immediately when the already-composed principals contain `role.sys.System` (sourced from the token's `GlobalRoles` or from roles read from `[(cdoc.sys.Subject)]` of the request workspace): a system caller is not augmented with subject or workspace-owner roles. The `profileWSID == NullWSID` short-circuit additionally emits `role.sys.System` for any user-kind subject with no profile (used by registry-app internal flows). API tokens are unaffected by either branch: their per-app `Roles` are applied in a dedicated loop that returns earlier (line ~74).
+The System short-circuits retain their existing positions after GlobalRoles and Subject-role lookup and before User/Device Principal emission, descriptor reads, and owned-by token-grant matching. Payload remains available, and Host is still emitted for regular tokens. API-token composition returns earlier without Host, GlobalRoles, Subject reads, descriptor reads, or Workspace role derivation. These changes do not expand supported token-kind and scope combinations or change existing authorization decisions.
+
 
 `Anonymous`, `Guest`, `Everyone`, and `AuthenticatedUser` come from `pkg/iauthnz/authn-types.go` and are reserved names; ACL rules in `apps` reference these QNames to express coverage levels.

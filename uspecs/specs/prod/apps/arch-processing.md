@@ -107,15 +107,17 @@ State
   - Path to file: [pkg/processors/actualizers/impl.go](../../../../pkg/processors/actualizers/impl.go)
 
 - `[Authenticator call]`
-  - Calls `iauthnz.IAuthenticator.Authenticate` with the request token, returning principals stored on the workpiece; identity and token policy are owned by the `auth` context (see [../auth/arch.md](../auth/arch.md)).
+  - Calls `iauthnz.IAuthenticator.Authenticate` in the target Application and Workspace, retaining one authentication result on the command or query workpiece; component responsibilities are defined under [Request authentication result](#request-authentication-result)
   - Path to file: [pkg/iauthnz/authn-interface.go](../../../../pkg/iauthnz/authn-interface.go)
 
 - `[ACL check]`
   - Per-pipeline operator that calls `IAppPartition.IsOperationAllowed` for the request operation kind (`Execute` for commands and queries, per-CUD kind for command CUDs); maps a deny to `403 Forbidden`.
+  - Uses effective Principals and derived role names within the current request context; System checks match role kind and System QName without a Principal.WSID comparison
   - Path to file: [pkg/processors/command/impl.go](../../../../pkg/processors/command/impl.go)
 
 - `[Legacy ACL fallback]`
   - Falls back to `oldacl.IsOperationAllowed` when the new ACL denies, kept as a temporary bridge for Air; logged as `newACL not ok, but oldACL ok` when only the legacy path allows.
+  - Matches the reserved Guest using Payload's SubjectKind, canonical `sys.Guest` Login, and GuestWSID profile reference; removing Principal.WSID does not turn the Guest pattern into a match for every User Principal
   - Path to package: [pkg/processors/oldacl](../../../../pkg/processors/oldacl)
 
 ### Shared infrastructure
@@ -153,6 +155,24 @@ State
 - `[(BLOB storage)]`
   - BLOB byte storage targeted by `[BLOB processor]`.
   - Path to package: [pkg/iblobstorage](../../../../pkg/iblobstorage)
+
+### Request authentication result
+
+The authentication result is scoped to one Application and request Workspace. Command and query v1/v2 workpieces retain it for that request and expose exactly Payload and Principals to the consumers below. A reused workpiece clears the whole result, and an authentication error prevents consumption of a partially populated result.
+
+| Consumer                                      | Result used          | Responsibility                                                                            |
+|-----------------------------------------------|----------------------|-------------------------------------------------------------------------------------------|
+| Command and query v1/v2 ACL and System checks | Effective Principals | Preserve decisions in the request Application and Workspace                               |
+| N10n subscription enforcement                 | Effective Principals | Authenticate separately for each subscription Workspace and select roles from that result |
+| RequestSubject storage and identity logging | Payload | Project original Subject identity independently of effective Principal composition |
+| Principal-token enrichment | Payload and Principals | Preserve original grants and add effective roles using the request Workspace |
+
+N10n does not reuse an effective Principal set across subscription Workspaces. Other callers of the authentication boundary migrate to the result contract together and consume only the fields they need. Anonymous-only function shortcuts retain their existing token bypass and Anonymous-only authorization policy; they initialize reserved Guest identity for request state without manufacturing token-carried grants or additional effective roles.
+
+Identity and enrichment semantics are owned by [AuthnResult](../auth/context.md#authnresult) and [PrincipalToken](../auth/context.md#principaltoken).
+
+RequestSubject keeps its existing storage name, key, field names, and field types. `Kind`, `Name`, and `ProfileWSID` project Payload's SubjectKind, canonical Login, and profile reference; `Token` continues to come from the request token provider. User and Device identity comes from validated claims, Guest uses the reserved identity, and API-token and System identity remains available even when composition omits User/Device Principals. A null profile reference remains null and is never replaced by the request Workspace. The storage does not decode the token or scan Principals to recover identity.
+
 
 ## Scenarios
 
@@ -225,3 +245,18 @@ State
   -> [Async actualizer] channel wakes (see Run async actualizer)
   -> SSE subscribers receive the update through [N10n broker].WatchChannel
 ```
+
+## Cross-cutting concerns
+
+### Observability
+
+- Every authorization log produced by Command processor, Query v1 processor, Query v2 processor, or Legacy ACL fallback retains its existing severity and decision details, including operation kind, target qualified name, and relevant allow/deny policy information
+- Every such log that reports Workspace identity distinguishes the request Workspace from Subject ProfileWorkspace, using request context and Payload respectively; Principal formatting no longer labels role or Subject applicability with Principal.WSID
+- Every authentication-result consumer excludes bearer-token contents from logs
+
+Legacy deny diagnostics retain Verbose severity and the existing `old-style ... -> deny` message structure. The fallback success diagnostic retains Verbose severity and `newACL not ok, but oldACL ok` wording. Both obtain Workspace and profile context explicitly rather than from Principal formatting.
+
+### Testing
+
+- Every authentication-result consumer has focused coverage for the fields it uses and for request isolation; verification stays in the owning package rather than duplicating auth policy in processor tests
+- Every migrated ACL enforcement point preserves existing allow/deny behavior in its relevant regression tests

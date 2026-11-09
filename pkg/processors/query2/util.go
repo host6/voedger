@@ -70,7 +70,7 @@ type queryWork struct {
 	rowsProcessor        pipeline.IAsyncPipeline
 	rowsProcessorErrCh   chan error // will contain the first error from rowProcessor if any. The rest of errors in rowsProcessor will be just logged
 	metrics              queryprocessor.IMetrics
-	principals           []iauthnz.Principal
+	authnResult          iauthnz.AuthnResult
 	roles                []appdef.QName
 	secretReader         isecrets.ISecretReader
 	iWorkspace           appdef.IWorkspace
@@ -83,7 +83,6 @@ type queryWork struct {
 	responseWriterGetter func() bus.IResponseWriter
 	apiPathHandler       apiPathHandler
 	federation           federation.IFederation
-	profileWSID          istructs.WSID
 }
 
 var _ processors.IProcessorWorkpiece = (*queryWork)(nil)
@@ -92,7 +91,7 @@ func (qw *queryWork) AppPartitions() appparts.IAppPartitions { return qw.appPart
 
 func (qw *queryWork) AppPartition() appparts.IAppPartition { return qw.appPart }
 
-func (qw *queryWork) GetPrincipals() []iauthnz.Principal { return qw.principals }
+func (qw *queryWork) GetPrincipals() []iauthnz.Principal { return qw.authnResult.Principals }
 
 func (qw *queryWork) Roles() []appdef.QName { return qw.roles }
 
@@ -101,6 +100,7 @@ func (qw *queryWork) ResetRateLimit(resource appdef.QName, operation appdef.Oper
 }
 
 func (qw *queryWork) Release() {
+	qw.authnResult = iauthnz.AuthnResult{}
 	if ap := qw.appPart; ap != nil {
 		qw.appStructs = nil
 		qw.appPart = nil
@@ -118,7 +118,7 @@ func (qw *queryWork) borrow() (err error) {
 }
 
 func (qw *queryWork) isDeveloper() bool {
-	for _, prn := range qw.principals {
+	for _, prn := range qw.authnResult.Principals {
 		if prn.Kind == iauthnz.PrincipalKind_Role && prn.QName == appdef.QNameRoleDeveloper {
 			return true
 		}
@@ -206,9 +206,12 @@ func (qw *queryWork) getObjectSender() pipeline.IAsyncOperator {
 }
 
 func (qw *queryWork) SetPrincipals(prns []iauthnz.Principal) {
-	qw.principals = prns
+	qw.authnResult.Principals = prns
 }
 
 func (qw *queryWork) LogCtx() context.Context {
 	return qw.msg.RequestCtx()
 }
+
+func (qw *queryWork) GetAuthnResult() iauthnz.AuthnResult       { return qw.authnResult }
+func (qw *queryWork) SetAuthnResult(result iauthnz.AuthnResult) { qw.authnResult = result }

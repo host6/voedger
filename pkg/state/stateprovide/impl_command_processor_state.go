@@ -29,7 +29,7 @@ func implProvideCommandProcessorState(
 	wsidFunc state.WSIDFunc,
 	secretReader isecrets.ISecretReader,
 	cudFunc state.CUDFunc,
-	principalsFunc state.PrincipalsFunc,
+	payloadFunc state.PrincipalPayloadFunc,
 	tokenFunc state.TokenFunc,
 	intentsLimit int,
 	cmdResultBuilderFunc state.ObjectBuilderFunc,
@@ -52,7 +52,7 @@ func implProvideCommandProcessorState(
 	state.addStorage(sys.Storage_Record, storages.NewRecordsStorage(appStructsFunc, wsidFunc, cudFunc), S_GET|S_GET_BATCH|S_INSERT|S_UPDATE)
 	state.addStorage(sys.Storage_WLog, storages.NewWLogStorage(vvmCtx, ieventsFunc, wsidFunc), S_GET)
 	state.addStorage(sys.Storage_AppSecret, storages.NewAppSecretsStorage(secretReader), S_GET)
-	state.addStorage(sys.Storage_RequestSubject, storages.NewSubjectStorage(principalsFunc, tokenFunc), S_GET)
+	state.addStorage(sys.Storage_RequestSubject, storages.NewSubjectStorage(payloadFunc, tokenFunc), S_GET)
 	state.addStorage(sys.Storage_Result, storages.NewResultStorage(cmdResultBuilderFunc), S_INSERT)
 	state.addStorage(sys.Storage_Uniq, storages.NewUniquesStorage(appStructsFunc, wsidFunc, stateOpts.UniquesHandler), S_GET)
 	state.addStorage(sys.Storage_Response, storages.NewResponseStorage(), S_INSERT)

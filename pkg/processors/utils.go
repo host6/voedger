@@ -106,7 +106,7 @@ func cudOpToStringForLog(cud istructs.ICUDRow) string {
 	return "update"
 }
 
-func SetPrincipalsForAnonymousOnlyFunc(appDef appdef.IAppDef, funcQName appdef.QName, wsid istructs.WSID, setter interface{ SetPrincipals([]iauthnz.Principal) }) (ok bool) {
+func SetPrincipalsForAnonymousOnlyFunc(appDef appdef.IAppDef, funcQName appdef.QName, setter interface{ SetAuthnResult(iauthnz.AuthnResult) }) (ok bool) {
 	queryType := appDef.Type(funcQName)
 	rulesForQuery := []appdef.IACLRule{}
 	for _, acl := range appDef.ACL() {
@@ -120,11 +120,10 @@ func SetPrincipalsForAnonymousOnlyFunc(appDef appdef.IAppDef, funcQName appdef.Q
 			rulesForQuery[0].Policy() == appdef.PolicyKind_Allow &&
 			rulesForQuery[0].Principal().Kind() == appdef.TypeKind_Role &&
 			rulesForQuery[0].Principal().QName() == iauthnz.QNameRoleAnonymous {
-			setter.SetPrincipals([]iauthnz.Principal{{
+			setter.SetAuthnResult(iauthnz.AuthnResult{Payload: iauthnz.GuestPayload(), Principals: []iauthnz.Principal{{
 				Kind:  iauthnz.PrincipalKind_Role,
-				WSID:  wsid,
 				QName: iauthnz.QNameRoleAnonymous,
-			}})
+			}}})
 			return true
 		}
 	}

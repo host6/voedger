@@ -87,7 +87,7 @@ Systems:
   - Evidence presented by a subject during authentication, such as a password or verified value token
 
 - `Principal`
-  - An authenticated identity representation for a subject
+  - An authorization input evaluated in the current request Application and Workspace, distinct from Subject identity and a token-carried RoleGrant; its model belongs to [auth](./auth/context.md#principal)
 
 - `Principal Token`
   - A bearer token issued after authentication that carries authn identity fields such as login, alias, subject kind, and profile workspace

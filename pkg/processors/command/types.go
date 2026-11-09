@@ -6,6 +6,7 @@ package commandprocessor
 
 import (
 	"context"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"sync"
 	"time"
 
@@ -77,7 +78,7 @@ type cmdWorkpiece struct {
 	eca                          istructs.ExecCommandArgs
 	metrics                      commandProcessorMetrics
 	syncProjectorsStart          time.Time
-	principals                   []iauthnz.Principal
+	authnResult                  iauthnz.AuthnResult
 	roles                        []appdef.QName
 	parsedCUDs                   []parsedCUD
 	wsDesc                       istructs.IRecord
@@ -145,7 +146,7 @@ func newReusableHostState(vvmCtx context.Context, secretReader isecrets.ISecretR
 		func() istructs.WSID { return b.wp.cmdMes.WSID() },
 		secretReader,
 		func() istructs.ICUD { return b.wp.reb.CUDBuilder() },
-		func() []iauthnz.Principal { return b.wp.principals },
+		func() payloads.PrincipalPayload { return b.wp.authnResult.Payload },
 		func() string { return b.wp.cmdMes.Token() },
 		actualizers.DefaultIntentsLimit,
 		func() istructs.IObjectBuilder { return b.wp.cmdResultBuilder },

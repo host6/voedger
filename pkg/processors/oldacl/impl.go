@@ -6,13 +6,15 @@
 package oldacl
 
 import (
+	"github.com/voedger/voedger/pkg/istructs"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"slices"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/iauthnz"
 )
 
-func matchOrNotSpecified_Principals(pattern [][]iauthnz.Principal, actualPrns []iauthnz.Principal) (ok bool) {
+func matchOrNotSpecified_Principals(pattern [][]iauthnz.Principal, actualPrns []iauthnz.Principal, payload payloads.PrincipalPayload) (ok bool) {
 	if len(pattern) == 0 {
 		return true
 	}
@@ -47,7 +49,8 @@ func matchOrNotSpecified_Principals(pattern [][]iauthnz.Principal, actualPrns []
 							return false
 						}
 					}
-					if prnAND.WSID > 0 && prnAND.WSID != actualPrn.WSID {
+					if prnAND.Kind == iauthnz.PrincipalKind_User && prnAND.Name == istructs.SysGuestLogin &&
+						(payload.SubjectKind != istructs.SubjectKind_User || payload.Login != istructs.SysGuestLogin || payload.ProfileWSID != istructs.GuestWSID) {
 						return false
 					}
 					return true

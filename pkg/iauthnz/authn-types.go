@@ -8,6 +8,7 @@ package iauthnz
 import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/istructs"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 )
 
 type AuthnRequest struct {
@@ -23,12 +24,6 @@ type AuthnRequest struct {
 type Principal struct {
 	Kind PrincipalKindType
 
-	// PrincipalKind_User 	- ProfileWSID
-	// PrincipalKind_Group 	- Workspace this group belongs to
-	// PrincipalKind_Device - ProfileWSID
-	// PrincipalKind_Role   - Workspace this role belongs to
-	WSID istructs.WSID
-
 	// PrincipalKind_Host	- Host address
 	// PrincipalKind_User	- Login name
 	Name string
@@ -38,6 +33,11 @@ type Principal struct {
 
 	// PrincipalKind_Group	- GroupID
 	ID istructs.IDType
+}
+
+type AuthnResult struct {
+	Payload    payloads.PrincipalPayload
+	Principals []Principal
 }
 
 type PrincipalKindType byte

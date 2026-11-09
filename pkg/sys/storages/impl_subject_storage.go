@@ -6,21 +6,21 @@ package storages
 
 import (
 	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/iauthnz"
+
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/state"
 	"github.com/voedger/voedger/pkg/sys"
 )
 
 type subjectStorage struct {
-	principalsFunc state.PrincipalsFunc
-	tokenFunc      state.TokenFunc
+	payloadFunc state.PrincipalPayloadFunc
+	tokenFunc   state.TokenFunc
 }
 
-func NewSubjectStorage(principalsFunc state.PrincipalsFunc, tokenFunc state.TokenFunc) state.IStateStorage {
+func NewSubjectStorage(payloadFunc state.PrincipalPayloadFunc, tokenFunc state.TokenFunc) state.IStateStorage {
 	return &subjectStorage{
-		principalsFunc: principalsFunc,
-		tokenFunc:      tokenFunc,
+		payloadFunc: payloadFunc,
+		tokenFunc:   tokenFunc,
 	}
 }
 
@@ -42,18 +42,13 @@ func (s *subjectStorage) Get(_ istructs.IStateKeyBuilder) (istructs.IStateValue,
 	ssv := &requestSubjectValue{
 		token: s.tokenFunc(),
 	}
-	for _, principal := range s.principalsFunc() {
-		if principal.Kind == iauthnz.PrincipalKind_Device || principal.Kind == iauthnz.PrincipalKind_User {
-			ssv.profileWSID = int64(principal.WSID) // nolint G115
-			ssv.name = principal.Name
-			if principal.Kind == iauthnz.PrincipalKind_Device {
-				ssv.kind = int32(istructs.SubjectKind_Device)
-			} else {
-				ssv.kind = int32(istructs.SubjectKind_User)
-			}
-			break
-		}
+	if s.payloadFunc != nil {
+		payload := s.payloadFunc()
+		ssv.profileWSID = int64(payload.ProfileWSID)
+		ssv.name = payload.Login
+		ssv.kind = int32(payload.SubjectKind)
 	}
+
 	return ssv, nil
 }
 

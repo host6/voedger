@@ -12,6 +12,11 @@ Roles:
 - `@System`
   - Trusted backend caller using a System Principal Token for internal auth operations.
 
+Systems:
+
+- `*apps`
+  - Request processors consuming the authentication result and enforcing Application ACLs in the target Workspace
+
 ## Scenarios overview
 
 - **`Authenticate`**
@@ -88,7 +93,9 @@ Shared concepts
   - decl: [pkg/itokens-payloads/types.go#PrincipalPayload](../../../../pkg/itokens-payloads/types.go)
 
 - `[Auth boundary]`
-  - The `pkg/iauthnz` interface that the `apps` context calls at every enforcement point to authenticate a request and obtain its principal set; the only programmatic surface that the `auth` context exposes to other contexts.
+  - The `pkg/iauthnz` interface that request processors call to obtain one authentication result containing Payload and effective Principals; the request retains the target Application and Workspace independently of that result
+  - Contracts and value semantics: [AuthnResult](./context.md#authnresult), [Principal](./context.md#principal), and [PrincipalToken](./context.md#principaltoken)
+  - Result propagation and consumer responsibilities: [request processing](../apps/arch-processing.md#request-authentication-result)
   - decl: [pkg/iauthnz/authn-interface.go#IAuthenticator](../../../../pkg/iauthnz/authn-interface.go)
   - impl: [pkg/iauthnzimpl/impl.go](../../../../pkg/iauthnzimpl/impl.go)
 
@@ -110,9 +117,13 @@ Details: [arch-authn.md](./arch-authn.md), [arch-tokens.md](./arch-tokens.md).
 
 ```text
 @Client
-  -> [Auth boundary]: AuthnRequest(token, requestWSID)
-  -> [[Authorization]]: validate [Principal Token], compose principals from token + [(cdoc.sys.Subject)] + ACL-engine-emitted contextual roles
-  -> @Client: principals, profileWSID
+  -> *apps: target Application, Workspace, Host, token
+  -> [Auth boundary]: Authenticate in that request context
+       -> [[Authorization]]: validate token or establish Guest identity
+       -> [[Authorization]]: compose effective Principals without changing the original payload
+       -> out: authentication result (Payload, Principals)
+  -> *apps: retain result, evaluate effective Principals within the request context
+  -> @Client: operation response or authorization error
 ```
 
 Details: [arch-authz.md](./arch-authz.md).
