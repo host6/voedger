@@ -88,6 +88,7 @@ func TestBasicUsage_ChildWorkspaces(t *testing.T) {
 }
 
 func TestForeignAuthorization(t *testing.T) {
+	require := require.New(t)
 	vit := it.NewVIT(t, &it.SharedConfig_App1)
 	defer vit.TearDown()
 
@@ -128,7 +129,6 @@ func TestForeignAuthorization(t *testing.T) {
 	})
 
 	t.Run("enrich principal token", func(t *testing.T) {
-		require := require.New(t)
 		// 403 forbidden on try to execute a stricted operation in the child workspace using the non-enriched token
 		body = `{"cuds": [{"fields": {"sys.ID": 1,"sys.QName": "app1pkg.articles","name": "cola","article_manual": 1,"article_hash": 2,"hideonhold": 3,"time_active": 4,"control_active": 5}}]}`
 		vit.PostWS(childWS, "c.sys.CUD", body, httpu.Expect403())
@@ -208,30 +208,101 @@ func TestForeignAuthorization(t *testing.T) {
 	})
 
 	t.Run("API token", func(t *testing.T) {
-		require := require.New(t)
 		// 403 forbidden on try to execute a stricted operation in the child workspace
 		body = `{"args":{"Schema":"app1pkg.articles"},"elements":[{"fields":["sys.ID"]}]}`
 		vit.PostWS(childWS, "q.sys.Collection", body, httpu.Expect403())
 
-		// issue an API token
+		// Grant the role only in childWS, independently of the token holder's profile
 		as, err := vit.IAppStructsProvider.BuiltIn(istructs.AppQName_test1_app1)
 		require.NoError(err)
-		apiToken, err := iauthnzimpl.IssueAPIToken(as.AppTokens(), time.Hour, []appdef.QName{appdef.NewQName("app1pkg", "SpecialAPITokenRole")},
-			childWS.WSID, payloads.PrincipalPayload{
-				Login:       parentWS.Owner.Name,
-				SubjectKind: istructs.SubjectKind_User,
-				ProfileWSID: parentWS.Owner.ProfileWSID,
-			})
+		role := appdef.NewQName("app1pkg", "SpecialAPITokenRole")
+		payload := payloads.PrincipalPayload{
+			Login:       parentWS.Owner.Name,
+			SubjectKind: istructs.SubjectKind_User,
+			ProfileWSID: parentWS.Owner.ProfileWSID,
+		}
+		apiToken, err := iauthnzimpl.IssueAPIToken(as.AppTokens(), time.Hour, []appdef.QName{role}, childWS.WSID, payload)
 		require.NoError(err)
 
 		// API token has role.app1pkg.SpecialAPITokenRole, q.sys.Collection is allowed for that role according to grants in vsql -> the request should be successful
 		vit.PostWS(childWS, "q.sys.Collection", body, httpu.WithAuthorizeBy(apiToken))
 		apiPayload, _ := decodeScopedPrincipalToken(t, require, vit, apiToken)
 		require.Equal([]payloads.RoleType{{
-			Scope: payloads.RoleScopeWorkspace, WSID: childWS.WSID, QName: appdef.NewQName("app1pkg", "SpecialAPITokenRole"),
+			Scope: payloads.RoleScopeWorkspace, WSID: childWS.WSID, QName: role,
 		}}, apiPayload.Roles)
-		vit.PostWS(parentWS, "q.sys.Collection", body, httpu.WithAuthorizeBy(apiToken), httpu.Expect403())
+
+		systemToken := vit.GetSystemPrincipal(istructs.AppQName_test1_app1).Token
+		grandchildName := vit.NextName()
+		vit.InitChildWorkspace(it.SimpleWSParams(grandchildName), childWS, httpu.WithAuthorizeBy(systemToken))
+		grandchildWS := vit.WaitForChildWorkspace(childWS, grandchildName, httpu.WithAuthorizeBy(systemToken))
+		unrelatedWS := vit.CreateWorkspace(it.SimpleWSParams(vit.NextName()), newPrn)
+		for _, tc := range []struct {
+			name string
+			ws   *it.AppWorkspace
+		}{
+			{"Role does not apply in the parent Workspace", parentWS},
+			{"Role does not apply in a child Workspace", grandchildWS},
+			{"Role does not apply in an unrelated Workspace", unrelatedWS},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				require.Equal(childWS.Kind, tc.ws.Kind)
+				// A token bound to this Workspace proves the same role and query grants are usable here
+				controlToken, err := iauthnzimpl.IssueAPIToken(as.AppTokens(), time.Hour, []appdef.QName{role}, tc.ws.WSID, payload)
+				require.NoError(err)
+				vit.PostWS(tc.ws, "q.sys.Collection", body, httpu.WithAuthorizeBy(controlToken))
+
+				// The original signed token must remain confined to childWS despite identical ACL grants
+				vit.PostWS(tc.ws, "q.sys.Collection", body, httpu.WithAuthorizeBy(apiToken), httpu.Expect403())
+			})
+		}
 	})
+}
+
+func TestExactWorkspaceRoleDoesNotAuthorizeOwnedOrRelatedWorkspaces(t *testing.T) {
+	require := require.New(t)
+	vit := it.NewVIT(t, &it.SharedConfig_App1)
+	defer vit.TearDown()
+
+	caller := vit.SignIn(vit.SignUp(vit.NextName(), "1", istructs.AppQName_test1_app1))
+	ownedWS := vit.CreateWorkspace(it.SimpleWSParams(vit.NextName()), caller)
+	foreignWS := vit.WS(istructs.AppQName_test1_app1, "test_ws")
+	otherWSOfForeignOwner := vit.WS(istructs.AppQName_test1_app1, "test_ws3")
+	require.NotEqual(caller.ProfileWSID, foreignWS.Owner.ProfileWSID)
+
+	as, err := vit.IAppStructsProvider.BuiltIn(istructs.AppQName_test1_app1)
+	require.NoError(err)
+	issueToken := func(wsid istructs.WSID) string {
+		t.Helper()
+		// Use a role available in both profile and application Workspaces without changing their schemas
+		token, err := as.AppTokens().IssueToken(time.Hour, &payloads.PrincipalPayload{
+			Login: caller.Name, SubjectKind: istructs.SubjectKind_User, ProfileWSID: caller.ProfileWSID,
+			IsAPIToken: true,
+			Roles:      []payloads.RoleType{{Scope: payloads.RoleScopeWorkspace, WSID: wsid, QName: iauthnz.QNameRoleWorkspaceOwner}},
+		})
+		require.NoError(err)
+		return token
+	}
+	token := issueToken(foreignWS.WSID)
+	body := `{"args":{"Schema":"sys.ChildWorkspace"},"elements":[{"fields":["sys.ID"]}]}`
+
+	// The caller has no ownership of this Workspace; only the token's exact grant permits the query
+	vit.PostWS(foreignWS, "q.sys.Collection", body, httpu.WithAuthorizeBy(token))
+	for _, tc := range []struct {
+		name string
+		wsid istructs.WSID
+	}{
+		{"Caller-owned Workspace", ownedWS.WSID},
+		{"Foreign Workspace owner", foreignWS.Owner.ProfileWSID},
+		{"Caller profile Workspace", caller.ProfileWSID},
+		{"Another Workspace of the foreign owner", otherWSOfForeignOwner.WSID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// A locally scoped control token confirms that the query and role work in this Workspace
+			vit.PostApp(caller.AppQName, tc.wsid, "q.sys.Collection", body, httpu.WithAuthorizeBy(issueToken(tc.wsid)))
+			// Neither identity, ownership, nor a shared owner may extend the original token's grant
+			vit.PostApp(caller.AppQName, tc.wsid, "q.sys.Collection", body, httpu.WithAuthorizeBy(token), httpu.Expect403())
+		})
+	}
 }
 
 func decodeScopedPrincipalToken(t *testing.T, require *require.Assertions, vit *it.VIT, token string) (payloads.PrincipalPayload, istructs.GenericPayload) {
