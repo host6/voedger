@@ -93,7 +93,7 @@ Shared concepts
   - decl: [pkg/itokens-payloads/types.go#PrincipalPayload](../../../../pkg/itokens-payloads/types.go)
 
 - `[Auth boundary]`
-  - The `pkg/iauthnz` interface that request processors call to obtain one authentication result containing Payload and effective Principals; the request retains the target Application and Workspace independently of that result
+  - The `pkg/iauthnz` interface that request processors call to obtain one authentication result containing PrincipalPayload and effective Principals; the request retains the target Application and Workspace independently of that result
   - Contracts and value semantics: [AuthnResult](./context.md#authnresult), [Principal](./context.md#principal), and [PrincipalToken](./context.md#principaltoken)
   - Result propagation and consumer responsibilities: [request processing](../apps/arch-processing.md#request-authentication-result)
   - decl: [pkg/iauthnz/authn-interface.go#IAuthenticator](../../../../pkg/iauthnz/authn-interface.go)
@@ -121,7 +121,7 @@ Details: [arch-authn.md](./arch-authn.md), [arch-tokens.md](./arch-tokens.md).
   -> [Auth boundary]: Authenticate in that request context
        -> [[Authorization]]: validate token or establish Guest identity
        -> [[Authorization]]: compose effective Principals without changing the original payload
-       -> out: authentication result (Payload, Principals)
+       -> out: authentication result (PrincipalPayload, Principals)
   -> *apps: retain result, evaluate effective Principals within the request context
   -> @Client: operation response or authorization error
 ```
