@@ -120,7 +120,7 @@ func SetPrincipalsForAnonymousOnlyFunc(appDef appdef.IAppDef, funcQName appdef.Q
 			rulesForQuery[0].Policy() == appdef.PolicyKind_Allow &&
 			rulesForQuery[0].Principal().Kind() == appdef.TypeKind_Role &&
 			rulesForQuery[0].Principal().QName() == iauthnz.QNameRoleAnonymous {
-			setter.SetAuthnResult(iauthnz.AuthnResult{Payload: iauthnz.GuestPrincipalPayload(), Principals: []iauthnz.Principal{{
+			setter.SetAuthnResult(iauthnz.AuthnResult{PrincipalPayload: iauthnz.GuestPrincipalPayload(), Principals: []iauthnz.Principal{{
 				Kind:  iauthnz.PrincipalKind_Role,
 				QName: iauthnz.QNameRoleAnonymous,
 			}}})

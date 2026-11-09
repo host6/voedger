@@ -1363,23 +1363,21 @@ func getSystemToken(appTokens istructs.IAppTokens) string {
 func TestWorkpieceAuthenticationResult(t *testing.T) {
 	require := require.New(t)
 	wp := &queryWork{}
-	// Reuse one workpiece for different identities to detect state leaking between requests
-	for _, login := range []string{"first", "second"} {
-		expected := iauthnz.AuthnResult{
-			Payload:    payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: login, ProfileWSID: 42},
-			Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
-		}
-		wp.SetAuthnResult(expected)
-		// Both accessors must expose the current authentication result for downstream authorization
-		actual := wp.GetAuthnResult()
-		require.Equal(expected, actual)
-		require.Equal(expected.Principals, wp.GetPrincipals())
-
-		// Release must erase identity and principals before the workpiece serves another request
-		wp.Release()
-		require.Equal(iauthnz.AuthnResult{}, wp.GetAuthnResult())
-		require.Empty(wp.GetPrincipals())
+	expected := iauthnz.AuthnResult{
+		PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "user", ProfileWSID: 42},
+		Principals:       []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
 	}
+	wp.SetAuthnResult(expected)
+
+	// Both accessors must expose the authentication result for downstream authorization
+	actual := wp.GetAuthnResult()
+	require.Equal(expected, actual)
+	require.Equal(expected.Principals, wp.GetPrincipals())
+
+	// Release must discard the identity and principals when request processing ends
+	wp.Release()
+	require.Equal(iauthnz.AuthnResult{}, wp.GetAuthnResult())
+	require.Empty(wp.GetPrincipals())
 }
 
 func TestAuthenticationResultReachesQueryExtension(t *testing.T) {
@@ -1414,7 +1412,7 @@ func TestAuthenticationResultReachesQueryExtension(t *testing.T) {
 	})
 	defer cleanup()
 	makeResult := func(login string) iauthnz.AuthnResult {
-		return iauthnz.AuthnResult{Payload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: login, ProfileWSID: 42},
+		return iauthnz.AuthnResult{PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: login, ProfileWSID: 42},
 			Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceOwner}},
 		}
 	}

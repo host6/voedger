@@ -6,9 +6,10 @@ package commandprocessor
 
 import (
 	"context"
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"sync"
 	"time"
+
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
@@ -146,7 +147,7 @@ func newReusableHostState(vvmCtx context.Context, secretReader isecrets.ISecretR
 		func() istructs.WSID { return b.wp.cmdMes.WSID() },
 		secretReader,
 		func() istructs.ICUD { return b.wp.reb.CUDBuilder() },
-		func() payloads.PrincipalPayload { return b.wp.authnResult.Payload },
+		func() payloads.PrincipalPayload { return b.wp.authnResult.PrincipalPayload },
 		func() string { return b.wp.cmdMes.Token() },
 		actualizers.DefaultIntentsLimit,
 		func() istructs.IObjectBuilder { return b.wp.cmdResultBuilder },

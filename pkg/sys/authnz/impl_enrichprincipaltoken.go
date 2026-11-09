@@ -42,7 +42,7 @@ func provideExecQryEnrichPrincipalToken(atf payloads.IAppTokensFactory) istructs
 			return itokens.ErrInvalidToken
 		}
 		result := args.Workpiece.(processors.IProcessorWorkpiece).GetAuthnResult()
-		principalPayload := result.Payload
+		principalPayload := result.PrincipalPayload
 		principalPayload.Roles = slices.Clone(principalPayload.Roles)
 
 		scope := payloads.RoleScopeWorkspacesOwnedBy

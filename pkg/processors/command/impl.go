@@ -602,12 +602,12 @@ func (cmdProc *cmdProc) authorizeRequest(_ context.Context, cmd *cmdWorkpiece) (
 		return err
 	}
 	// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-	oldACLOk := oldacl.IsOperationAllowed(cmd.cmdMes.RequestCtx(), appdef.OperationKind_Execute, cmd.cmdQName, nil, oldacl.EnrichPrincipals(cmd.authnResult.Principals), cmd.authnResult.Payload)
+	oldACLOk := oldacl.IsOperationAllowed(cmd.cmdMes.RequestCtx(), appdef.OperationKind_Execute, cmd.cmdQName, nil, oldacl.EnrichPrincipals(cmd.authnResult.Principals), cmd.authnResult.PrincipalPayload)
 	if !newACLOk && !oldACLOk {
 		return coreutils.NewHTTPErrorf(http.StatusForbidden)
 	}
 	if !newACLOk && oldACLOk && logger.IsVerbose() {
-		logger.VerboseCtx(logger.WithContextAttrs(cmd.cmdMes.RequestCtx(), map[string]any{"profilewsid": cmd.authnResult.Payload.ProfileWSID}), "", "newACL not ok, but oldACL ok. ", appdef.OperationKind_Execute, cmd.cmdQName, cmd.roles)
+		logger.VerboseCtx(logger.WithContextAttrs(cmd.cmdMes.RequestCtx(), map[string]any{"profilewsid": cmd.authnResult.PrincipalPayload.ProfileWSID}), "", "newACL not ok, but oldACL ok. ", appdef.OperationKind_Execute, cmd.cmdQName, cmd.roles)
 	}
 	return nil
 }
@@ -1005,12 +1005,12 @@ func (cmdProc *cmdProc) authorizeRequestCUDs(_ context.Context, cmd *cmdWorkpiec
 			return err
 		}
 		// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-		oldACLOk := oldacl.IsOperationAllowed(cmd.cmdMes.RequestCtx(), parsedCUD.opKind, parsedCUD.qName, fields, oldacl.EnrichPrincipals(cmd.authnResult.Principals), cmd.authnResult.Payload)
+		oldACLOk := oldacl.IsOperationAllowed(cmd.cmdMes.RequestCtx(), parsedCUD.opKind, parsedCUD.qName, fields, oldacl.EnrichPrincipals(cmd.authnResult.Principals), cmd.authnResult.PrincipalPayload)
 		if !newACLOk && !oldACLOk {
 			return coreutils.NewHTTPError(http.StatusForbidden, parsedCUD.xPath.Errorf("operation forbidden"))
 		}
 		if !newACLOk && oldACLOk && logger.IsVerbose() {
-			logger.VerboseCtx(logger.WithContextAttrs(cmd.cmdMes.RequestCtx(), map[string]any{"profilewsid": cmd.authnResult.Payload.ProfileWSID}), "", "newACL not ok, but oldACL ok. ", parsedCUD.opKind, parsedCUD.qName, cmd.roles)
+			logger.VerboseCtx(logger.WithContextAttrs(cmd.cmdMes.RequestCtx(), map[string]any{"profilewsid": cmd.authnResult.PrincipalPayload.ProfileWSID}), "", "newACL not ok, but oldACL ok. ", parsedCUD.opKind, parsedCUD.qName, cmd.roles)
 		}
 	}
 	return nil

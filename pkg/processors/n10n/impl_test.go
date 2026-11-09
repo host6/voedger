@@ -82,7 +82,10 @@ func TestSubscriptionAuthorizationUsesEachWorkspace(t *testing.T) {
 	wsb.AddRole(iauthnz.QNameRoleAuthenticatedUser)
 	wsb.Grant([]appdef.OperationKind{appdef.OperationKind_Select}, filter.QNames(entity), nil, role)
 	app := adb.MustBuild()
-	as := &subscriptionApp{app: app, descriptor: descriptor}
+	wsDescriptor := &coreutils.TestObject{
+		Name: appdef.QNameCDocWorkspaceDescriptor,
+		Data: map[string]interface{}{authnz.Field_WSKind: descriptor},
+	}
 	for _, tc := range []struct {
 		name                string
 		workspaces          []istructs.WSID
@@ -106,6 +109,13 @@ func TestSubscriptionAuthorizationUsesEachWorkspace(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			records := &coreutils.MockRecords{}
+			for _, wsid := range tc.expectedWorkspaces {
+				records.On("GetSingleton", wsid, appdef.QNameCDocWorkspaceDescriptor).Return(wsDescriptor, nil).Once()
+			}
+			as := &coreutils.MockAppStructs{}
+			as.On("AppDef").Return(app)
+			as.On("Records").Return(records)
 			var actualRequests []iauthnz.AuthnRequest
 			proc := &implIN10NProc{authenticator: subscriptionAuthenticator(func(request iauthnz.AuthnRequest) (iauthnz.AuthnResult, error) {
 				actualRequests = append(actualRequests, request)
@@ -139,6 +149,8 @@ func TestSubscriptionAuthorizationUsesEachWorkspace(t *testing.T) {
 				expectedRequests = append(expectedRequests, iauthnz.AuthnRequest{RequestWSID: wsid, Host: "host", Token: "same-token"})
 			}
 			require.Equal(expectedRequests, actualRequests)
+			records.AssertExpectations(t)
+			as.AssertExpectations(t)
 		})
 	}
 }
@@ -147,37 +159,4 @@ type subscriptionAuthenticator func(iauthnz.AuthnRequest) (iauthnz.AuthnResult, 
 
 func (f subscriptionAuthenticator) Authenticate(_ context.Context, _ istructs.IAppStructs, _ istructs.IAppTokens, req iauthnz.AuthnRequest) (iauthnz.AuthnResult, error) {
 	return f(req)
-}
-
-type subscriptionApp struct {
-	istructs.IAppStructs
-	app        appdef.IAppDef
-	descriptor appdef.QName
-}
-
-func (a *subscriptionApp) AppDef() appdef.IAppDef { return a.app }
-func (a *subscriptionApp) Records() istructs.IRecords {
-	return &subscriptionRecords{descriptor: a.descriptor}
-}
-
-type subscriptionRecords struct {
-	istructs.IRecords
-	descriptor appdef.QName
-}
-
-func (r *subscriptionRecords) GetSingleton(istructs.WSID, appdef.QName) (istructs.IRecord, error) {
-	return &subscriptionDescriptor{descriptor: r.descriptor}, nil
-}
-
-type subscriptionDescriptor struct {
-	istructs.IRecord
-	descriptor appdef.QName
-}
-
-func (r *subscriptionDescriptor) QName() appdef.QName { return appdef.QNameCDocWorkspaceDescriptor }
-func (r *subscriptionDescriptor) AsQName(field string) appdef.QName {
-	if field == authnz.Field_WSKind {
-		return r.descriptor
-	}
-	return appdef.NullQName
 }

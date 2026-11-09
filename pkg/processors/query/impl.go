@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"net/http"
 	"runtime/debug"
 	"slices"
@@ -19,6 +18,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/appparts"
@@ -264,12 +265,12 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				return err
 			}
 			// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-			oldACLOk := oldacl.IsOperationAllowed(qw.msg.RequestCtx(), appdef.OperationKind_Execute, qw.msg.QName(), nil, oldacl.EnrichPrincipals(qw.authnResult.Principals), qw.authnResult.Payload)
+			oldACLOk := oldacl.IsOperationAllowed(qw.msg.RequestCtx(), appdef.OperationKind_Execute, qw.msg.QName(), nil, oldacl.EnrichPrincipals(qw.authnResult.Principals), qw.authnResult.PrincipalPayload)
 			if !newACLOk && !oldACLOk {
 				return coreutils.WrapSysError(errors.New(""), http.StatusForbidden)
 			}
 			if !newACLOk && oldACLOk {
-				logger.VerboseCtx(logger.WithContextAttrs(qw.msg.RequestCtx(), map[string]any{"profilewsid": qw.authnResult.Payload.ProfileWSID}), "", "newACL not ok, but oldACL ok.", appdef.OperationKind_Execute, qw.msg.QName(), qw.roles)
+				logger.VerboseCtx(logger.WithContextAttrs(qw.msg.RequestCtx(), map[string]any{"profilewsid": qw.authnResult.PrincipalPayload.ProfileWSID}), "", "newACL not ok, but oldACL ok.", appdef.OperationKind_Execute, qw.msg.QName(), qw.roles)
 			}
 			return nil
 		}),
@@ -333,7 +334,7 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				func() istructs.IAppStructs { return qw.appStructs },
 				state.SimpleWSIDFunc(qw.msg.WSID()),
 				qw.secretReader,
-				func() payloads.PrincipalPayload { return qw.authnResult.Payload },
+				func() payloads.PrincipalPayload { return qw.authnResult.PrincipalPayload },
 				func() string { return qw.msg.Token() },
 				itokens,
 				func() istructs.PrepareArgs { return qw.execQueryArgs.PrepareArgs },

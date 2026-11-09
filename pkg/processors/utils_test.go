@@ -6,9 +6,10 @@
 package processors
 
 import (
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"testing"
 	"time"
+
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 
 	"github.com/stretchr/testify/require"
 
@@ -75,12 +76,12 @@ func TestAnonymousOnlyAuthenticationResult(t *testing.T) {
 	wsb.Grant([]appdef.OperationKind{appdef.OperationKind_Execute}, filter.QNames(command), nil, iauthnz.QNameRoleAnonymous)
 	app := adb.MustBuild()
 	setter := &authnResultSetter{result: iauthnz.AuthnResult{
-		Payload:    payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "previous", ProfileWSID: 42},
-		Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
+		PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "previous", ProfileWSID: 42},
+		Principals:       []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
 	}}
 	require.True(SetPrincipalsForAnonymousOnlyFunc(app, command, setter))
 	require.Equal([]iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAnonymous}}, setter.result.Principals)
-	require.Equal(payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: istructs.SysGuestLogin, ProfileWSID: istructs.GuestWSID}, setter.result.Payload)
+	require.Equal(payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: istructs.SysGuestLogin, ProfileWSID: istructs.GuestWSID}, setter.result.PrincipalPayload)
 	before := setter.result
 	require.False(SetPrincipalsForAnonymousOnlyFunc(app, other, setter))
 	require.Equal(before, setter.result)
