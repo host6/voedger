@@ -166,7 +166,7 @@ func TestEnrichmentRejectsMissingBearerToken(t *testing.T) {
 	factory := payloads.ProvideIAppTokensFactory(tokens)
 	called := false
 	err := provideExecQryEnrichPrincipalToken(factory)(t.Context(), istructs.ExecQueryArgs{State: &enrichmentState{},
-		Workpiece: &enrichmentWorkpiece{result: iauthnz.AuthnResult{Payload: iauthnz.GuestPayload()}}}, func(istructs.IObject) error { called = true; return nil })
+		Workpiece: &enrichmentWorkpiece{result: iauthnz.AuthnResult{Payload: iauthnz.GuestPrincipalPayload()}}}, func(istructs.IObject) error { called = true; return nil })
 	require.ErrorIs(err, itokens.ErrInvalidToken)
 	require.False(called)
 }

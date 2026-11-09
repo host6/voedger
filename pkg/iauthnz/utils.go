@@ -29,6 +29,6 @@ func IsSystemPrincipal(principals []Principal) bool {
 	return false
 }
 
-func GuestPayload() payloads.PrincipalPayload {
+func GuestPrincipalPayload() payloads.PrincipalPayload {
 	return payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: istructs.SysGuestLogin, ProfileWSID: istructs.GuestWSID}
 }
