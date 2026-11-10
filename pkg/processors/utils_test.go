@@ -79,17 +79,16 @@ func TestAnonymousOnlyAuthenticationResult(t *testing.T) {
 		PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "previous", ProfileWSID: 42},
 		Principals:       []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
 	}}
+	// Anonymous-only execution replaces every part of the previous authenticated identity
 	require.True(SetPrincipalsForAnonymousOnlyFunc(app, command, setter))
 	require.Equal([]iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAnonymous}}, setter.result.Principals)
 	require.Equal(payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: istructs.SysGuestLogin, ProfileWSID: istructs.GuestWSID}, setter.result.PrincipalPayload)
-	before := setter.result
+	// Other functions must leave the existing result untouched for ordinary authentication
+	expected := setter.result
 	require.False(SetPrincipalsForAnonymousOnlyFunc(app, other, setter))
-	require.Equal(before, setter.result)
+	require.Equal(expected, setter.result)
 }
 
 type authnResultSetter struct{ result iauthnz.AuthnResult }
 
 func (s *authnResultSetter) SetAuthnResult(result iauthnz.AuthnResult) { s.result = result }
-func (s *authnResultSetter) SetPrincipals(principals []iauthnz.Principal) {
-	s.result.Principals = principals
-}

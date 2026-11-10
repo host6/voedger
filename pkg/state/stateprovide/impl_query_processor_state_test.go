@@ -59,6 +59,7 @@ func TestQueryStateRequestSubject(t *testing.T) {
 	require.NoError(err)
 	value, err := host.MustExist(key)
 	require.NoError(err)
+	// Query state must preserve the profile and original token rather than substituting request Workspace 200
 	require.Equal("canonical", value.AsString(sys.Storage_RequestSubject_Field_Name))
 	require.Equal(int32(istructs.SubjectKind_User), value.AsInt32(sys.Storage_RequestSubject_Field_Kind))
 	require.Equal(int64(42), value.AsInt64(sys.Storage_RequestSubject_Field_ProfileWSID))

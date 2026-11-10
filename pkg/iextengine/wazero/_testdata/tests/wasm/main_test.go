@@ -6,7 +6,7 @@
 package main
 
 import (
- payloads "github.com/voedger/voedger/pkg/itokens-payloads"
+	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -68,6 +68,7 @@ func Test_ActualizerStorages(t *testing.T) {
 }
 
 func Test_CommandStorages(t *testing.T) {
+	require := require.New(t)
 	test := test.NewTestAPI(
 		teststate.ProcKind_CommandProcessor,
 		testPkg,
@@ -79,7 +80,7 @@ func Test_CommandStorages(t *testing.T) {
 		c.PutRecordID(appdef.SystemField_ID, 1)
 		c.PutInt32("Value", 42)
 	})
-	require.Len(t, newIds, 1)
+	require.Len(newIds, 1)
 
 	test.PutEvent(testWSID, appdef.NewFullQName(testPkg, "CommandTestStorages"), func(arg istructs.IObjectBuilder, _ istructs.ICUD) {
 		arg.PutInt64("IdToRead", int64(newIds[0]))

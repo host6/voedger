@@ -88,6 +88,7 @@ func TestBasicUsage_ChildWorkspaces(t *testing.T) {
 }
 
 func TestForeignAuthorization(t *testing.T) {
+	require := require.New(t)
 	vit := it.NewVIT(t, &it.SharedConfig_App1)
 	defer vit.TearDown()
 
@@ -119,7 +120,7 @@ func TestForeignAuthorization(t *testing.T) {
 		// now the foreign login could work in the workspace
 		vit.PostWS(parentWS, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(newPrn.Token))
 
-		// deactivate cdoc.Payload
+		// deactivate cdoc.Subject
 		body = fmt.Sprintf(`{"cuds": [{"sys.ID": %d,"fields": {"sys.IsActive": false}}]}`, cdocSubjectID)
 		vit.PostWS(parentWS, "c.sys.CUD", body)
 
@@ -128,7 +129,6 @@ func TestForeignAuthorization(t *testing.T) {
 	})
 
 	t.Run("enrich principal token", func(t *testing.T) {
-		require := require.New(t)
 		// 403 forbidden on try to execute a stricted operation in the child workspace using the non-enriched token
 		body = `{"cuds": [{"fields": {"sys.ID": 1,"sys.QName": "app1pkg.articles","name": "cola","article_manual": 1,"article_hash": 2,"hideonhold": 3,"time_active": 4,"control_active": 5}}]}`
 		vit.PostWS(childWS, "c.sys.CUD", body, httpu.Expect403())
@@ -195,7 +195,7 @@ func TestForeignAuthorization(t *testing.T) {
 			payloads.RoleType{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: childWS.WSID, QName: iauthnz.QNameRoleWorkspaceOwner})
 		require.ElementsMatch(expectedGrants, nextPayload.Roles)
 		expectedPayload := refreshedPayload
-		expectedPayload.Roles = nextPayload.Roles
+		expectedPayload.Roles = expectedGrants
 		require.Equal(expectedPayload, nextPayload)
 		require.Contains(nextPayload.Roles, payloads.RoleType{
 			Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: childWS.WSID, QName: iauthnz.QNameRoleWorkspaceOwner,
@@ -208,7 +208,6 @@ func TestForeignAuthorization(t *testing.T) {
 	})
 
 	t.Run("API token", func(t *testing.T) {
-		require := require.New(t)
 		// 403 forbidden on try to execute a stricted operation in the child workspace
 		body = `{"args":{"Schema":"app1pkg.articles"},"elements":[{"fields":["sys.ID"]}]}`
 		vit.PostWS(childWS, "q.sys.Collection", body, httpu.Expect403())

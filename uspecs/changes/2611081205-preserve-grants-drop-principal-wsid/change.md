@@ -103,9 +103,12 @@ References:
 
 - [x] update: [pkg/iauthnzimpl/impl_test.go](../../../pkg/iauthnzimpl/impl_test.go)
   - verify: original PrincipalPayload preservation, User/Device/Guest/API/System identity, legacy scopes, effective-role deduplication, Device eligibility, and empty results on failure
+  - reuse: merged MockAppStructs and MockRecords with descriptor fixtures; remove unused local app, record, view, and key implementations and unrelated fixture records
+  - verify: source-specific Global, Subject, and token roles detect skipped composition stages while shared roles remain deduplicated; normalized legacy grants also produce effective Principals
 
 - [x] update: [sys/storages/impl_subject_storage_test.go](../../../pkg/sys/storages/impl_subject_storage_test.go)
   - verify: PrincipalPayload identity projection and per-request callback freshness without Principal scanning
+  - consolidate: redundant User-shaped API and System rows into identity-value coverage and use one root assertion instance
 
 - [x] update: [state/stateprovide/impl_host_state_test.go](../../../pkg/state/stateprovide/impl_host_state_test.go)
   - verify: command state PrincipalPayload callbacks with request Workspace different from ProfileWSID
@@ -122,10 +125,12 @@ References:
 - [x] update: [processors/query/impl_test.go](../../../pkg/processors/query/impl_test.go)
   - verify: extension-visible original PrincipalPayload and request identity, failed authentication, sequential requests, and release
   - distinguish: failed authentication prevents extension execution; this integration test does not directly observe internal failure cleanup or workpiece reuse
+  - verify: sequential requests change profile, Alias, and Principals so stale identity fields cannot be masked by identical inputs
 
 - [x] update: [processors/query2/impl_test.go](../../../pkg/processors/query2/impl_test.go)
   - verify: result release and refresh routing/response ProfileWSID sourced from PrincipalPayload
   - reuse: the production implIQueryMessage for refresh requests instead of a local message double
+  - reuse: MockAppStructs.AppTokens in named profile-routing cases instead of a local app double
 
 - [x] update: [processors/n10n/impl_test.go](../../../pkg/processors/n10n/impl_test.go)
   - verify: per-Workspace subscription authorization and existing unauthorized/forbidden mapping
@@ -155,7 +160,8 @@ References:
 ### Authentication and consumers
 
 - [x] update: [pkg/coreutils/mock.go](../../../pkg/coreutils/mock.go)
-  - implement: shared MockAppStructs and MockRecords with a nil-safe result helper for reused app and record expectations
+  - extend: the merged MockAppStructs with nil-safe AppTokens expectations, retaining its existing IAppStructs compliance check in coreutils/mock_test.go
+  - reuse: shared MockRecords and other interface mocks supplied by AIR-5221 instead of duplicate local implementations
 
 - [x] update: [itokens-payloads/consts.go](../../../pkg/itokens-payloads/consts.go) and [itokens-payloads/types.go](../../../pkg/itokens-payloads/types.go)
   - implement: RoleScopeWorkspacesOwnedBy and RoleScopeWorkspace and explicit Scope in RoleType
@@ -258,3 +264,8 @@ References:
   - run: focused package regressions and documentation link, changed-file coverage, and whitespace checks during synchronization
   - result: tests pass for coreutils, iauthnz, iauthnzimpl, itokens-payloads, itokensjwt, processors, command, query, query2, oldacl, N10n, stateprovide, authnz, and storages; teststate compiles with no test files
   - result: every changed source and specification file outside change folders is linked in the plan, relative file links resolve, and git diff --check passes
+
+- [x] review: reuse merged AIR-5210 and AIR-5221 changes after rebasing onto main
+  - verify: production retains the merged role-scope validation and issuance contracts; tests use the merged shared mocks without duplicating their implementations
+  - verify: assertion setup follows AGENTS.md in all 28 changed root tests that use assertions; local doubles remain only where dependency cycles prevent sharing
+  - result: focused package tests, full TestForeignAuthorization, nested WASM Test_CommandStorages, and lint for changes since main pass

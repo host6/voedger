@@ -1411,16 +1411,24 @@ func TestAuthenticationResultReachesQueryExtension(t *testing.T) {
 		}))
 	})
 	defer cleanup()
-	makeResult := func(login string) iauthnz.AuthnResult {
-		return iauthnz.AuthnResult{PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: login, ProfileWSID: 42},
-			Principals: []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceOwner}},
-		}
+	expectedResults := map[string]iauthnz.AuthnResult{
+		"first": {
+			PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "first", ProfileWSID: 42},
+			Principals:       []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceOwner}},
+		},
+		"second": {
+			PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "second", Alias: "alias", ProfileWSID: 43},
+			Principals: []iauthnz.Principal{
+				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceOwner},
+				{Kind: iauthnz.PrincipalKind_User, Name: "second"},
+			},
+		},
 	}
 	authn := queryResultAuthenticator(func(req iauthnz.AuthnRequest) (iauthnz.AuthnResult, error) {
 		if req.Token == "bad" {
-			return makeResult("partial"), errors.New("invalid token")
+			return expectedResults["first"], errors.New("invalid token")
 		}
-		return makeResult(req.Token), nil
+		return expectedResults[req.Token], nil
 	})
 	channel := make(iprocbus.ServiceChannel)
 	service := ProvideServiceFactory()(channel, appParts, 3, imetrics.Provide(), "vvm", authn, itokensjwt.TestTokensJWT(), nil, resources, isecretsimpl.TestSecretReader, state.StateOpts{}, nil)
@@ -1429,27 +1437,32 @@ func TestAuthenticationResultReachesQueryExtension(t *testing.T) {
 	wg.Go(func() { service.Run(ctx) })
 	defer func() { cancel(); wg.Wait() }()
 	for _, token := range []string{"first", "bad", "second"} {
-		requestSender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, _ bus.Request, responder bus.IResponder) {
-			channel <- NewQueryMessage(requestCtx, appName, partID, wsID, responder, []byte(`{"args":{},"elements":[{"fields":["login"]}]}`), query, "host", token)
+		t.Run(token, func(t *testing.T) {
+			requestSender := bus.NewIRequestSender(testingu.MockTime, func(requestCtx context.Context, _ bus.Request, responder bus.IResponder) {
+				channel <- NewQueryMessage(requestCtx, appName, partID, wsID, responder, []byte(`{"args":{},"elements":[{"fields":["login"]}]}`), query, "host", token)
+			})
+			rows, meta, responseErr, err := requestSender.SendRequest(ctx, bus.Request{})
+			require.NoError(err)
+			for range rows {
+			}
+			if token == "bad" {
+				// A partial result accompanying an authentication error must never reach the extension
+				require.Equal(http.StatusUnauthorized, meta.StatusCode)
+				require.Error(*responseErr)
+				require.Empty(observed)
+				return
+			}
+			require.Equal(http.StatusOK, meta.StatusCode)
+			require.NoError(*responseErr)
+			require.Len(observed, 1)
+			// Payload, Principals, and RequestSubject must reflect this request, including a changed profile
+			actual := <-observed
+			expected := expectedResults[token]
+			require.Equal(expected, actual.result)
+			require.Equal(expected.PrincipalPayload.Login, actual.login)
+			require.Equal(int64(expected.PrincipalPayload.ProfileWSID), actual.profile)
+			require.Equal(token, actual.token)
 		})
-		rows, meta, responseErr, err := requestSender.SendRequest(ctx, bus.Request{})
-		require.NoError(err)
-		for range rows {
-		}
-		if token == "bad" {
-			require.Equal(http.StatusUnauthorized, meta.StatusCode)
-			require.Error(*responseErr)
-			require.Empty(observed)
-			continue
-		}
-		require.Equal(http.StatusOK, meta.StatusCode)
-		require.NoError(*responseErr)
-		require.Len(observed, 1)
-		result := <-observed
-		require.Equal(makeResult(token), result.result)
-		require.Equal(token, result.login)
-		require.Equal(int64(42), result.profile)
-		require.Equal(token, result.token)
 	}
 }
 
