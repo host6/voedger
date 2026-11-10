@@ -1,5 +1,5 @@
 ---
-change_id: 2611081205-separate-principals-and-grants
+change_id: 2611081205-preserve-grants-drop-principal-wsid
 type: fix
 issue_url: https://untill.atlassian.net/browse/AIR-5213
 domains: [prod]
@@ -7,7 +7,7 @@ scope: [auth, apps]
 breaking: true
 ---
 
-# Change request: Request-scoped principals and token enrichment
+# Change request: Preserve initial grants on token enrichment + drop Principal.WSID
 
 Refs:
 
@@ -15,7 +15,17 @@ Refs:
 
 ## Why
 
-Principals mix request Workspace applicability with Subject profile identity. Returning the original token payload separately preserves identity and original grants, while a uniform enrichment binding removes the need to reconstruct role origins.
+Token enrichment must preserve the initial grants, including their scope and Workspace binding, when adding roles effective in the request Workspace. `Principal.WSID` cannot describe both: for roles it denotes the request Workspace, while for Users and Devices it denotes the Subject's profile Workspace. The original token payload must remain available separately so enrichment does not reconstruct or replace initial grants from effective Principals.
+
+For example:
+
+- Workspace `100` owns Workspace `200`, which owns Workspace `300`
+- A regular token contains `{Scope: WorkspacesOwnedBy, WSID: 100, QName: WorkspaceOwner}`, granting access to Workspace `200`
+- Authentication in Workspace `200` emits an effective `WorkspaceOwner` Principal; its request Workspace does not identify the initial grant's binding to `100`
+- Enrichment in Workspace `200` adds `{Scope: WorkspacesOwnedBy, WSID: 200, QName: WorkspaceOwner}`, allowing access to Workspace `300`
+- The initial grant bound to `100` must remain unchanged alongside the new grant bound to `200`; rebuilding grants from effective Principals alone cannot recover that initial binding
+
+This change preserves the accepted parent-to-child propagation policy. It keeps initial grants separately from effective Principals and drops `Principal.WSID`, using request context for the target Workspace and the original payload for Subject identity.
 
 ## What
 
