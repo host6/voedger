@@ -5,8 +5,8 @@
 package sys_it
 
 import (
-	"encoding/json"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
@@ -128,83 +128,76 @@ func TestForeignAuthorization(t *testing.T) {
 		vit.PostWS(parentWS, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(newPrn.Token), httpu.Expect403())
 	})
 
-	t.Run("enrich principal token", func(t *testing.T) {
-		// 403 forbidden on try to execute a stricted operation in the child workspace using the non-enriched token
-		body = `{"cuds": [{"fields": {"sys.ID": 1,"sys.QName": "app1pkg.articles","name": "cola","article_manual": 1,"article_hash": 2,"hideonhold": 3,"time_active": 4,"control_active": 5}}]}`
-		vit.PostWS(childWS, "c.sys.CUD", body, httpu.Expect403())
-
-		// create cdoc.sys.Subject with a role the custom func execution could be authorized with
-		body = fmt.Sprintf(`{"cuds": [{"fields": {"sys.ID": 1,"sys.QName": "sys.Subject","Login": "login","SubjectKind":%d,"Roles": %q,"ProfileWSID":%d}}]}`,
-			istructs.SubjectKind_User, iauthnz.QNameRoleWorkspaceOwner, newPrn.ProfileWSID)
-		vit.PostWS(parentWS, "c.sys.CUD", body)
-
-		// enrich the principal token in the parentWS
-		// basic auth
-		body = `{"args":{"Login":"login"},"elements":[{"fields":["EnrichedToken"]}]}`
-		resp := vit.PostWS(parentWS, "q.sys.EnrichPrincipalToken", body)
-		enrichedToken := resp.SectionRow()[0].(string)
-
-		// ok to execute a stricted operation in the child workspace using the enriched token
-		// expect no errors
-		body = `{"cuds": [{"fields": {"sys.ID": 1,"sys.QName": "app1pkg.articles","name": "cola","article_manual": 1,"article_hash": 2,"hideonhold": 3,"time_active": 4,"control_active": 5}}]}`
-		vit.PostWS(childWS, "c.sys.CUD", body, httpu.WithAuthorizeBy(enrichedToken))
-		enrichedPrincipalPayload, enrichedGenericPayload := decodeScopedPrincipalToken(t, require, vit, enrichedToken)
-		var originalPayload payloads.PrincipalPayload
-		_, err := vit.ValidateToken(parentWS.Owner.Token, &originalPayload)
+	t.Run("Enrichment retains initial access and adds roles only in the request workspace", func(t *testing.T) {
+		as, err := vit.IAppStructsProvider.BuiltIn(istructs.AppQName_test1_app1)
 		require.NoError(err)
-		require.Subset(enrichedPrincipalPayload.Roles, originalPayload.Roles)
-		originalPayload.Roles = enrichedPrincipalPayload.Roles
-		require.Equal(originalPayload, enrichedPrincipalPayload)
-		require.Contains(enrichedPrincipalPayload.Roles, payloads.RoleType{
-			Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: parentWS.WSID, QName: iauthnz.QNameRoleWorkspaceOwner,
-		})
-		for _, role := range enrichedPrincipalPayload.Roles {
-			require.Equal(payloads.RoleScopeWorkspacesOwnedBy, role.Scope)
+		readRole := appdef.NewQName("app1pkg", "SpecialAPITokenRole")
+		originalPayload := payloads.PrincipalPayload{
+			Login: newLoginName, SubjectKind: istructs.SubjectKind_User, ProfileWSID: newPrn.ProfileWSID,
+			Roles: []payloads.RoleType{{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: parentWS.WSID, QName: readRole}},
 		}
+		originalToken, err := as.AppTokens().IssueToken(time.Hour, &originalPayload)
+		require.NoError(err)
+		readBody := `{"args":{"Schema":"app1pkg.articles"},"elements":[{"fields":["sys.ID"]}]}`
+		cudBody := `{"cuds": [{"fields": {"sys.ID": 1,"sys.QName": "app1pkg.articles","name": "cola","article_manual": 1,"article_hash": 2,"hideonhold": 3,"time_active": 4,"control_active": 5}}]}`
 
-		enrichBody := `{"args":{"Login":"login"},"elements":[{"fields":["EnrichedToken"]}]}`
-		repeatedToken := vit.PostWS(parentWS, "q.sys.EnrichPrincipalToken", enrichBody,
+		// The initial owned-by grant permits reads, but not writes, in children of parentWS
+		vit.PostWS(childWS, "q.sys.Collection", readBody, httpu.WithAuthorizeBy(originalToken))
+		vit.PostWS(childWS, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(originalToken), httpu.Expect403())
+		subjectBody := fmt.Sprintf(`{"cuds": [{"fields": {"sys.ID": 1,"sys.QName": "sys.Subject","Login": %q,"SubjectKind":%d,"Roles": %q,"ProfileWSID":%d}}]}`,
+			newLoginName, istructs.SubjectKind_User, iauthnz.QNameRoleWorkspaceOwner, newPrn.ProfileWSID)
+		subjectID := vit.PostWSSys(childWS, "c.sys.CUD", subjectBody).NewID()
+		enrichBody := fmt.Sprintf(`{"args":{"Login":%q},"elements":[{"fields":["EnrichedToken"]}]}`, newLoginName)
+		enrichedToken := vit.PostWS(childWS, "q.sys.EnrichPrincipalToken", enrichBody,
+			httpu.WithAuthorizeBy(originalToken)).SectionRow()[0].(string)
+		actualPayload, enrichedMetadata := decodeScopedPrincipalToken(t, require, vit, enrichedToken)
+		expectedGrants := []payloads.RoleType{
+			{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: parentWS.WSID, QName: readRole},
+			{Scope: payloads.RoleScopeWorkspace, WSID: childWS.WSID, QName: iauthnz.QNameRoleWorkspaceOwner},
+		}
+		require.ElementsMatch(expectedGrants, actualPayload.Roles)
+		expectedPayload := originalPayload
+		expectedPayload.Roles = actualPayload.Roles
+		require.Equal(expectedPayload, actualPayload)
+
+		// Remove the Subject role so only the captured exact grant can authorize writes
+		vit.PostWSSys(childWS, "c.sys.CUD", fmt.Sprintf(`{"cuds": [{"sys.ID": %d,"fields": {"sys.IsActive": false}}]}`, subjectID))
+		vit.PostWS(childWS, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(originalToken), httpu.Expect403())
+		vit.PostWS(childWS, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(enrichedToken),
+			httpu.WithExpectedCode(http.StatusOK), httpu.WithNoRetryPolicy())
+		repeatedToken := vit.PostWS(childWS, "q.sys.EnrichPrincipalToken", enrichBody,
 			httpu.WithAuthorizeBy(enrichedToken)).SectionRow()[0].(string)
 		repeatedPayload, _ := decodeScopedPrincipalToken(t, require, vit, repeatedToken)
-		require.Equal(enrichedPrincipalPayload, repeatedPayload)
+		require.Equal(actualPayload, repeatedPayload)
 
+		// Refresh must retain both original owned-by grants and newly captured exact grants
 		refreshBody := `{"args":{},"elements":[{"fields":["NewPrincipalToken"]}]}`
-		refreshedToken := vit.PostProfile(parentWS.Owner, "q.sys.RefreshPrincipalToken", refreshBody,
+		refreshedToken := vit.PostProfile(newPrn, "q.sys.RefreshPrincipalToken", refreshBody,
 			httpu.WithAuthorizeBy(repeatedToken)).SectionRow()[0].(string)
 		refreshedPayload, refreshedMetadata := decodeScopedPrincipalToken(t, require, vit, refreshedToken)
 		require.Equal(repeatedPayload, refreshedPayload)
-		require.Equal(enrichedGenericPayload.AppQName, refreshedMetadata.AppQName)
-		require.Equal(enrichedGenericPayload.Duration, refreshedMetadata.Duration)
-		vit.PostWS(childWS, "c.sys.CUD", body, httpu.WithAuthorizeBy(refreshedToken))
+		require.Equal(enrichedMetadata.AppQName, refreshedMetadata.AppQName)
+		require.Equal(enrichedMetadata.Duration, refreshedMetadata.Duration)
+		vit.PostWS(childWS, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(refreshedToken),
+			httpu.WithExpectedCode(http.StatusOK), httpu.WithNoRetryPolicy())
 
 		grandchildName := vit.NextName()
-		grandchildBody, err := json.Marshal(map[string]any{"args": map[string]any{
-			"WSName": grandchildName, "WSKind": "app1pkg.test_ws",
-			"WSKindInitializationData": `{"IntFld":10}`, "WSClusterID": 1,
-		}})
-		require.NoError(err)
-		vit.PostWS(childWS, "c.sys.InitChildWorkspace", string(grandchildBody), httpu.WithAuthorizeBy(refreshedToken))
+		vit.InitChildWorkspace(it.SimpleWSParams(grandchildName), childWS, httpu.WithAuthorizeBy(refreshedToken))
 		grandchildWS := vit.WaitForChildWorkspace(childWS, grandchildName, httpu.WithAuthorizeBy(refreshedToken))
-		vit.PostWS(grandchildWS, "c.sys.CUD", body, httpu.WithAuthorizeBy(refreshedToken), httpu.Expect403())
-		nextToken := vit.PostWS(childWS, "q.sys.EnrichPrincipalToken", enrichBody,
-			httpu.WithAuthorizeBy(refreshedToken)).SectionRow()[0].(string)
-		nextPayload, _ := decodeScopedPrincipalToken(t, require, vit, nextToken)
-		expectedGrants := append([]payloads.RoleType(nil), refreshedPayload.Roles...)
-		expectedGrants = append(expectedGrants,
-			payloads.RoleType{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: childWS.WSID, QName: iauthnz.QNameRoleAuthenticatedUser},
-			payloads.RoleType{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: childWS.WSID, QName: iauthnz.QNameRoleWorkspaceOwner})
-		require.ElementsMatch(expectedGrants, nextPayload.Roles)
-		expectedPayload := refreshedPayload
-		expectedPayload.Roles = expectedGrants
-		require.Equal(expectedPayload, nextPayload)
-		require.Contains(nextPayload.Roles, payloads.RoleType{
-			Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: childWS.WSID, QName: iauthnz.QNameRoleWorkspaceOwner,
-		})
-		vit.PostWS(grandchildWS, "c.sys.CUD", body, httpu.WithAuthorizeBy(nextToken))
-		nextRepeatedToken := vit.PostWS(childWS, "q.sys.EnrichPrincipalToken", enrichBody,
-			httpu.WithAuthorizeBy(nextToken)).SectionRow()[0].(string)
-		nextRepeatedPayload, _ := decodeScopedPrincipalToken(t, require, vit, nextRepeatedToken)
-		require.Equal(nextPayload, nextRepeatedPayload)
+		siblingName := vit.NextName()
+		vit.InitChildWorkspace(it.SimpleWSParams(siblingName), parentWS)
+		siblingWS := vit.WaitForChildWorkspace(parentWS, siblingName)
+
+		// The added owner role grants no writes in the target's owner, child, or sibling
+		for _, ws := range []*it.AppWorkspace{parentWS, grandchildWS, siblingWS} {
+			vit.PostWS(ws, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(refreshedToken), httpu.Expect403(), httpu.WithNoRetryPolicy())
+		}
+		vit.PostWS(grandchildWS, "q.sys.Collection", readBody, httpu.WithAuthorizeBy(refreshedToken), httpu.Expect403(), httpu.WithNoRetryPolicy())
+
+		// Original read access to another child of parentWS survives enrichment and refresh
+		vit.PostWS(siblingWS, "q.sys.Collection", readBody, httpu.WithAuthorizeBy(originalToken))
+		vit.PostWS(siblingWS, "q.sys.Collection", readBody, httpu.WithAuthorizeBy(refreshedToken),
+			httpu.WithExpectedCode(http.StatusOK), httpu.WithNoRetryPolicy())
 	})
 
 	t.Run("API token", func(t *testing.T) {

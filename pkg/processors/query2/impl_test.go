@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/bus"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/coreutils/federation"
@@ -203,6 +204,7 @@ func TestWorkpieceAuthenticationResult(t *testing.T) {
 	expected := iauthnz.AuthnResult{
 		PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "user", ProfileWSID: 42},
 		Principals:       []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
+		SubjectRoles:     []appdef.QName{iauthnz.QNameRoleSystem},
 	}
 	wp.SetAuthnResult(expected)
 

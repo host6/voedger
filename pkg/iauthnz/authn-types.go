@@ -38,6 +38,7 @@ type Principal struct {
 type AuthnResult struct {
 	PrincipalPayload payloads.PrincipalPayload
 	Principals       []Principal
+	SubjectRoles     []appdef.QName
 }
 
 type PrincipalKindType byte

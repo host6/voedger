@@ -96,7 +96,7 @@ Provider:
 Consumers:
 
 - 📦 apps
-  - Uses effective `Principal` values for application ACL evaluation and System checks, the original payload for RequestSubject and identity logging, and both result fields for token enrichment
+  - Uses effective `Principal` values for application ACL evaluation and System checks, the original payload for RequestSubject and identity logging, and the original payload plus captured Subject roles for token enrichment
 
 #### auth: authentication API (ohs)
 
@@ -303,6 +303,7 @@ The request-local result of authentication, consumed within its target Applicati
 | --- | --- | --- |
 | `payload` | `PrincipalToken` payload | Validated original claims, including Subject identity and original RoleGrant values |
 | `principals` | `list<Principal>` | Effective authorization inputs for this request |
+| `subject_roles` | `list<QName>` | Distinct roles read from Subjects in the request Workspace for canonical Login and Alias |
 
 Invariants:
 
@@ -310,6 +311,8 @@ Invariants:
 - Subject kind, canonical Login, Alias, and ProfileWorkspace remain available even when API-token or System composition omits User or Device Principals
 - Anonymous requests use a Guest payload with User kind, canonical Login `sys.Guest`, ProfileWorkspace `GuestWSID`, and no token grants; this synthetic identity does not represent a validated bearer token
 - A LoginAlias may resolve Subject-role assignments but does not replace the canonical Login
+- Subject roles are retained separately even when the same role is also effective through GlobalRoles, token grants, or request context
+- API-token authentication skips Subject lookup and returns no Subject roles
 - The target Application and Workspace stay in request context; the ProfileWorkspace identifies the Subject and does not independently authorize an operation
 - Failed authentication returns no usable partial result
 
@@ -350,7 +353,7 @@ Invariants:
 - `Principal` has no Workspace identifier; neither a role's source Workspace nor a Subject's ProfileWorkspace forms part of its value or equality
 - Effective Principals are valid only within the request context that produced them and are not transferable authorization inputs for another Application or Workspace
 - The original token payload provides identity independently of whether composition emits a User or Device Principal
-- Only effective Role Principals contribute new enrichment grants; original grants remain in the payload
+- Effective Principals alone do not determine enrichment additions; only roles read from Subjects contribute new grants, while original grants remain in the payload
 
 #### PrincipalToken
 
@@ -375,20 +378,21 @@ Invariants:
 - PrincipalToken validation and renewal do not read `CanonicalLoginEnablement`.
 - LoginAlias or canonical enablement changes do not rewrite an already-issued PrincipalToken.
 - `api_token` selects restricted principal composition, while each `RoleGrant` carries its applicability through `RoleScope`
-- Existing scope combinations remain `RoleScopeWorkspace` for API tokens and `RoleScopeWorkspacesOwnedBy` for regular User and Device tokens
+- Regular User and Device tokens apply both exact-Workspace and owned-by grants; API tokens apply only exact-Workspace grants
 - Legacy tokens without explicit role scopes retain the scope implied by their original token kind
 
 Enrichment rules:
 
 - Enrichment requires a valid bearer token and the endpoint's existing authorization
 - Enrichment copies the original payload and preserves all carried grants, including grants that did not apply to this request
-- Each effective Role Principal produces a proposed grant with its qualified role name and the request Workspace identifier, independently of its origin
-- New regular-token grants use `RoleScopeWorkspacesOwnedBy`; new API-token grants use `RoleScopeWorkspace`
-- New WorkspaceDevice grants use the request Workspace, including roles derived from Device eligibility; this replaces the previous ProfileWorkspace binding for derived WorkspaceDevice roles
-- A derived WorkspaceDevice role in request Workspace `200` for ProfileWorkspace `100` therefore adds an owned-by grant bound to `200`; an already-carried grant bound to `100` remains unchanged
+- Only roles read from Subjects in the request Workspace produce proposed grants with their qualified role name, `RoleScopeWorkspace`, and the request Workspace identifier
+- Roles supplied only by GlobalRoles, existing grants, built-in authentication roles, ownership, or Device eligibility do not produce new grants
+- A role that also comes from another source is still captured when a Subject grants it
+- A WorkspaceDevice role from a Subject in request Workspace `200` for ProfileWorkspace `100` adds an exact-Workspace grant bound to `200`; an already-carried grant bound to `100` remains unchanged
+- API-token enrichment preserves the existing grants without additions because API-token authentication does not read Subjects
 - Proposed additions are deduplicated using [RoleGrant equality](#rolegrant), and ACL inheritance or legacy ACL expansion does not independently add grants
-- Repeated enrichment in one Workspace with unchanged effective roles is idempotent; enrichment in an authorized child Workspace can add grants for its directly owned Workspaces while retaining earlier grants
-- A single request does not recursively traverse ownership levels; API-token grants remain exact-Workspace grants
+- Repeated enrichment in one Workspace with unchanged effective roles is idempotent
+- Added grants apply only in the request Workspace and grant no access to its owner, children, or siblings; initial grants retain their original applicability
 - Subject identity claims, Alias, GlobalRoles, and token kind are preserved
 
 #### RoleGrant

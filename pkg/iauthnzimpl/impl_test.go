@@ -319,6 +319,17 @@ func TestAuthenticate(t *testing.T) {
 			},
 		},
 		{
+			desc: "regular exact grant applies in its target even without a Workspace descriptor",
+			req:  iauthnz.AuthnRequest{Host: "127.0.0.1", RequestWSID: 1, Token: exactRoleToken},
+			expectedPrincipals: []iauthnz.Principal{
+				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
+				{Kind: iauthnz.PrincipalKind_User, Name: login},
+				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleProfileOwner},
+				{Kind: iauthnz.PrincipalKind_Role, QName: testRole},
+				{Kind: iauthnz.PrincipalKind_Host, Name: "127.0.0.1"},
+			},
+		},
+		{
 			desc: "regular token does not reinterpret an exact scope as an owned-by grant",
 			req:  iauthnz.AuthnRequest{Host: "127.0.0.1", RequestWSID: 2, Token: exactRoleToken},
 			expectedPrincipals: []iauthnz.Principal{
@@ -609,7 +620,7 @@ func TestAuthenticationPayload(t *testing.T) {
 				GlobalRoles: []appdef.QName{role, globalRole},
 				Roles: []payloads.RoleType{
 					{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: 100, QName: role},
-					{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: 100, QName: tokenRole},
+					{Scope: payloads.RoleScopeWorkspace, WSID: 200, QName: tokenRole},
 					{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: 999, QName: unmatchedRole},
 				},
 			}
@@ -624,7 +635,7 @@ func TestAuthenticationPayload(t *testing.T) {
 				if login == "alias" {
 					return []appdef.QName{role, subjectRole}, nil
 				}
-				return nil, nil
+				return []appdef.QName{role}, nil
 			}
 			actualDeviceChecks := 0
 			authn := NewDefaultAuthenticator(getter, IsDeviceAllowedFuncs{istructs.AppQName_test1_app1: func(_ istructs.IAppStructs, actualRequestWSID, actualProfileWSID istructs.WSID) (bool, error) {
@@ -643,6 +654,8 @@ func TestAuthenticationPayload(t *testing.T) {
 			// Both identifiers must be queried so alias-based subject assignments are considered
 			expectedLogins := []string{"canonical", "alias"}
 			require.Equal(expectedLogins, actualLogins)
+			// Subject roles remain available even when GlobalRoles already supplied the same effective role
+			require.Equal([]appdef.QName{role, subjectRole}, actual.SubjectRoles)
 
 			// Only matching grants become Principals, while all distinct sources and the Host remain effective
 			expectedPrincipals := []iauthnz.Principal{
@@ -723,6 +736,11 @@ func TestAuthenticationPayload(t *testing.T) {
 			}
 			require.Equal(expectedSubjectLookups, actualSubjectLookups)
 			require.ElementsMatch(expectedPrincipals, actual.Principals)
+			if source == "Subject System role" {
+				require.Equal([]appdef.QName{iauthnz.QNameRoleSystem}, actual.SubjectRoles)
+			} else {
+				require.Empty(actual.SubjectRoles)
+			}
 		})
 	}
 }
@@ -808,9 +826,12 @@ func TestSubjectLookupFailureDiscardsAuthenticationResult(t *testing.T) {
 	expectedError := errors.New("Subject storage unavailable")
 	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, timeu.NewITime())
 	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(istructs.AppQName_test1_app1)
-	token, err := appTokens.IssueToken(time.Hour, &payloads.PrincipalPayload{Login: "canonical", SubjectKind: istructs.SubjectKind_User, ProfileWSID: 42, GlobalRoles: []appdef.QName{iauthnz.QNameRoleWorkspaceOwner}})
+	token, err := appTokens.IssueToken(time.Hour, &payloads.PrincipalPayload{Login: "canonical", Alias: "alias", SubjectKind: istructs.SubjectKind_User, ProfileWSID: 42, GlobalRoles: []appdef.QName{iauthnz.QNameRoleWorkspaceOwner}})
 	require.NoError(err)
-	authn := NewDefaultAuthenticator(func(context.Context, string, istructs.IAppStructs, istructs.WSID) ([]appdef.QName, error) {
+	authn := NewDefaultAuthenticator(func(_ context.Context, login string, _ istructs.IAppStructs, _ istructs.WSID) ([]appdef.QName, error) {
+		if login == "canonical" {
+			return []appdef.QName{appdef.NewQName("test", "subject")}, nil
+		}
 		return nil, expectedError
 	}, nil)
 	actual, actualError := authn.Authenticate(t.Context(), &coreutils.MockAppStructs{}, appTokens, iauthnz.AuthnRequest{RequestWSID: 200, Host: "host", Token: token})
@@ -818,7 +839,7 @@ func TestSubjectLookupFailureDiscardsAuthenticationResult(t *testing.T) {
 	// Callers need the original storage failure to diagnose failed authentication
 	require.ErrorIs(actualError, expectedError)
 
-	// A failed lookup must not expose the decoded identity, earlier global roles, or host principal
+	// A failed alias lookup must discard identity, GlobalRoles, and the earlier canonical Subject roles
 	require.Equal(iauthnz.AuthnResult{}, actual)
 }
 

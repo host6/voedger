@@ -66,7 +66,7 @@ Role sources
   - Shared concept; see [arch.md#shared-concepts](./arch.md#shared-concepts). The single programmatic surface exposed to `*apps`; implemented by `implIAuthenticator.Authenticate`.
   - Effective Principals contain no WSID; the Application and RequestWSID stay in request context, and profile identity comes from [PrincipalPayload](./context.md#authnresult)
   - A successful result carries identity even when API-token or System composition omits User and Device Principals; failed authentication must not expose a partial result for authorization
-  - AuthnResult has exactly PrincipalPayload (the original validated PrincipalPayload) and Principals (effective request-local authorization inputs); composition leaves payload grants unchanged and deduplicates effective Principals by Kind, Name, QName, and ID
+  - AuthnResult contains PrincipalPayload (the original validated PrincipalPayload), Principals (effective request-local authorization inputs), and SubjectRoles (distinct roles read from Subjects in the current Workspace); composition leaves payload grants unchanged and deduplicates effective Principals by Kind, Name, QName, and ID
 
 ### Composition
 
@@ -76,6 +76,7 @@ Role sources
 
 - `[Subjects reader]`
   - Reads Subject roles for the canonical Login and token-snapshotted Alias in RequestWSID, or sys.Guest for anonymous requests, and emits WSID-free Role Principals
+  - Retains each distinct Subject role in AuthnResult.SubjectRoles independently of Principal deduplication; roles already supplied by other sources remain eligible for Subject-role enrichment
   - impl: [pkg/iauthnzimpl/impl.go#Authenticate](../../../../pkg/iauthnzimpl/impl.go)
 
 - `[Workspace role deriver]`
@@ -94,9 +95,9 @@ Four sources by origin contribute to a request's principal set; each is enumerat
   - Origin: `[[Workspace membership]]` writes `[(cdoc.sys.Subject)]` rows in the inviting workspace as part of the join flow; see [arch-membership.md](./arch-membership.md).
 
 - `[Token-carried]`
-  - Composition: regular tokens emit GlobalRoles and matching owned-by roles; API tokens emit matching exact-Workspace roles, with all source grants retained unchanged in PrincipalPayload
+  - Composition: regular tokens emit GlobalRoles and matching exact-Workspace or owned-by roles; API tokens emit matching exact-Workspace roles, with all source grants retained unchanged in PrincipalPayload
   - Origin: `[[Authentication]]` snapshots `GlobalRoles` at sign-in, including updates made through `[c.registry.UpdateGlobalRoles]`; see [arch-authn.md](./arch-authn.md). Token role grants are populated by API-token issuance and `[q.sys.EnrichPrincipalToken]`; their lifecycle and scope encoding are defined in [Token management](./arch-tokens.md)
-  - The existing composition stages remain intact: API tokens process exact-Workspace grants before returning, while regular User/Device tokens process owned-by grants after their existing System short-circuits and descriptor-based role derivation. Scope does not introduce new role sources, descriptor reads, or token-kind and scope combinations in this change
+  - API tokens process exact-Workspace grants before returning, while regular User/Device tokens process exact-Workspace and owned-by grants after their existing System short-circuits and descriptor-based role derivation. Exact matching does not require a Workspace descriptor; owned-by matching requires its OwnerWSID
 
 - `[Request-context]`
   - Origin: computed at composition time from request state (`RequestWSID`, `Host`, token presence, `ProfileWSID`, workspace descriptor's `OwnerWSID`, app-supplied `isDeviceAllowed`), not from any persisted record.
@@ -108,10 +109,10 @@ Four sources by origin contribute to a request's principal set; each is enumerat
 
 Token-carried role matching:
 
-| Role scope                   | Matching condition                                                              | Existing composition stage |
-| ---------------------------- | ------------------------------------------------------------------------------- | -------------------------- |
-| `RoleScopeWorkspace`         | `role.WSID == RequestWSID`                                                      | API token                  |
-| `RoleScopeWorkspacesOwnedBy` | The request Workspace descriptor exists and `role.WSID == descriptor.OwnerWSID` | Regular User/Device token  |
+| Role scope                   | Matching condition                                                             | Composition stage                |
+| ---------------------------- | ------------------------------------------------------------------------------ | -------------------------------- |
+| `RoleScopeWorkspace`         | `role.WSID == RequestWSID`                                                      | API or regular User/Device token |
+| `RoleScopeWorkspacesOwnedBy` | The request Workspace descriptor exists and `role.WSID == descriptor.OwnerWSID` | Regular User/Device token        |
 
 
 VSQL role inheritance (e.g., `ProfileOwner -> WorkspaceOwner`) is expanded later by the ACL engine, not during composition; see `[Role inheritance map]` above.
@@ -131,18 +132,18 @@ VSQL role inheritance (e.g., `ProfileOwner -> WorkspaceOwner`) is expanded later
        -> emit AuthenticatedUser
        -> if API token: emit matching exact-Workspace roles and return
        -> emit GlobalRoles
-       -> [Subjects reader]: emit roles matching canonical Login and Alias
+       -> [Subjects reader]: emit roles matching canonical Login and Alias and retain their distinct names in SubjectRoles
        -> validate SubjectKind using the existing regular-token rules
        -> if System role exists: emit Host and return
        -> if PrincipalPayload.ProfileWSID is null: emit System and Host and return
        -> emit User or Device Principal
        -> [Workspace role deriver]: read Workspace descriptor and derive contextual roles
-       -> emit matching owned-by token roles
+       -> emit exact token roles matching RequestWSID and owned-by roles matching the descriptor's OwnerWSID
        -> emit Host
-       -> return AuthnResult containing original PrincipalPayload and effective Principals
+       -> return AuthnResult containing original PrincipalPayload, effective Principals, and SubjectRoles
 ```
 
-Device eligibility is evaluated in its existing stage even when GlobalRoles or Subject roles already supplied WorkspaceDevice. A successful check contributes the same effective Role value, which is deduplicated. The result carries no source or enrichment metadata. Enrichment uses the [uniform binding policy](./context.md#principaltoken) without repeating eligibility checks or Subject reads.
+Device eligibility is evaluated in its existing stage even when GlobalRoles or Subject roles already supplied WorkspaceDevice. A successful check contributes the same effective Role value, which is deduplicated. Only a WorkspaceDevice role read from Subjects is retained in SubjectRoles for enrichment; GlobalRoles and eligibility alone do not create a new grant. Enrichment uses that snapshot without repeating eligibility checks or Subject reads.
 
 ### ACL evaluation by \*apps
 
@@ -156,7 +157,7 @@ Device eligibility is evaluated in its existing stage even when GlobalRoles or S
 
 ## Notes
 
-The System short-circuits retain their existing positions after GlobalRoles and Subject-role lookup and before User/Device Principal emission, descriptor reads, and owned-by token-grant matching. PrincipalPayload remains available, and Host is still emitted for regular tokens. API-token composition returns earlier without Host, GlobalRoles, Subject reads, descriptor reads, or Workspace role derivation. These changes do not expand supported token-kind and scope combinations or change existing authorization decisions.
+The System short-circuits retain their existing positions after GlobalRoles and Subject-role lookup and before User/Device Principal emission, descriptor reads, and token-grant matching. PrincipalPayload remains available, and Host is still emitted for regular tokens. API-token composition returns earlier without Host, GlobalRoles, Subject reads, descriptor reads, or Workspace role derivation. Regular tokens also honor exact-Workspace grants so newly enriched roles apply only in their target Workspace; existing owned-by grants retain their meaning.
 
 
 `Anonymous`, `Guest`, `Everyone`, and `AuthenticatedUser` come from `pkg/iauthnz/authn-types.go` and are reserved names; ACL rules in `apps` reference these QNames to express coverage levels.

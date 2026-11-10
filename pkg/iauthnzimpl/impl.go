@@ -29,6 +29,12 @@ func (i *implIAuthenticator) Authenticate(ctx context.Context, as istructs.IAppS
 			result.Principals = append(result.Principals, principal)
 		}
 	}
+	addSubjectRole := func(qname appdef.QName) {
+		addRole(qname)
+		if !slices.Contains(result.SubjectRoles, qname) {
+			result.SubjectRoles = append(result.SubjectRoles, qname)
+		}
+	}
 	if req.Token == "" {
 		// add user with login "sys.Guest"
 		result.PrincipalPayload = iauthnz.GuestPrincipalPayload()
@@ -43,7 +49,7 @@ func (i *implIAuthenticator) Authenticate(ctx context.Context, as istructs.IAppS
 			return result, err
 		}
 		for _, roleFromSubject := range rolesFromSubjects {
-			addRole(roleFromSubject)
+			addSubjectRole(roleFromSubject)
 		}
 		return result, nil
 	}
@@ -78,7 +84,7 @@ func (i *implIAuthenticator) Authenticate(ctx context.Context, as istructs.IAppS
 			return result, err
 		}
 		for _, role := range roles {
-			addRole(role)
+			addSubjectRole(role)
 		}
 	}
 	kind := iauthnz.PrincipalKind_User
@@ -122,10 +128,14 @@ func (i *implIAuthenticator) Authenticate(ctx context.Context, as istructs.IAppS
 		}
 	}
 	// emit principals from roles from token
-	if descriptor.QName() != appdef.NullQName {
-		owner := istructs.WSID(descriptor.AsInt64(field_OwnerWSID)) // nolint G115
-		for _, role := range pp.Roles {
-			if role.Scope == payloads.RoleScopeWorkspacesOwnedBy && role.WSID == owner {
+	for _, role := range pp.Roles {
+		switch role.Scope {
+		case payloads.RoleScopeWorkspace:
+			if role.WSID == req.RequestWSID {
+				addRole(role.QName)
+			}
+		case payloads.RoleScopeWorkspacesOwnedBy:
+			if descriptor.QName() != appdef.NullQName && role.WSID == istructs.WSID(descriptor.AsInt64(field_OwnerWSID)) { // nolint G115
 				addRole(role.QName)
 			}
 		}

@@ -24,7 +24,7 @@ Roles:
   - `@Client` calls `[q.sys.RefreshPrincipalToken]` with the current `[Principal Token]`; the payload is decoded, the same identity (including the captured `Login` and `Alias`) is re-encoded with the same TTL/AppQName by `[ITokens].IssueToken`, and the new token is returned. Refresh never re-resolves the login or alias and never updates the captured values.
 
 - **`Enrich principal token`**
-  - The endpoint copies the original validated payload from AuthnResult and adds grants for its effective Role Principals according to the [uniform binding policy](./context.md#principaltoken)
+  - The endpoint copies the original validated payload from AuthnResult and adds exact grants only for roles in its SubjectRoles snapshot according to the [enrichment rules](./context.md#principaltoken)
 
 - **`Validate principal token`**
   - On every request the authorization subsystem calls `[IAppTokens].ValidateToken(token, &payload)` (via `[Auth boundary]`) to verify the signature, audience, and expiry and to decode `PrincipalPayload` for principal composition (see [arch-authz.md](./arch-authz.md)).
@@ -67,9 +67,10 @@ Payload contract
 
 - `[q.sys.EnrichPrincipalToken]`
   - Requires the request bearer token, takes AuthnResult from IProcessorWorkpiece, and copies PrincipalPayload with a cloned Roles slice before appending grants
-  - Each effective Role Principal contributes RoleType{Scope, WSID: request Workspace, QName}; Scope is RoleScopeWorkspacesOwnedBy for regular tokens and RoleScopeWorkspace for API tokens, independently of origin
+  - Each role in AuthnResult.SubjectRoles contributes RoleType{Scope: RoleScopeWorkspace, WSID: request Workspace, QName}; effective Principals are not used to infer role origin
   - Preserves original grants, including unmatched grants, and appends only tuples absent under [RoleGrant equality](./context.md#rolegrant)
-  - New WorkspaceDevice grants use the request Workspace rather than the Device profile; existing carried grants keep their original binding
+  - New WorkspaceDevice grants require a Subject assignment and use the request Workspace rather than the Device profile; existing carried grants keep their original binding
+  - GlobalRoles, built-in roles, token grants, and derived roles alone produce no additions; API-token authentication supplies no SubjectRoles and enrichment preserves its existing grants without additions
   - Runs under the existing WorkspaceOwner authorization and reissues with DefaultPrincipalTokenExpiration; application binding, Subject identity claims, Alias, GlobalRoles, and token kind remain unchanged
   - impl: [pkg/sys/authnz/impl_enrichprincipaltoken.go#provideExecQryEnrichPrincipalToken](../../../../pkg/sys/authnz/impl_enrichprincipaltoken.go)
   - decl: [pkg/sys/sys.vsql#EnrichPrincipalToken](../../../../pkg/sys/sys.vsql)
@@ -156,16 +157,16 @@ The `Login` and `Alias` fields are taken verbatim from the decoded payload and a
 @Client POST q.sys.EnrichPrincipalToken (Authorization: Bearer <current token>, WorkspaceOwner)
   -> [q.sys.EnrichPrincipalToken]
        -> require a nonempty bearer token in request state
-       -> read AuthnResult (PrincipalPayload, Principals) from the request workpiece
+       -> read AuthnResult (PrincipalPayload, Principals, SubjectRoles) from the request workpiece
        -> copy PrincipalPayload and clone its Roles slice
-       -> for each effective Role Principal:
-            construct grant with the request Workspace and the token-kind scope
+       -> for each role in SubjectRoles:
+            construct an exact-Workspace grant with RoleScopeWorkspace and the request Workspace
             append only if absent under RoleGrant equality
        -> [IAppTokens].IssueToken(DefaultPrincipalTokenExpiration, &copy)
   -> @Client: EnrichedToken
 ```
 
-The endpoint does not reauthenticate, reread Subject records, recheck Device eligibility, or mutate the workpiece's original PrincipalPayload. Delegation and repeated enrichment follow the [PrincipalToken enrichment rules](./context.md#principaltoken).
+The endpoint does not reauthenticate, reread Subject records, recheck Device eligibility, or mutate the workpiece's original PrincipalPayload. Added grants apply only in the request Workspace; original grants keep their scope and binding. Repeated enrichment follows the [PrincipalToken enrichment rules](./context.md#principaltoken).
 
 ### Validate principal token
 
@@ -188,7 +189,7 @@ The `IsAPIToken` branch of principal composition is documented in [arch-authz.md
 
 ### Versioning and compatibility
 
-- Every token issuer in this subsystem emits only the existing scope combinations: `RoleScopeWorkspace` for API tokens and `RoleScopeWorkspacesOwnedBy` for regular tokens
+- Every enrichment request preserves initial grants and emits only exact-Workspace additions from the request's SubjectRoles snapshot; API-token enrichment has no additions
 - Every principal-token validation path uses the shared payload validation hook, including authentication, refresh, and enrichment
 
-The additive claim allows existing validators to ignore scope while these combinations remain unchanged. An older refresh or enrichment node can drop the claim; a newer decoder recovers the same meaning from the preserved token kind. New token-kind and scope combinations require a separate rollout after validators understand explicit scope
+Regular tokens with exact-Workspace grants require validators that honor explicit scope. Older validators may ignore these grants or interpret them as owned-by grants, and older refresh nodes that drop Scope can turn exact grants into owned-by grants through legacy inference. Deploy scope-aware authentication and scope-preserving refresh before relying on exact-Workspace enrichment. Legacy tokens without Scope retain their original defaults

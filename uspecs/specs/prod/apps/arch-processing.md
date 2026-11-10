@@ -158,14 +158,14 @@ State
 
 ### Request authentication result
 
-The authentication result is scoped to one Application and request Workspace. Command and query v1/v2 workpieces retain it for that request and expose exactly PrincipalPayload and Principals to the consumers below. Release clears the whole result, and authentication errors clear partial results before returning an error. Query workpieces are created per request; command state callbacks read the current workpiece.
+The authentication result is scoped to one Application and request Workspace. Command and query v1/v2 workpieces retain PrincipalPayload, Principals, and SubjectRoles for that request and expose them to the consumers below. Release clears the whole result, and authentication errors clear partial results before returning an error. Query workpieces are created per request; command state callbacks read the current workpiece.
 
 | Consumer                                      | Result used                     | Responsibility                                                                            |
 | --------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------- |
 | Command and query v1/v2 ACL and System checks | Effective Principals            | Preserve decisions in the request Application and Workspace                               |
 | N10n subscription enforcement                 | Effective Principals            | Authenticate separately for each subscription Workspace and select roles from that result |
 | RequestSubject storage and identity logging   | PrincipalPayload                | Project original Subject identity independently of effective Principal composition        |
-| Principal-token enrichment                    | PrincipalPayload and Principals | Preserve original grants and add effective roles using the request Workspace              |
+| Principal-token enrichment                    | PrincipalPayload and SubjectRoles | Preserve original grants and add only Subject roles using the request Workspace         |
 
 N10n does not reuse an effective Principal set across subscription Workspaces. Other callers of the authentication boundary migrate to the result contract together and consume only the fields they need. Anonymous-only function shortcuts retain their existing token bypass and Anonymous-only authorization policy; they initialize reserved Guest identity for request state without manufacturing token-carried grants or additional effective roles.
 

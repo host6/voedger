@@ -6,16 +6,14 @@ package authnz
 
 import (
 	"context"
+	"slices"
 
-	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
 	"github.com/voedger/voedger/pkg/istructsmem"
 	"github.com/voedger/voedger/pkg/itokens"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/processors"
 	"github.com/voedger/voedger/pkg/sys/storages"
-
-	"slices"
 )
 
 type enrichPrincipalTokenRR struct {
@@ -27,8 +25,8 @@ func (r *enrichPrincipalTokenRR) AsString(string) string {
 	return r.enrichedToken
 }
 
-// targetApp/parentWS/q.sys.EnrichPrincipalToken
-// basic auth, WorkspaceOwner
+// targetApp/requestWS/q.sys.EnrichPrincipalToken
+// bearer token, WorkspaceOwner
 func provideExecQryEnrichPrincipalToken(atf payloads.IAppTokensFactory) istructsmem.ExecQueryClosure {
 	return func(_ context.Context, args istructs.ExecQueryArgs, callback istructs.ExecQueryCallback) (err error) {
 		appTokens := atf.New(args.State.App())
@@ -45,19 +43,11 @@ func provideExecQryEnrichPrincipalToken(atf payloads.IAppTokensFactory) istructs
 		principalPayload := result.PrincipalPayload
 		principalPayload.Roles = slices.Clone(principalPayload.Roles)
 
-		scope := payloads.RoleScopeWorkspacesOwnedBy
-		if principalPayload.IsAPIToken {
-			scope = payloads.RoleScopeWorkspace
-		}
-		principals := result.Principals
-		for _, prn := range principals {
-			if prn.Kind != iauthnz.PrincipalKind_Role {
-				continue
-			}
+		for _, role := range result.SubjectRoles {
 			newRole := payloads.RoleType{
-				Scope: scope,
+				Scope: payloads.RoleScopeWorkspace,
 				WSID:  args.WSID,
-				QName: prn.QName,
+				QName: role,
 			}
 			if !slices.Contains(principalPayload.Roles, newRole) {
 				principalPayload.Roles = append(principalPayload.Roles, newRole)

@@ -6,6 +6,7 @@
 package authnz
 
 import (
+	"context"
 	"slices"
 	"testing"
 	"time"
@@ -24,60 +25,80 @@ import (
 	"github.com/voedger/voedger/pkg/sys"
 )
 
-func TestEnrichmentUsesOriginalPayloadAndRequestWorkspace(t *testing.T) {
+func TestEnrichmentPreservesInitialGrantsAndAddsOnlySubjectRoles(t *testing.T) {
 	require := require.New(t)
 	for _, tc := range []struct {
-		name          string
-		isAPIToken    bool
-		expectedScope payloads.RoleScope
+		name       string
+		kind       istructs.SubjectKindType
+		isAPIToken bool
 	}{
-		{"Regular token grants roles in workspaces owned by the request workspace", false, payloads.RoleScopeWorkspacesOwnedBy},
-		{"API token grants roles only in the request workspace", true, payloads.RoleScopeWorkspace},
+		{"User captures Subject roles", istructs.SubjectKind_User, false},
+		{"Device captures Subject roles", istructs.SubjectKind_Device, false},
+		{"API token retains grants without capturing Subjects", istructs.SubjectKind_User, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, timeu.NewITime())
 			factory := payloads.ProvideIAppTokensFactory(tokens)
 			appTokens := factory.New(istructs.AppQName_test1_app1)
-			role := appdef.NewQName("test", "carried")
-			original := payloads.RoleType{Scope: tc.expectedScope, WSID: 100, QName: role}
-			unmatched := payloads.RoleType{Scope: tc.expectedScope, WSID: 999, QName: appdef.NewQName("test", "unmatched")}
-			deviceRole := payloads.RoleType{Scope: tc.expectedScope, WSID: 42, QName: iauthnz.QNameRoleWorkspaceDevice}
+			carriedRole := appdef.NewQName("test", "carried")
+			sharedRole := appdef.NewQName("test", "shared")
+			subjectRole := appdef.NewQName("test", "subject")
+			aliasRole := appdef.NewQName("test", "alias")
+			existingRole := appdef.NewQName("test", "existing")
+			initialScope := payloads.RoleScopeWorkspacesOwnedBy
+			if tc.isAPIToken {
+				initialScope = payloads.RoleScopeWorkspace
+			}
+			initialGrants := []payloads.RoleType{
+				{Scope: initialScope, WSID: 42, QName: carriedRole},
+				{Scope: initialScope, WSID: 999, QName: appdef.NewQName("test", "unmatched")},
+				{Scope: initialScope, WSID: 42, QName: iauthnz.QNameRoleWorkspaceDevice},
+				{Scope: payloads.RoleScopeWorkspace, WSID: 200, QName: existingRole},
+			}
 			// Spare capacity exposes accidental appends into the original payload's backing array
-			roles := make([]payloads.RoleType, 3, 12)
-			copy(roles, []payloads.RoleType{original, unmatched, deviceRole})
+			roles := make([]payloads.RoleType, len(initialGrants), 12)
+			copy(roles, initialGrants)
 			expectedBacking := slices.Clone(roles[:cap(roles)])
-			originalPayload := payloads.PrincipalPayload{Login: "canonical", Alias: "alias", SubjectKind: istructs.SubjectKind_Device, ProfileWSID: 42,
-				IsAPIToken: tc.isAPIToken, GlobalRoles: []appdef.QName{appdef.NewQName("test", "global")}, Roles: roles}
-			expected := originalPayload
-			expected.Roles = []payloads.RoleType{
-				original, unmatched, deviceRole,
-				{Scope: tc.expectedScope, WSID: 200, QName: iauthnz.QNameRoleAuthenticatedUser},
-				{Scope: tc.expectedScope, WSID: 200, QName: role},
-				{Scope: tc.expectedScope, WSID: 200, QName: iauthnz.QNameRoleWorkspaceDevice},
-			}
-			principals := []iauthnz.Principal{
-				{Kind: iauthnz.PrincipalKind_Device},
-				{Kind: iauthnz.PrincipalKind_Host, Name: "host"},
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
-				{Kind: iauthnz.PrincipalKind_Role, QName: role},
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceDevice},
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceDevice},
-			}
+			originalPayload := payloads.PrincipalPayload{Login: "canonical", Alias: "alias", SubjectKind: tc.kind, ProfileWSID: 42,
+				IsAPIToken: tc.isAPIToken, GlobalRoles: []appdef.QName{appdef.NewQName("test", "global"), sharedRole}, Roles: roles}
 			token, err := appTokens.IssueToken(17*time.Minute, &originalPayload)
 			require.NoError(err)
-			wp := &enrichmentWorkpiece{result: iauthnz.AuthnResult{PrincipalPayload: originalPayload, Principals: principals}}
+			var actualLogins []string
+			authn := iauthnzimpl.NewDefaultAuthenticator(func(_ context.Context, login string, _ istructs.IAppStructs, wsid istructs.WSID) ([]appdef.QName, error) {
+				require.Equal(istructs.WSID(200), wsid)
+				actualLogins = append(actualLogins, login)
+				if login == "canonical" {
+					return []appdef.QName{sharedRole, subjectRole}, nil
+				}
+				return []appdef.QName{subjectRole, aliasRole, carriedRole, existingRole}, nil
+			}, iauthnzimpl.TestIsDeviceAllowedFuncs)
+			result, err := authn.Authenticate(t.Context(), newEnrichmentApp(t, tc.isAPIToken, 42), appTokens,
+				iauthnz.AuthnRequest{RequestWSID: 200, Host: "host", Token: token})
+			require.NoError(err)
+			expected := originalPayload
+			expected.Roles = slices.Clone(initialGrants)
+			if tc.isAPIToken {
+				require.Empty(actualLogins)
+			} else {
+				require.Equal([]string{"canonical", "alias"}, actualLogins)
+				expected.Roles = append(expected.Roles,
+					payloads.RoleType{Scope: payloads.RoleScopeWorkspace, WSID: 200, QName: sharedRole},
+					payloads.RoleType{Scope: payloads.RoleScopeWorkspace, WSID: 200, QName: subjectRole},
+					payloads.RoleType{Scope: payloads.RoleScopeWorkspace, WSID: 200, QName: aliasRole},
+					payloads.RoleType{Scope: payloads.RoleScopeWorkspace, WSID: 200, QName: carriedRole})
+			}
+			// Keep spare capacity in the workpiece payload to check enrichment's slice isolation
+			result.PrincipalPayload = originalPayload
+			wp := &enrichmentWorkpiece{result: result}
 			exec := provideExecQryEnrichPrincipalToken(factory)
 			run := func(input string) (payloads.PrincipalPayload, string) {
 				t.Helper()
 				var output string
-				calls := 0
 				err := exec(t.Context(), istructs.ExecQueryArgs{Workpiece: wp, WSID: 200, State: newEnrichmentState(t, input)}, func(object istructs.IObject) error {
-					calls++
 					output = object.AsString("EnrichedToken")
 					return nil
 				})
 				require.NoError(err)
-				require.Equal(1, calls)
 				var actual payloads.PrincipalPayload
 				metadata, err := appTokens.ValidateToken(output, &actual)
 				require.NoError(err)
@@ -86,77 +107,76 @@ func TestEnrichmentUsesOriginalPayloadAndRequestWorkspace(t *testing.T) {
 				return actual, output
 			}
 			actual, enrichedToken := run(token)
-			// Preserve identity and existing grants, adding only distinct role principals for workspace 200
+			// Only Subject roles become new exact grants, including roles shared with other sources
 			require.Equal(expected, actual)
-			// Enrichment must leave the workpiece payload and its entire role backing array unchanged
 			require.Equal(expectedBacking, roles[:cap(roles)])
 			require.Equal(originalPayload, wp.result.PrincipalPayload)
 
-			// Enriching an already enriched token must not duplicate its grants
+			// Repeating enrichment must neither duplicate grants nor reread Subjects
 			wp.result.PrincipalPayload = actual
 			actual, _ = run(enrichedToken)
 			require.Equal(expected, actual)
+			expectedLookups := 2
+			if tc.isAPIToken {
+				expectedLookups = 0
+			}
+			require.Len(actualLogins, expectedLookups)
 		})
 	}
 }
 
-func TestDeviceEligibilityDoesNotChangeEnrichmentBinding(t *testing.T) {
+func TestDeviceRolesAreCapturedOnlyFromSubjects(t *testing.T) {
 	require := require.New(t)
 	for _, tc := range []struct {
-		name            string
-		allowed, global bool
+		name                     string
+		allowed, global, subject bool
 	}{
-		{"GlobalRole with eligibility denied", false, true},
-		{"GlobalRole with eligibility allowed", true, true},
-		{"derived role only", true, false},
+		{"GlobalRole alone is not captured", false, true, false},
+		{"Device eligibility alone is not captured", true, false, false},
+		{"Subject role shared with GlobalRoles is captured", false, true, true},
+		{"Subject role shared with Device eligibility is captured", true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, timeu.NewITime())
 			factory := payloads.ProvideIAppTokensFactory(tokens)
 			appTokens := factory.New(istructs.AppQName_test1_app1)
-			payload := payloads.PrincipalPayload{Login: "device-1", SubjectKind: istructs.SubjectKind_Device, ProfileWSID: 100,
-				GlobalRoles: []appdef.QName{iauthnz.QNameRoleWorkspaceDevice}}
-			if !tc.global {
-				payload.GlobalRoles = nil
+			payload := payloads.PrincipalPayload{Login: "device-1", SubjectKind: istructs.SubjectKind_Device, ProfileWSID: 100}
+			if tc.global {
+				payload.GlobalRoles = []appdef.QName{iauthnz.QNameRoleWorkspaceDevice}
 			}
 			token, err := appTokens.IssueToken(time.Hour, &payload)
 			require.NoError(err)
 			calls := 0
-			authn := iauthnzimpl.NewDefaultAuthenticator(iauthnzimpl.TestSubjectRolesGetter,
-				iauthnzimpl.IsDeviceAllowedFuncs{istructs.AppQName_test1_app1: func(_ istructs.IAppStructs, request, profile istructs.WSID) (bool, error) {
-					calls++
-					require.Equal(istructs.WSID(200), request)
-					require.Equal(istructs.WSID(100), profile)
-					return tc.allowed, nil
-				}})
-			descriptor := &coreutils.TestObject{Name: appdef.QNameCDocWorkspaceDescriptor, Data: map[string]any{"OwnerWSID": int64(900)}}
-			records := &coreutils.MockRecords{}
-			records.On("GetSingleton", istructs.WSID(200), appdef.QNameCDocWorkspaceDescriptor).Return(descriptor, nil).Once()
-			app := &coreutils.MockAppStructs{}
-			app.On("AppQName").Return(istructs.AppQName_test1_app1)
-			app.On("Records").Return(records).Once()
-			t.Cleanup(func() {
-				app.AssertExpectations(t)
-				records.AssertExpectations(t)
-			})
-			// Obtain effective device roles through real authentication before testing their enrichment binding
-			result, err := authn.Authenticate(t.Context(), app, appTokens, iauthnz.AuthnRequest{RequestWSID: 200, Token: token})
+			authn := iauthnzimpl.NewDefaultAuthenticator(func(_ context.Context, login string, _ istructs.IAppStructs, wsid istructs.WSID) ([]appdef.QName, error) {
+				require.Equal("device-1", login)
+				require.Equal(istructs.WSID(200), wsid)
+				if tc.subject {
+					return []appdef.QName{iauthnz.QNameRoleWorkspaceDevice}, nil
+				}
+				return nil, nil
+			}, iauthnzimpl.IsDeviceAllowedFuncs{istructs.AppQName_test1_app1: func(_ istructs.IAppStructs, request, profile istructs.WSID) (bool, error) {
+				calls++
+				require.Equal(istructs.WSID(200), request)
+				require.Equal(istructs.WSID(100), profile)
+				return tc.allowed, nil
+			}})
+			result, err := authn.Authenticate(t.Context(), newEnrichmentApp(t, false, 900), appTokens, iauthnz.AuthnRequest{RequestWSID: 200, Token: token})
 			require.NoError(err)
-			require.Equal(1, calls)
-			require.Equal(payload, result.PrincipalPayload)
+			// All cases have an effective Device role; its origin determines whether enrichment captures it
+			require.Contains(result.Principals, iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceDevice})
 			var output string
 			err = provideExecQryEnrichPrincipalToken(factory)(t.Context(), istructs.ExecQueryArgs{
 				WSID: 200, Workpiece: &enrichmentWorkpiece{result: result},
 				State: newEnrichmentState(t, token)}, func(object istructs.IObject) error { output = object.AsString("EnrichedToken"); return nil })
 			require.NoError(err)
-			enriched, err := payloads.GetPrincipalPayload(appTokens, output)
+			actual, err := payloads.GetPrincipalPayload(appTokens, output)
 			require.NoError(err)
-			// Device eligibility changes how the role is obtained, but enrichment still binds it to workspace 200
-			require.ElementsMatch([]payloads.RoleType{
-				{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: 200, QName: iauthnz.QNameRoleAuthenticatedUser},
-				{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: 200, QName: iauthnz.QNameRoleWorkspaceDevice},
-			}, enriched.Roles)
-			// Enrichment must use the authentication result without running device eligibility again
+			expected := payload
+			if tc.subject {
+				expected.Roles = []payloads.RoleType{{Scope: payloads.RoleScopeWorkspace, WSID: 200, QName: iauthnz.QNameRoleWorkspaceDevice}}
+			}
+			require.Equal(expected, actual)
+			// Enrichment must not repeat the Device eligibility check
 			require.Equal(1, calls)
 		})
 	}
@@ -199,3 +219,20 @@ func newEnrichmentState(t *testing.T, token string) *coreutils.MockState {
 }
 
 var _ processors.IProcessorWorkpiece = (*enrichmentWorkpiece)(nil)
+
+func newEnrichmentApp(t *testing.T, isAPIToken bool, ownerWSID int64) *coreutils.MockAppStructs {
+	t.Helper()
+	app := &coreutils.MockAppStructs{}
+	records := &coreutils.MockRecords{}
+	if !isAPIToken {
+		descriptor := &coreutils.TestObject{Name: appdef.QNameCDocWorkspaceDescriptor, Data: map[string]any{"OwnerWSID": ownerWSID}}
+		records.On("GetSingleton", istructs.WSID(200), appdef.QNameCDocWorkspaceDescriptor).Return(descriptor, nil).Once()
+		app.On("Records").Return(records).Once()
+		app.On("AppQName").Return(istructs.AppQName_test1_app1).Maybe()
+	}
+	t.Cleanup(func() {
+		app.AssertExpectations(t)
+		records.AssertExpectations(t)
+	})
+	return app
+}
