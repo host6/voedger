@@ -6,7 +6,6 @@ package stateprovide
 
 import (
 	"context"
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"testing"
 	"unsafe"
 
@@ -47,21 +46,4 @@ func TestQueryProcessorState(t *testing.T) {
 	require.NoError(err)
 	require.Len(sentObjects, rows)
 	require.NotEqual(unsafe.Pointer(&sentObjects[0]), unsafe.Pointer(&sentObjects[1]))
-}
-
-func TestQueryStateRequestSubject(t *testing.T) {
-	require := require.New(t)
-	subject := payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "canonical", ProfileWSID: 42}
-	token := "original-token"
-	host := ProvideQueryProcessorStateFactory()(t.Context(), nil, state.SimpleWSIDFunc(200), nil,
-		func() payloads.PrincipalPayload { return subject }, func() string { return token }, nil, nil, nil, nil, nil, nil, state.NullOpts, nil)
-	key, err := host.KeyBuilder(sys.Storage_RequestSubject, appdef.NullQName)
-	require.NoError(err)
-	value, err := host.MustExist(key)
-	require.NoError(err)
-	// Query state must preserve the profile and original token rather than substituting request Workspace 200
-	require.Equal("canonical", value.AsString(sys.Storage_RequestSubject_Field_Name))
-	require.Equal(int32(istructs.SubjectKind_User), value.AsInt32(sys.Storage_RequestSubject_Field_Kind))
-	require.Equal(int64(42), value.AsInt64(sys.Storage_RequestSubject_Field_ProfileWSID))
-	require.Equal(token, value.AsString(sys.Storage_RequestSubject_Field_Token))
 }

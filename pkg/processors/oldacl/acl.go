@@ -5,8 +5,8 @@
 package oldacl
 
 import (
-	"context"
 	"fmt"
+
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 
 	"github.com/voedger/voedger/pkg/appdef"
@@ -15,7 +15,7 @@ import (
 	"github.com/voedger/voedger/pkg/istructs"
 )
 
-func IsOperationAllowed(ctx context.Context, opKind appdef.OperationKind, qName appdef.QName, fields []string, principals []iauthnz.Principal, payload payloads.PrincipalPayload) bool {
+func IsOperationAllowed(opKind appdef.OperationKind, qName appdef.QName, fields []string, principals []iauthnz.Principal, payload payloads.PrincipalPayload) bool {
 	policy := appdef.PolicyKind_Deny
 	var lastDenyingACElem ACElem
 	for _, acElem := range defaultACL {
@@ -29,7 +29,7 @@ func IsOperationAllowed(ctx context.Context, opKind appdef.OperationKind, qName 
 		}
 	}
 	if policy == appdef.PolicyKind_Deny && logger.IsVerbose() {
-		logger.VerboseCtx(logger.WithContextAttrs(ctx, map[string]any{"profilewsid": payload.ProfileWSID}), "", fmt.Sprintf("old-style %s %s for %s: %s -> deny", opKind, qName, prnsToString(principals), lastDenyingACElem.desc))
+		logger.Verbose(fmt.Sprintf("old-style %s %s for %s: %s -> deny", opKind, qName, prnsToString(principals), lastDenyingACElem.desc))
 	}
 	return policy == appdef.PolicyKind_Allow
 }

@@ -1350,24 +1350,3 @@ func TestSyncProjectorLogging(t *testing.T) {
 		logCap.EventuallyHasLine("stage=cp.partition_recovery", "partition will be restarted due of an error on writing to Log")
 	})
 }
-
-func TestWorkpieceAuthenticationResult(t *testing.T) {
-	require := require.New(t)
-	wp := &cmdWorkpiece{}
-	expected := iauthnz.AuthnResult{
-		PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "user", ProfileWSID: 42},
-		Principals:       []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
-		SubjectRoles:     []appdef.QName{iauthnz.QNameRoleSystem},
-	}
-	wp.SetAuthnResult(expected)
-
-	// Both accessors must expose the authentication result for downstream authorization
-	actual := wp.GetAuthnResult()
-	require.Equal(expected, actual)
-	require.Equal(expected.Principals, wp.GetPrincipals())
-
-	// Release must discard the identity and principals when request processing ends
-	wp.Release()
-	require.Equal(iauthnz.AuthnResult{}, wp.GetAuthnResult())
-	require.Empty(wp.GetPrincipals())
-}

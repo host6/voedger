@@ -289,9 +289,12 @@ Feature: Authentication
       And the response indicates the maximum token TTL
 
     Scenario: Client refreshes a principal token
-      Given Client has a valid principal token
+      Given Client has a valid principal token with the default expiration
       When Client refreshes the principal token
       Then the response contains a new principalToken
+      And the response profileWSID matches the profileWSID from the input token
+      And expiresInSeconds matches the default principal token expiration
+      And the response Content-Type is "application/json"
       And the new principalToken preserves the login (canonical), alias, subject kind, and profileWSID from the input token
 
     Scenario Outline: Principal token carries the canonical login and the active alias

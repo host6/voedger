@@ -265,12 +265,12 @@ func newQueryProcessorPipeline(requestCtx context.Context, authn iauthnz.IAuthen
 				return err
 			}
 			// TODO: temporary solution. To be eliminated after implementing ACL in VSQL for Air
-			oldACLOk := oldacl.IsOperationAllowed(qw.msg.RequestCtx(), appdef.OperationKind_Execute, qw.msg.QName(), nil, oldacl.EnrichPrincipals(qw.authnResult.Principals), qw.authnResult.PrincipalPayload)
+			oldACLOk := oldacl.IsOperationAllowed(appdef.OperationKind_Execute, qw.msg.QName(), nil, oldacl.EnrichPrincipals(qw.authnResult.Principals), qw.authnResult.PrincipalPayload)
 			if !newACLOk && !oldACLOk {
 				return coreutils.WrapSysError(errors.New(""), http.StatusForbidden)
 			}
 			if !newACLOk && oldACLOk {
-				logger.VerboseCtx(logger.WithContextAttrs(qw.msg.RequestCtx(), map[string]any{"profilewsid": qw.authnResult.PrincipalPayload.ProfileWSID}), "", "newACL not ok, but oldACL ok.", appdef.OperationKind_Execute, qw.msg.QName(), qw.roles)
+				logger.Verbose("newACL not ok, but oldACL ok.", appdef.OperationKind_Execute, qw.msg.QName(), qw.roles)
 			}
 			return nil
 		}),

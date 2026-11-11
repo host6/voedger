@@ -29,7 +29,6 @@ type authnFeatureFixture struct {
 // [~server.users/it.TestAuthn_LoginCreation~impl]
 // [~server.devices/it.TestAuthn_LoginCreation~impl]
 // [~server.authnz/it.TestAuthn_LoginStateVisibility~impl]
-// [~server.authnz/it.TestRefresh~impl]
 func TestAuthn(t *testing.T) {
 	testAuthnLoginCreation(t)
 	testAuthnLoginAliasManagement(t)
@@ -40,6 +39,41 @@ func TestAuthn(t *testing.T) {
 	testAuthnPrincipalTokenContract(t)
 	testAuthnPasswordLifecycle(t)
 	testAuthnExceptionFlows(t)
+}
+
+// [~server.authnz/it.TestRefreshPrincipalToken~impl]
+func TestRefreshPrincipalToken(t *testing.T) {
+	require := require.New(t)
+	t.Run("authn: scn: Client refreshes a principal token", func(t *testing.T) {
+		f := newAuthnFeatureFixture(t)
+		login := f.newLogin("pwd-refresh")
+		// Given Client has a valid principal token with the default expiration
+		principal := f.VIT().SignIn(login)
+		f.VIT().TimeAdd(time.Minute)
+		// When Client refreshes the principal token
+		resp := f.VIT().POST("api/v2/apps/test1/app1/auth/refresh", "", httpu.WithAuthorizeBy(principal.Token))
+		require.Equal(http.StatusOK, resp.HTTPResp.StatusCode)
+		result := map[string]any{}
+		require.NoError(json.Unmarshal([]byte(resp.Body), &result))
+		newToken := result["principalToken"].(string)
+		// Then the response contains a new principalToken
+		require.NotEmpty(newToken)
+		require.NotEqual(principal.Token, newToken)
+		// And the response profileWSID matches the profileWSID from the input token
+		require.Equal(float64(principal.ProfileWSID), result["profileWSID"])
+		// And expiresInSeconds matches the default principal token expiration
+		require.Equal(3600.0, result["expiresInSeconds"])
+		// And the response Content-Type is "application/json"
+		require.Equal(httpu.ContentType_ApplicationJSON, resp.HTTPResp.Header.Get("Content-Type"))
+		payload := payloads.PrincipalPayload{}
+		_, err := f.VIT().ITokens.ValidateToken(newToken, &payload)
+		require.NoError(err)
+		// And the new principalToken preserves the login (canonical), alias, subject kind, and profileWSID from the input token
+		require.Equal(login.Name, payload.Login)
+		require.Empty(payload.Alias)
+		require.Equal(istructs.SubjectKind_User, payload.SubjectKind)
+		require.Equal(principal.ProfileWSID, payload.ProfileWSID)
+	})
 }
 
 func newAuthnFeatureFixture(t *testing.T) *authnFeatureFixture {
@@ -1001,31 +1035,6 @@ func testAuthnPrincipalTokenContract(t *testing.T) {
 		// Then the response status is "400 Bad Request"
 		// And the response indicates the maximum token TTL
 		f.VIT().PostApp(istructs.AppQName_sys_registry, login.PseudoProfileWSID, "q.registry.IssuePrincipalToken", body, it.Expect400("max token TTL hours is 168 hours"))
-	})
-
-	t.Run("authn: scn: Client refreshes a principal token", func(t *testing.T) {
-		f := newAuthnFeatureFixture(t)
-		login := f.newLogin("pwd-refresh")
-		// Given Client has a valid principal token
-		principal := f.VIT().SignIn(login)
-		f.VIT().TimeAdd(time.Minute)
-		// When Client refreshes the principal token
-		resp := f.VIT().POST("api/v2/apps/test1/app1/auth/refresh", "", httpu.WithAuthorizeBy(principal.Token))
-		require.Equal(t, http.StatusOK, resp.HTTPResp.StatusCode)
-		result := map[string]any{}
-		require.NoError(t, json.Unmarshal([]byte(resp.Body), &result))
-		newToken := result["principalToken"].(string)
-		// Then the response contains a new principalToken
-		require.NotEmpty(t, newToken)
-		require.NotEqual(t, principal.Token, newToken)
-		payload := payloads.PrincipalPayload{}
-		_, err := f.VIT().ITokens.ValidateToken(newToken, &payload)
-		require.NoError(t, err)
-		// And the new principalToken preserves the login (canonical), alias, subject kind, and profileWSID from the input token
-		require.Equal(t, login.Name, payload.Login)
-		require.Empty(t, payload.Alias)
-		require.Equal(t, istructs.SubjectKind_User, payload.SubjectKind)
-		require.Equal(t, principal.ProfileWSID, payload.ProfileWSID)
 	})
 
 	t.Run("authn: scn: Principal token carries the canonical login and the active alias: alias", func(t *testing.T) {

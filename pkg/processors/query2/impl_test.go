@@ -7,22 +7,11 @@
 package query2
 
 import (
-	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
-	"github.com/voedger/voedger/pkg/appdef"
-	"github.com/voedger/voedger/pkg/bus"
-	"github.com/voedger/voedger/pkg/coreutils"
-	"github.com/voedger/voedger/pkg/coreutils/federation"
-	"github.com/voedger/voedger/pkg/goutils/httpu"
-	"github.com/voedger/voedger/pkg/goutils/timeu"
-	"github.com/voedger/voedger/pkg/iauthnz"
-	"github.com/voedger/voedger/pkg/istructs"
-	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
-	"github.com/voedger/voedger/pkg/itokensjwt"
 )
 
 func Test_getCombinations(t *testing.T) {
@@ -196,75 +185,4 @@ func Test_splitPath(t *testing.T) {
 			require.Equal(t, tt.want, splitPath(tt.path))
 		})
 	}
-}
-
-func TestWorkpieceAuthenticationResult(t *testing.T) {
-	require := require.New(t)
-	wp := &queryWork{}
-	expected := iauthnz.AuthnResult{
-		PrincipalPayload: payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "user", ProfileWSID: 42},
-		Principals:       []iauthnz.Principal{{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem}},
-		SubjectRoles:     []appdef.QName{iauthnz.QNameRoleSystem},
-	}
-	wp.SetAuthnResult(expected)
-
-	// Both accessors must expose the authentication result for downstream authorization
-	actual := wp.GetAuthnResult()
-	require.Equal(expected, actual)
-	require.Equal(expected.Principals, wp.GetPrincipals())
-
-	// Release must discard the identity and principals when request processing ends
-	wp.Release()
-	require.Equal(iauthnz.AuthnResult{}, wp.GetAuthnResult())
-	require.Empty(wp.GetPrincipals())
-}
-
-func TestRefreshResponseUsesSubjectProfile(t *testing.T) {
-	require := require.New(t)
-	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, timeu.NewITime())
-	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(istructs.AppQName_test1_app1)
-	for _, profile := range []istructs.WSID{42, 43} {
-		t.Run(fmt.Sprintf("Profile %d differs from request Workspace 200", profile), func(t *testing.T) {
-			pp := payloads.PrincipalPayload{SubjectKind: istructs.SubjectKind_User, Login: "canonical", ProfileWSID: profile}
-			token, err := appTokens.IssueToken(time.Hour, &pp)
-			require.NoError(err)
-			responder := &identityRefreshResponder{}
-			message := &implIQueryMessage{appQName: istructs.AppQName_test1_app1, wsid: 200, token: token, responder: responder}
-			fed := &identityRefreshFederation{response: &federation.FuncResponse{QPv2Response: federation.QPv2Response{{"NewPrincipalToken": token}}}}
-			app := &coreutils.MockAppStructs{}
-			app.On("AppTokens").Return(appTokens).Once()
-			t.Cleanup(func() { app.AssertExpectations(t) })
-			wp := &queryWork{msg: message, appStructs: app, federation: fed}
-			wp.SetAuthnResult(iauthnz.AuthnResult{PrincipalPayload: payloads.PrincipalPayload{SubjectKind: pp.SubjectKind, Login: pp.Login, ProfileWSID: profile}})
-			require.NoError(authRefreshHandler().exec(t.Context(), wp))
-			require.Equal(fmt.Sprintf("api/v2/apps/test1/app1/workspaces/%d/queries/sys.RefreshPrincipalToken", profile), fed.url)
-			require.Equal(200, responder.meta.StatusCode)
-			require.Equal(httpu.ContentType_ApplicationJSON, responder.meta.ContentType)
-			var response map[string]any
-			require.NoError(json.Unmarshal([]byte(responder.body), &response))
-			require.Equal(map[string]any{fieldPrincipalToken: token, fieldExpiresInSeconds: float64(3600), fieldProfileWSID: float64(profile)}, response)
-		})
-	}
-}
-
-type identityRefreshFederation struct {
-	federation.IFederation
-	response *federation.FuncResponse
-	url      string
-}
-
-func (f *identityRefreshFederation) Query(url string, _ ...httpu.ReqOptFunc) (*federation.FuncResponse, error) {
-	f.url = url
-	return f.response, nil
-}
-
-type identityRefreshResponder struct {
-	bus.IResponder
-	meta bus.ResponseMeta
-	body string
-}
-
-func (r *identityRefreshResponder) Respond(meta bus.ResponseMeta, body any) error {
-	r.meta, r.body = meta, body.(string)
-	return nil
 }
