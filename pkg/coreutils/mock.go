@@ -476,6 +476,9 @@ type MockAppStructs struct {
 func (m *MockAppStructs) AppQName() appdef.AppQName {
 	return m.Called().Get(0).(appdef.AppQName)
 }
+func (m *MockAppStructs) ClusterAppID() istructs.ClusterAppID {
+	return m.Called().Get(0).(istructs.ClusterAppID)
+}
 func (m *MockAppStructs) AppTokens() istructs.IAppTokens {
 	return mockResult[istructs.IAppTokens](m.Called().Get(0))
 }
