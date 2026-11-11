@@ -13,14 +13,14 @@ import (
 )
 
 type subjectStorage struct {
-	payloadFunc state.PrincipalPayloadFunc
-	tokenFunc   state.TokenFunc
+	parincipalPayload state.PrincipalPayloadFunc
+	tokenFunc         state.TokenFunc
 }
 
-func NewSubjectStorage(payloadFunc state.PrincipalPayloadFunc, tokenFunc state.TokenFunc) state.IStateStorage {
+func NewSubjectStorage(principalPayloadFunc state.PrincipalPayloadFunc, tokenFunc state.TokenFunc) state.IStateStorage {
 	return &subjectStorage{
-		payloadFunc: payloadFunc,
-		tokenFunc:   tokenFunc,
+		parincipalPayload: principalPayloadFunc,
+		tokenFunc:         tokenFunc,
 	}
 }
 
@@ -42,8 +42,8 @@ func (s *subjectStorage) Get(_ istructs.IStateKeyBuilder) (istructs.IStateValue,
 	ssv := &requestSubjectValue{
 		token: s.tokenFunc(),
 	}
-	if s.payloadFunc != nil {
-		payload := s.payloadFunc()
+	if s.parincipalPayload != nil {
+		payload := s.parincipalPayload()
 		ssv.profileWSID = int64(payload.ProfileWSID)
 		ssv.name = payload.Login
 		ssv.kind = int32(payload.SubjectKind)
