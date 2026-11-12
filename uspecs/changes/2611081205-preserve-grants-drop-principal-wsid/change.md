@@ -92,11 +92,16 @@ References:
 ## Functional design
 
 - [x] create: [auth/token-enrichment.feature](../../specs/prod/auth/token-enrichment.feature)
-  - Feature specification derived from enrichment unit tests and TestForeignAuthorization, retaining one dedicated Rule and Scenario for request-Workspace binding without Principal.WSID and covering initial-grant preservation, Subject-only additions, unchanged API-token payloads, repeated enrichment, Device source filtering, Workspace isolation, refresh, and missing bearer tokens
+  - Feature specification derived from enrichment unit tests and TestForeignAuthorization, retaining one dedicated Rule and Scenario for request-Workspace binding without Principal.WSID and covering initial-grant preservation, Subject-only additions, unchanged API-token payloads, repeated regular-token enrichment, Device source filtering, Workspace isolation, and missing bearer tokens
   - trace: claim and grant preservation, canonical and Alias Subject roles, API-token non-expansion, issued Application and lifetime, and repeated enrichment to TestEnrichmentPreservesInitialGrantsAndAddsOnlySubjectRoles
   - trace: Device roles captured only from Subjects, including roles shared with GlobalRoles and eligibility, to TestDeviceRolesAreCapturedOnlyFromSubjects
-  - trace: retained original access, target-only added roles after Subject deactivation, repeated requests, and refresh preservation to TestForeignAuthorization
+  - trace: retained original access, target-only added roles after Subject deactivation, and repeated requests to TestForeignAuthorization
   - trace: missing-bearer-token rejection without an issued token to TestEnrichmentRejectsMissingBearerToken; this executor-level error scenario does not specify an HTTP status
+
+- [x] update: [auth/authn.feature](../../specs/prod/auth/authn.feature)
+  - merge: refresh scenarios into one Scenario Outline for tokens with no grants or with owned-by and exact Workspace grants
+  - verify: complete PrincipalPayload, Application, and issued lifetime preservation, along with refresh response fields and Content-Type, in TestRefreshPrincipalToken
+  - trace: grant applicability after refresh to TestForeignAuthorization
 
 ## Technical design
 
@@ -105,6 +110,9 @@ References:
 
 - [x] update: [prod/auth/arch-tokens.md](../../specs/prod/auth/arch-tokens.md)
   - document: copying the original payload and adding exact grants only from SubjectRoles without source reconstruction or payload mutation; API-token non-expansion; require scope-aware validators and scope-preserving refresh
+
+- [x] update: [prod/auth/authn--td.md](../../specs/prod/auth/authn--td.md)
+  - document: principal-token refresh preserves the complete PrincipalPayload, including RoleGrants, along with Application and issued lifetime
 
 - [x] update: [prod/apps/arch-processing.md](../../specs/prod/apps/arch-processing.md)
   - document: result propagation, request isolation, PrincipalPayload identity projection, System and Guest checks, diagnostics, and verification ownership

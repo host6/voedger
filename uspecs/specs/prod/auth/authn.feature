@@ -288,14 +288,21 @@ Feature: Authentication
       Then the response status is "400 Bad Request"
       And the response indicates the maximum token TTL
 
-    Scenario: Client refreshes a principal token
+    Scenario Outline: Client refreshes a principal token
       Given Client has a valid principal token with the default expiration
+      And the token carries <role_grants>
       When Client refreshes the principal token
       Then the response contains a new principalToken
       And the response profileWSID matches the profileWSID from the input token
       And expiresInSeconds matches the default principal token expiration
       And the response Content-Type is "application/json"
-      And the new principalToken preserves the login (canonical), alias, subject kind, and profileWSID from the input token
+      And the new principalToken has exactly the same decoded PrincipalPayload as the input token
+      And its Application and issued lifetime remain unchanged
+
+      Examples:
+        | role_grants                        |
+        | no grants                          |
+        | owned-by and exact Workspace grants |
 
     Scenario Outline: Principal token carries the canonical login and the active alias
       Given a user login that <alias state>

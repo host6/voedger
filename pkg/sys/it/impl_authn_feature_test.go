@@ -15,9 +15,11 @@ import (
 	"github.com/voedger/voedger/pkg/appdef"
 	"github.com/voedger/voedger/pkg/coreutils"
 	"github.com/voedger/voedger/pkg/goutils/httpu"
+	"github.com/voedger/voedger/pkg/iauthnz"
 	"github.com/voedger/voedger/pkg/istructs"
 	payloads "github.com/voedger/voedger/pkg/itokens-payloads"
 	"github.com/voedger/voedger/pkg/registry"
+	"github.com/voedger/voedger/pkg/sys/authnz"
 	it "github.com/voedger/voedger/pkg/vit"
 )
 
@@ -44,35 +46,63 @@ func TestAuthn(t *testing.T) {
 // [~server.authnz/it.TestRefreshPrincipalToken~impl]
 func TestRefreshPrincipalToken(t *testing.T) {
 	require := require.New(t)
-	t.Run("authn: scn: Client refreshes a principal token", func(t *testing.T) {
-		f := newAuthnFeatureFixture(t)
-		login := f.newLogin("pwd-refresh")
-		// Given Client has a valid principal token with the default expiration
-		principal := f.VIT().SignIn(login)
+	f := newAuthnFeatureFixture(t)
+	login := f.newLogin("pwd-refresh")
+	// Given Client has a valid principal token with the default expiration
+	principal := f.VIT().SignIn(login)
+	refreshAndCheck := func(t *testing.T, token string) {
+		t.Helper()
+		var expected payloads.PrincipalPayload
+		expectedMetadata, err := f.VIT().ITokens.ValidateToken(token, &expected)
+		require.NoError(err)
 		f.VIT().TimeAdd(time.Minute)
 		// When Client refreshes the principal token
-		resp := f.VIT().POST("api/v2/apps/test1/app1/auth/refresh", "", httpu.WithAuthorizeBy(principal.Token))
+		resp := f.VIT().POST("api/v2/apps/test1/app1/auth/refresh", "", httpu.WithAuthorizeBy(token))
 		require.Equal(http.StatusOK, resp.HTTPResp.StatusCode)
 		result := map[string]any{}
 		require.NoError(json.Unmarshal([]byte(resp.Body), &result))
 		newToken := result["principalToken"].(string)
 		// Then the response contains a new principalToken
 		require.NotEmpty(newToken)
-		require.NotEqual(principal.Token, newToken)
+		require.NotEqual(token, newToken)
 		// And the response profileWSID matches the profileWSID from the input token
-		require.Equal(float64(principal.ProfileWSID), result["profileWSID"])
+		require.Equal(float64(expected.ProfileWSID), result["profileWSID"])
 		// And expiresInSeconds matches the default principal token expiration
 		require.Equal(3600.0, result["expiresInSeconds"])
 		// And the response Content-Type is "application/json"
 		require.Equal(httpu.ContentType_ApplicationJSON, resp.HTTPResp.Header.Get("Content-Type"))
-		payload := payloads.PrincipalPayload{}
-		_, err := f.VIT().ITokens.ValidateToken(newToken, &payload)
+		var actual payloads.PrincipalPayload
+		actualMetadata, err := f.VIT().ITokens.ValidateToken(newToken, &actual)
 		require.NoError(err)
-		// And the new principalToken preserves the login (canonical), alias, subject kind, and profileWSID from the input token
-		require.Equal(login.Name, payload.Login)
-		require.Empty(payload.Alias)
-		require.Equal(istructs.SubjectKind_User, payload.SubjectKind)
-		require.Equal(principal.ProfileWSID, payload.ProfileWSID)
+		// And the new principalToken has exactly the same decoded PrincipalPayload as the input token
+		require.Equal(expected, actual)
+		// And its Application and issued lifetime remain unchanged
+		require.Equal(expectedMetadata.AppQName, actualMetadata.AppQName)
+		require.Equal(expectedMetadata.Duration, actualMetadata.Duration)
+	}
+	t.Run("authn: scn: Client refreshes a principal token: no grants", func(t *testing.T) {
+		// | role_grants                        |
+		// | no grants                          |
+		// And the token carries <role_grants>
+		// role_grants = no grants
+		token := principal.Token
+		refreshAndCheck(t, token)
+	})
+	t.Run("authn: scn: Client refreshes a principal token: owned-by and exact Workspace grants", func(t *testing.T) {
+		// | role_grants                        |
+		// | owned-by and exact Workspace grants |
+		// And the token carries <role_grants>
+		// role_grants = owned-by and exact Workspace grants
+		payload := payloads.PrincipalPayload{
+			Login: login.Name, SubjectKind: istructs.SubjectKind_User, ProfileWSID: principal.ProfileWSID,
+			Roles: []payloads.RoleType{
+				{Scope: payloads.RoleScopeWorkspacesOwnedBy, WSID: 100, QName: iauthnz.QNameRoleWorkspaceOwner},
+				{Scope: payloads.RoleScopeWorkspace, WSID: 200, QName: iauthnz.QNameRoleWorkspaceOwner},
+			},
+		}
+		token, err := f.VIT().ITokens.IssueToken(login.AppQName, authnz.DefaultPrincipalTokenExpiration, &payload)
+		require.NoError(err)
+		refreshAndCheck(t, token)
 	})
 }
 

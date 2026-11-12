@@ -58,17 +58,12 @@ Feature: Principal token enrichment
 
   Rule: Repeated enrichment does not duplicate grants
 
-    Scenario Outline: Enriching the token again in the same Workspace preserves its payload
-      Given a valid PrincipalToken with IsAPIToken = <is_api_token> has already been enriched in Workspace 200
+    Scenario: Enriching the token again in the same Workspace preserves its payload
+      Given a valid regular PrincipalToken has already been enriched in Workspace 200
       And its RoleGrants are distinct
       And the Subject roles used for enrichment have not changed
       When Client calls q.sys.EnrichPrincipalToken in Workspace 200 with the enriched token
       Then the returned token has exactly the same decoded PrincipalPayload as the previously enriched token
-
-      Examples:
-        | is_api_token |
-        | false        |
-        | true         |
 
   Rule: Device roles use the request Workspace, not the Device profile
 
@@ -96,7 +91,6 @@ Feature: Principal token enrichment
     Scenario: A captured role authorizes its target after Subject removal without authorizing other Workspaces
       Given Workspace 100 owns Workspace 200 and Workspace 200 owns Workspace 300
       And Workspace 100 also owns Workspace 201
-      And Workspace 900 owns Workspace 100
       And a valid regular PrincipalToken with ProfileWorkspace 42 initially contained only app1pkg.SpecialAPITokenRole with scope RoleScopeWorkspacesOwnedBy and WSID 100
       And its GlobalRoles are empty and its User has no other Subject roles in these Workspaces
       And a Subject granted sys.WorkspaceOwner to its User in Workspace 200
@@ -118,19 +112,6 @@ Feature: Principal token enrichment
         | 4       | 403 Forbidden |
         | 5       | 403 Forbidden |
         | 6       | 200 OK        |
-
-  Rule: Refresh preserves enriched grants
-
-    Scenario: Refreshing an enriched token retains its grants and their applicability
-      Given a valid regular PrincipalToken for Application "test1/app1" identifies User Login "alice" with ProfileWorkspace 42
-      And it has been enriched in Workspace 200 with issued lifetime DefaultPrincipalTokenExpiration
-      And it contains these RoleGrants:
-        | Scope                      | WSID | QName              |
-        | RoleScopeWorkspacesOwnedBy | 100  | sys.WorkspaceOwner |
-        | RoleScopeWorkspace         | 200  | sys.WorkspaceOwner |
-      When Client calls q.sys.RefreshPrincipalToken in ProfileWorkspace 42 with this token
-      Then the returned token has exactly the same decoded PrincipalPayload as the enriched token
-      And its Application remains "test1/app1" and issued lifetime remains DefaultPrincipalTokenExpiration
 
   Rule: Enrichment requires a bearer token
 

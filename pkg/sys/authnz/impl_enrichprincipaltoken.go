@@ -16,15 +16,6 @@ import (
 	"github.com/voedger/voedger/pkg/sys/storages"
 )
 
-type enrichPrincipalTokenRR struct {
-	istructs.NullObject
-	enrichedToken string
-}
-
-func (r *enrichPrincipalTokenRR) AsString(string) string {
-	return r.enrichedToken
-}
-
 // targetApp/requestWS/q.sys.EnrichPrincipalToken
 // bearer token, WorkspaceOwner
 func provideExecQryEnrichPrincipalToken(atf payloads.IAppTokensFactory) istructsmem.ExecQueryClosure {
@@ -58,6 +49,6 @@ func provideExecQryEnrichPrincipalToken(atf payloads.IAppTokensFactory) istructs
 		if err != nil {
 			return err
 		}
-		return callback(&enrichPrincipalTokenRR{enrichedToken: enrichedToken})
+		return callback(&issuePrincipalTokenRR{principalToken: enrichedToken})
 	}
 }

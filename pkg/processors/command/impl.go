@@ -107,10 +107,6 @@ func (c *cmdWorkpiece) PLogOffset() istructs.Offset {
 	return c.pLogOffset
 }
 
-func (c *cmdWorkpiece) GetPrincipals() []iauthnz.Principal {
-	return c.authnResult.Principals
-}
-
 func (c *cmdWorkpiece) ResetRateLimit(resource appdef.QName, operation appdef.OperationKind) {
 	c.appPart.ResetRateLimit(resource, operation, c.cmdMes.WSID(), c.cmdMes.Host())
 }

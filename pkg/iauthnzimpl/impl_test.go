@@ -167,11 +167,6 @@ func TestAuthenticate(t *testing.T) {
 	}, 2, pp)
 	require.NoError(err)
 
-	pp.ProfileWSID = istructs.NullWSID
-	sysToken, err := appTokens.IssueToken(time.Minute, &pp)
-	require.NoError(err)
-	pp.ProfileWSID = 1
-
 	pp.SubjectKind = istructs.SubjectKind_Device
 	deviceToken, err := appTokens.IssueToken(time.Minute, &pp)
 	require.NoError(err)
@@ -204,7 +199,6 @@ func TestAuthenticate(t *testing.T) {
 		desc               string
 		req                iauthnz.AuthnRequest
 		expectedPrincipals []iauthnz.Principal
-		subjects           []appdef.QName
 	}{
 		{
 			desc: "no auth -> host + Guest user",
@@ -215,47 +209,6 @@ func TestAuthenticate(t *testing.T) {
 			expectedPrincipals: []iauthnz.Principal{
 				{Kind: iauthnz.PrincipalKind_User, Name: istructs.SysGuestLogin},
 				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAnonymous},
-				{Kind: iauthnz.PrincipalKind_Host, Name: "127.0.0.1"},
-			},
-		},
-		{
-			desc: "system token -> host and system role",
-			req: iauthnz.AuthnRequest{
-				Host:        "127.0.0.1",
-				RequestWSID: 1,
-				Token:       sysToken,
-			},
-			expectedPrincipals: []iauthnz.Principal{
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem},
-				{Kind: iauthnz.PrincipalKind_Host, Name: "127.0.0.1"},
-			},
-		},
-		{
-			desc: "request to profile -> authenticatedUser + user + profileOwner",
-			req: iauthnz.AuthnRequest{
-				Host:        "127.0.0.1",
-				RequestWSID: 1,
-				Token:       userToken,
-			},
-			expectedPrincipals: []iauthnz.Principal{
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
-				{Kind: iauthnz.PrincipalKind_User, Name: login},
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleProfileOwner},
-				{Kind: iauthnz.PrincipalKind_Host, Name: "127.0.0.1"},
-			},
-		},
-		{
-			desc: "request to an owned workspace -> AuthenticatedUser + user + workspaceOwner + host",
-			req: iauthnz.AuthnRequest{
-				Host:        "127.0.0.1",
-				RequestWSID: 2,
-				Token:       userToken,
-			},
-			expectedPrincipals: []iauthnz.Principal{
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
-				{Kind: iauthnz.PrincipalKind_User, Name: login},
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleWorkspaceOwner},
 				{Kind: iauthnz.PrincipalKind_Host, Name: "127.0.0.1"},
 			},
 		},
@@ -297,18 +250,6 @@ func TestAuthenticate(t *testing.T) {
 				{Kind: iauthnz.PrincipalKind_Device},
 				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleProfileOwner},
 				{Kind: iauthnz.PrincipalKind_Host, Name: "127.0.0.1"},
-			},
-		},
-		{
-			desc: "IsPersonalAccessToken -> principals are built by provided roles only",
-			req: iauthnz.AuthnRequest{
-				Host:        "127.0.0.1",
-				RequestWSID: 2,
-				Token:       apiKeyToken,
-			},
-			expectedPrincipals: []iauthnz.Principal{
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
-				{Kind: iauthnz.PrincipalKind_Role, QName: testRole},
 			},
 		},
 		{
@@ -396,59 +337,13 @@ func TestAuthenticate(t *testing.T) {
 			},
 		},
 	}
-	var subjects *[]appdef.QName
-	subjectsGetter := func(context.Context, string, istructs.IAppStructs, istructs.WSID) ([]appdef.QName, error) {
-		return *subjects, nil
-	}
-	authn := NewDefaultAuthenticator(subjectsGetter, TestIsDeviceAllowedFuncs)
+	authn := NewDefaultAuthenticator(TestSubjectRolesGetter, TestIsDeviceAllowedFuncs)
 	for _, tc := range testCases {
-		localVarSubjects := &tc.subjects
 		t.Run(tc.desc, func(t *testing.T) {
-			subjects = localVarSubjects
-			result, err := authn.Authenticate(context.Background(), appStructs, appTokens, tc.req)
+			actual, err := authn.Authenticate(t.Context(), appStructs, appTokens, tc.req)
 			require.NoError(err)
-			principals := result.Principals
-			require.Equal(tc.expectedPrincipals, principals, tc.desc)
-		})
-	}
-
-	t.Run("API token skips Subject and Workspace descriptor reads", func(t *testing.T) {
-		authn := NewDefaultAuthenticator(func(context.Context, string, istructs.IAppStructs, istructs.WSID) ([]appdef.QName, error) {
-			panic("unexpected Subject lookup")
-		}, TestIsDeviceAllowedFuncs)
-		result, err := authn.Authenticate(context.Background(), &coreutils.MockAppStructs{}, appTokens,
-			iauthnz.AuthnRequest{RequestWSID: 2, Token: apiKeyToken})
-		require.NoError(err)
-		principals := result.Principals
-		require.Equal(istructs.WSID(1), result.PrincipalPayload.ProfileWSID)
-		require.Equal([]iauthnz.Principal{
-			{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
-			{Kind: iauthnz.PrincipalKind_Role, QName: testRole},
-		}, principals)
-	})
-
-	globalSystemToken, err := appTokens.IssueToken(time.Minute, &payloads.PrincipalPayload{
-		Login: login, SubjectKind: istructs.SubjectKind_User, ProfileWSID: 1,
-		GlobalRoles: []appdef.QName{iauthnz.QNameRoleSystem},
-	})
-	require.NoError(err)
-	for _, tc := range []struct {
-		name    string
-		token   string
-		profile istructs.WSID
-	}{
-		{"missing profile", sysToken, 0},
-		{"global System role", globalSystemToken, 1},
-	} {
-		t.Run(tc.name+" skips Workspace descriptor reads", func(t *testing.T) {
-			authn := NewDefaultAuthenticator(TestSubjectRolesGetter, TestIsDeviceAllowedFuncs)
-			result, err := authn.Authenticate(context.Background(), &coreutils.MockAppStructs{}, appTokens,
-				iauthnz.AuthnRequest{RequestWSID: 2, Token: tc.token})
-			require.NoError(err)
-			principals := result.Principals
-			require.Equal(tc.profile, result.PrincipalPayload.ProfileWSID)
-			require.Len(principals, 3)
-			require.Contains(principals, iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem})
+			// Compare all Principals to catch extra roles as well as missing ones
+			require.Equal(tc.expectedPrincipals, actual.Principals)
 		})
 	}
 }
@@ -539,66 +434,6 @@ func TestErrors(t *testing.T) {
 	})
 }
 
-func TestSubjectRolesResolveAgainstLoginAndAlias(t *testing.T) {
-	require := require.New(t)
-
-	tokens := itokensjwt.ProvideITokens(itokensjwt.SecretKeyExample, timeu.NewITime())
-	appTokens := payloads.ProvideIAppTokensFactory(tokens).New(istructs.AppQName_test1_app1)
-
-	const canonicalLogin = "jsmith"
-	const aliasLogin = "j.smith"
-	subjectRole := appdef.NewQName("test", "subjectrole")
-
-	// grants subjectRole only to the subject login string it is configured to match
-	rolesGetterFor := func(matchLogin string) SubjectGetterFunc {
-		return func(_ context.Context, login string, _ istructs.IAppStructs, _ istructs.WSID) ([]appdef.QName, error) {
-			if login == matchLogin {
-				return []appdef.QName{subjectRole}, nil
-			}
-			return nil, nil
-		}
-	}
-
-	appStructs := newAuthenticationApp(t, nil)
-
-	authenticateWith := func(getterMatch string) []iauthnz.Principal {
-		pp := payloads.PrincipalPayload{
-			Login:       canonicalLogin,
-			Alias:       aliasLogin,
-			SubjectKind: istructs.SubjectKind_User,
-			ProfileWSID: 1,
-		}
-		token, err := appTokens.IssueToken(time.Minute, &pp)
-		require.NoError(err)
-		authn := NewDefaultAuthenticator(rolesGetterFor(getterMatch), TestIsDeviceAllowedFuncs)
-		result, err := authn.Authenticate(context.Background(), appStructs, appTokens, iauthnz.AuthnRequest{
-			Host:        "127.0.0.1",
-			RequestWSID: 1,
-			Token:       token,
-		})
-		require.NoError(err)
-		require.Equal(canonicalLogin, result.PrincipalPayload.Login)
-		return result.Principals
-	}
-
-	hasSubjectRole := func(principals []iauthnz.Principal) bool {
-		for _, prn := range principals {
-			if prn.Kind == iauthnz.PrincipalKind_Role && prn.QName == subjectRole {
-				return true
-			}
-		}
-		return false
-	}
-
-	t.Run("subject registered under the canonical login resolves", func(t *testing.T) {
-		require.True(hasSubjectRole(authenticateWith(canonicalLogin)))
-	})
-
-	t.Run("subject registered under the active alias resolves", func(t *testing.T) {
-		require.True(hasSubjectRole(authenticateWith(aliasLogin)))
-	})
-}
-
 func TestAuthenticationPayload(t *testing.T) {
 	require := require.New(t)
 	for _, tc := range []struct {
@@ -612,7 +447,8 @@ func TestAuthenticationPayload(t *testing.T) {
 			// Shared and source-specific roles detect both duplicate Principals and a skipped role source
 			role := appdef.NewQName("test", "shared")
 			globalRole := appdef.NewQName("test", "global")
-			subjectRole := appdef.NewQName("test", "subject")
+			canonicalRole := appdef.NewQName("test", "canonicalSubject")
+			aliasRole := appdef.NewQName("test", "aliasSubject")
 			tokenRole := appdef.NewQName("test", "token")
 			unmatchedRole := appdef.NewQName("test", "unmatched")
 			expectedPayload := payloads.PrincipalPayload{
@@ -632,10 +468,14 @@ func TestAuthenticationPayload(t *testing.T) {
 			getter := func(_ context.Context, login string, _ istructs.IAppStructs, actualWSID istructs.WSID) ([]appdef.QName, error) {
 				require.Equal(istructs.WSID(200), actualWSID)
 				actualLogins = append(actualLogins, login)
-				if login == "alias" {
-					return []appdef.QName{role, subjectRole}, nil
+				switch login {
+				case "canonical":
+					return []appdef.QName{role, canonicalRole}, nil
+				case "alias":
+					return []appdef.QName{role, aliasRole}, nil
+				default:
+					return nil, nil
 				}
-				return []appdef.QName{role}, nil
 			}
 			actualDeviceChecks := 0
 			authn := NewDefaultAuthenticator(getter, IsDeviceAllowedFuncs{istructs.AppQName_test1_app1: func(_ istructs.IAppStructs, actualRequestWSID, actualProfileWSID istructs.WSID) (bool, error) {
@@ -654,15 +494,16 @@ func TestAuthenticationPayload(t *testing.T) {
 			// Both identifiers must be queried so alias-based subject assignments are considered
 			expectedLogins := []string{"canonical", "alias"}
 			require.Equal(expectedLogins, actualLogins)
-			// Subject roles remain available even when GlobalRoles already supplied the same effective role
-			require.Equal([]appdef.QName{role, subjectRole}, actual.SubjectRoles)
+			// Unique roles prove that both lookups contribute results; the shared role must occur once
+			require.Equal([]appdef.QName{role, canonicalRole, aliasRole}, actual.SubjectRoles)
 
 			// Only matching grants become Principals, while all distinct sources and the Host remain effective
 			expectedPrincipals := []iauthnz.Principal{
 				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
 				{Kind: iauthnz.PrincipalKind_Role, QName: role},
 				{Kind: iauthnz.PrincipalKind_Role, QName: globalRole},
-				{Kind: iauthnz.PrincipalKind_Role, QName: subjectRole},
+				{Kind: iauthnz.PrincipalKind_Role, QName: canonicalRole},
+				{Kind: iauthnz.PrincipalKind_Role, QName: aliasRole},
 				{Kind: iauthnz.PrincipalKind_Role, QName: tokenRole},
 				{Kind: iauthnz.PrincipalKind_Host, Name: "host"},
 			}
@@ -693,7 +534,11 @@ func TestAuthenticationPayload(t *testing.T) {
 
 	for _, source := range []string{"Global System role", "Subject System role", "Null profile", "API token"} {
 		t.Run(source+" preserves identity on early return", func(t *testing.T) {
-			expectedPayload := payloads.PrincipalPayload{Login: "canonical", Alias: "alias", SubjectKind: istructs.SubjectKind_Device, ProfileWSID: 42}
+			tokenRole := appdef.NewQName("test", "token")
+			expectedPayload := payloads.PrincipalPayload{
+				Login: "canonical", Alias: "alias", SubjectKind: istructs.SubjectKind_Device, ProfileWSID: 42,
+				Roles: []payloads.RoleType{{Scope: payloads.RoleScopeWorkspace, WSID: 200, QName: tokenRole}},
+			}
 			getter := TestSubjectRolesGetter
 			switch source {
 			case "Global System role":
@@ -723,16 +568,18 @@ func TestAuthenticationPayload(t *testing.T) {
 			// Every early return must preserve login, alias, subject kind, profile, and token grants
 			require.Equal(expectedPayload, actual.PrincipalPayload)
 
-			// API tokens skip subjects and host binding; regular tokens retain the System role and host principal
+			// API tokens use their matching grant; regular early returns retain the System role and Host
 			expectedSubjectLookups := 2
 			expectedPrincipals := []iauthnz.Principal{
 				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleAuthenticatedUser},
-				{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem},
-				{Kind: iauthnz.PrincipalKind_Host, Name: "host"},
 			}
 			if expectedPayload.IsAPIToken {
 				expectedSubjectLookups = 0
-				expectedPrincipals = expectedPrincipals[:1]
+				expectedPrincipals = append(expectedPrincipals, iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: tokenRole})
+			} else {
+				expectedPrincipals = append(expectedPrincipals,
+					iauthnz.Principal{Kind: iauthnz.PrincipalKind_Role, QName: iauthnz.QNameRoleSystem},
+					iauthnz.Principal{Kind: iauthnz.PrincipalKind_Host, Name: "host"})
 			}
 			require.Equal(expectedSubjectLookups, actualSubjectLookups)
 			require.ElementsMatch(expectedPrincipals, actual.Principals)

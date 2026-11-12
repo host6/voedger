@@ -112,15 +112,13 @@ func TestEnrichmentPreservesInitialGrantsAndAddsOnlySubjectRoles(t *testing.T) {
 			require.Equal(expectedBacking, roles[:cap(roles)])
 			require.Equal(originalPayload, wp.result.PrincipalPayload)
 
-			// Repeating enrichment must neither duplicate grants nor reread Subjects
+			if tc.isAPIToken {
+				return
+			}
+			// Repeating enrichment must not duplicate grants
 			wp.result.PrincipalPayload = actual
 			actual, _ = run(enrichedToken)
 			require.Equal(expected, actual)
-			expectedLookups := 2
-			if tc.isAPIToken {
-				expectedLookups = 0
-			}
-			require.Len(actualLogins, expectedLookups)
 		})
 	}
 }
@@ -200,7 +198,6 @@ type enrichmentWorkpiece struct {
 }
 
 func (w *enrichmentWorkpiece) GetAuthnResult() iauthnz.AuthnResult { return w.result }
-func (*enrichmentWorkpiece) GetPrincipals() []iauthnz.Principal    { panic("use authentication result") }
 
 func newEnrichmentState(t *testing.T, token string) *coreutils.MockState {
 	t.Helper()

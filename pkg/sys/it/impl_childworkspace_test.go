@@ -160,15 +160,17 @@ func TestForeignAuthorization(t *testing.T) {
 		expectedPayload.Roles = actualPayload.Roles
 		require.Equal(expectedPayload, actualPayload)
 
+		// Repeat while the Subject still supplies the role to verify that its grant is not duplicated
+		repeatedToken := vit.PostWS(childWS, "q.sys.EnrichPrincipalToken", enrichBody,
+			httpu.WithAuthorizeBy(enrichedToken)).SectionRow()[0].(string)
+		repeatedPayload, _ := decodeScopedPrincipalToken(t, require, vit, repeatedToken)
+		require.Equal(actualPayload, repeatedPayload)
+
 		// Remove the Subject role so only the captured exact grant can authorize writes
 		vit.PostWSSys(childWS, "c.sys.CUD", fmt.Sprintf(`{"cuds": [{"sys.ID": %d,"fields": {"sys.IsActive": false}}]}`, subjectID))
 		vit.PostWS(childWS, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(originalToken), httpu.Expect403())
 		vit.PostWS(childWS, "c.sys.CUD", cudBody, httpu.WithAuthorizeBy(enrichedToken),
 			httpu.WithExpectedCode(http.StatusOK), httpu.WithNoRetryPolicy())
-		repeatedToken := vit.PostWS(childWS, "q.sys.EnrichPrincipalToken", enrichBody,
-			httpu.WithAuthorizeBy(enrichedToken)).SectionRow()[0].(string)
-		repeatedPayload, _ := decodeScopedPrincipalToken(t, require, vit, repeatedToken)
-		require.Equal(actualPayload, repeatedPayload)
 
 		// Refresh must retain both original owned-by grants and newly captured exact grants
 		refreshBody := `{"args":{},"elements":[{"fields":["NewPrincipalToken"]}]}`

@@ -91,8 +91,6 @@ func (qw *queryWork) AppPartitions() appparts.IAppPartitions { return qw.appPart
 
 func (qw *queryWork) AppPartition() appparts.IAppPartition { return qw.appPart }
 
-func (qw *queryWork) GetPrincipals() []iauthnz.Principal { return qw.authnResult.Principals }
-
 func (qw *queryWork) Roles() []appdef.QName { return qw.roles }
 
 func (qw *queryWork) ResetRateLimit(resource appdef.QName, operation appdef.OperationKind) {

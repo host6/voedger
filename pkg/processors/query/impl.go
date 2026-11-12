@@ -480,11 +480,6 @@ func (qw *queryWork) ResetRateLimit(resource appdef.QName, operation appdef.Oper
 	qw.appPart.ResetRateLimit(resource, operation, qw.msg.WSID(), qw.msg.Host())
 }
 
-// need for q.sys.EnrichPrincipalToken
-func (qw *queryWork) GetPrincipals() []iauthnz.Principal {
-	return qw.authnResult.Principals
-}
-
 // need for various funcs of sys package
 func (qw *queryWork) GetAppStructs() istructs.IAppStructs {
 	return qw.appStructs

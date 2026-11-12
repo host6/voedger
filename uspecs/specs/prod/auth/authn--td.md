@@ -707,7 +707,7 @@ Both branches reuse their existing unknown-login or invalid-Credential response 
   -> [API v2 auth routes]
   -> [Auth refresh handler]
   -> [/q.sys.RefreshPrincipalToken/]
-  -> [Token service]: validate existing token and issue replacement preserving Login, Alias, SubjectKind, ProfileWSID from the input token
+  -> [Token service]: validate existing token and issue replacement preserving PrincipalPayload (including RoleGrants), Application, and issued lifetime
   -> [Auth refresh handler]
   -> @Client: new principalToken, expiresInSeconds, profileWSID
 ```
