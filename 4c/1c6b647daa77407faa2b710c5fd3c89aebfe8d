@@ -1,0 +1,1 @@
+{"version":"1.0","branch_type":1,"description":"refactor rowType.clarifyJSONValue to use a generic numeric helper","issue_url":"https://untill.atlassian.net/browse/AIR-5244"}
