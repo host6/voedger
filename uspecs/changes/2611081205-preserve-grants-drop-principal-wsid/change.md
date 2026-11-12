@@ -27,6 +27,32 @@ For example:
 - If a Subject in Workspace `200` also grants WorkspaceOwner, enrichment adds `{Scope: Workspace, WSID: 200, QName: WorkspaceOwner}`, which applies only in Workspace `200`
 - The initial owned-by grant bound to `100` must remain unchanged alongside any new Subject grant; rebuilding grants from effective Principals alone cannot recover the initial binding or identify a Subject assignment
 
+The following diagrams show WorkspaceOwner access for this example. Workspace `100` also owns Sibling `201`. The User has no other roles in these Workspaces, and a Subject in Target grants WorkspaceOwner to the User.
+
+On main, enrichment copies the effective role into another owned-by grant:
+
+```text
+Parent 100                  Initial grant: WorkspaceOwner, WorkspacesOwnedBy, WSID 100
+│                           Applies to Target and Sibling, not Parent itself
+├── Target 200              Enrichment adds: WorkspaceOwner, WorkspacesOwnedBy, WSID 200
+│   │                       Initial access retained
+│   └── Grandchild 300      NEW ACCESS through the added grant: unintended
+└── Sibling 201             Initial access retained
+```
+
+After the fix, enrichment preserves the initial grant and adds an exact grant only for the role read from the Subject in Target:
+
+```text
+Parent 100                  Initial grant: WorkspaceOwner, WorkspacesOwnedBy, WSID 100
+│                           Applies to Target and Sibling, not Parent itself
+├── Target 200              Enrichment adds: WorkspaceOwner, Workspace, WSID 200
+│   │                       Initial access + exact grant from the Subject in Target
+│   └── Grandchild 300      No WorkspaceOwner access
+└── Sibling 201             Initial access retained
+```
+
+Without the Subject assignment in Target, the fix adds no WorkspaceOwner grant. The initial grant still authorizes Target and Sibling. With the Subject assignment, the added exact grant continues to authorize Target after the Subject is deactivated.
+
 This change preserves initial access while preventing added grants from extending access to other Workspaces. It keeps initial grants separately from effective Principals and drops `Principal.WSID`, using request context for the target Workspace and the original payload for Subject identity.
 
 ## What
