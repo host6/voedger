@@ -93,6 +93,7 @@ Four sources by origin contribute to a request's principal set; each is enumerat
 
 - `[Invite-granted]`
   - Origin: `[[Workspace membership]]` writes `[(cdoc.sys.Subject)]` rows in the inviting workspace as part of the join flow; see [arch-membership.md](./arch-membership.md).
+  - Composition: reads roles for the canonical Login and token-snapshotted Alias in RequestWSID, adds effective Role Principals, and retains distinct role names in SubjectRoles
 
 - `[Token-carried]`
   - Composition: regular tokens emit GlobalRoles and matching exact-Workspace or owned-by roles; API tokens emit matching exact-Workspace roles, with all source grants retained unchanged in PrincipalPayload

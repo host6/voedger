@@ -131,38 +131,25 @@ References:
   - verify: regular-token exact grants match only the request Workspace even without a descriptor, and coexist with owned-by grants for User and Device tokens
   - verify: SubjectRoles retains distinct canonical and Alias assignments shared with other role sources, remains empty for API tokens, and is discarded with partial results on lookup failure
 
-- [x] update: [sys/storages/impl_subject_storage_test.go](../../../pkg/sys/storages/impl_subject_storage_test.go)
-  - verify: PrincipalPayload identity projection and per-request callback freshness without Principal scanning
-  - consolidate: redundant User-shaped API and System rows into identity-value coverage and use one root assertion instance
+- [x] remove: `pkg/sys/storages/impl_subject_storage_test.go`
+  - consolidate: identity projection, storage key equality, and callback freshness coverage into TestCommandStateRequestSubject
 
 - [x] update: [state/stateprovide/impl_host_state_test.go](../../../pkg/state/stateprovide/impl_host_state_test.go)
-  - verify: command state PrincipalPayload callbacks with request Workspace different from ProfileWSID
-
-- [x] update: [state/stateprovide/impl_query_processor_state_test.go](../../../pkg/state/stateprovide/impl_query_processor_state_test.go)
-  - verify: query state PrincipalPayload callbacks and unchanged Token retrieval
+  - verify: command state PrincipalPayload callbacks with request Workspace different from ProfileWSID, key equality, Token retrieval, and fresh callback values without changing prior results
 
 - [x] update: [pkg/processors/utils_test.go](../../../pkg/processors/utils_test.go)
   - verify: anonymous-only result replacement and synthetic Guest PrincipalPayload
 
-- [x] update: [processors/command/impl_test.go](../../../pkg/processors/command/impl_test.go)
-  - verify: authentication-result and Principal accessors and result clearing on release in one set/read/release cycle
-
 - [x] update: [processors/query/impl_test.go](../../../pkg/processors/query/impl_test.go)
-  - verify: extension-visible original PrincipalPayload and request identity, failed authentication, sequential requests, and release
-  - distinguish: failed authentication prevents extension execution; this integration test does not directly observe internal failure cleanup or workpiece reuse
-  - verify: sequential requests change profile, Alias, and Principals so stale identity fields cannot be masked by identical inputs
-
-- [x] update: [processors/query2/impl_test.go](../../../pkg/processors/query2/impl_test.go)
-  - verify: result release and refresh routing/response ProfileWSID sourced from PrincipalPayload
-  - reuse: the production implIQueryMessage for refresh requests instead of a local message double
-  - reuse: MockAppStructs.AppTokens in named profile-routing cases instead of a local app double
+  - verify: TestAuthnResultAvailableInQuery exposes authenticated Login, SubjectKind, ProfileWSID, and the original Token through RequestSubject to a real query extension without User or Device Principals
+  - consolidate: retain one request through the processor pipeline; this test does not directly verify failure cleanup, sequential requests, or workpiece release
 
 - [x] update: [processors/n10n/impl_test.go](../../../pkg/processors/n10n/impl_test.go)
   - verify: per-Workspace subscription authorization and existing unauthorized/forbidden mapping
   - reuse: coreutils.MockAppStructs, MockRecords, and TestObject for subscription Workspace descriptors
 
 - [x] update: [processors/oldacl/impl_test.go](../../../pkg/processors/oldacl/impl_test.go)
-  - verify: reserved Guest identity matching, authorization role ancestry, Verbose denial diagnostics, and separate Workspace/profile identifiers
+  - verify: reserved Guest identity matching, authorization role ancestry, and Verbose denial diagnostics with suppression below Verbose severity
   - verify: explicit legacy role enrichment and unchanged input independently of authorization ancestry lookup
   - remove: token-exclusion assertions without token input and duplicated System-principal checks covered in iauthnz
 
@@ -176,6 +163,10 @@ References:
 - [x] update: [itokens-payloads/impl_test.go](../../../pkg/itokens-payloads/impl_test.go)
   - verify: explicit scope round trips, legacy scope normalization for both token kinds, and rejection of null, malformed, or unknown scope values
 
+- [x] update: [sys/it/impl_authn_feature_test.go](../../../pkg/sys/it/impl_authn_feature_test.go)
+  - consolidate: principal-token refresh into TestRefreshPrincipalToken with no-grants and mixed-scope grant cases using shared request and assertion logic
+  - verify: full payload, Application, issued lifetime, response ProfileWSID, expiration, Content-Type, and a newly issued token through the real refresh API
+
 - [x] update: [sys/it/impl_childworkspace_test.go](../../../pkg/sys/it/impl_childworkspace_test.go)
   - verify: exact added grant tuples, writes in the target after source Subject removal, denied writes in its owner, child, and sibling, retained initial read access to its sibling, repeated enrichment, identity preservation, refresh, and API-token isolation
 
@@ -185,7 +176,7 @@ References:
 ### Authentication and consumers
 
 - [x] update: [pkg/coreutils/mock.go](../../../pkg/coreutils/mock.go)
-  - extend: the merged MockAppStructs with nil-safe AppTokens expectations, retaining its existing IAppStructs compliance check in coreutils/mock_test.go
+  - extend: the merged MockAppStructs with ClusterAppID and nil-safe AppTokens expectations, retaining its existing IAppStructs compliance check in coreutils/mock_test.go
   - reuse: shared MockRecords and other interface mocks supplied by AIR-5221 instead of duplicate local implementations
 
 - [x] update: [itokens-payloads/consts.go](../../../pkg/itokens-payloads/consts.go) and [itokens-payloads/types.go](../../../pkg/itokens-payloads/types.go)
@@ -206,6 +197,7 @@ References:
 
 - [x] update: [pkg/iauthnz/authn-interface.go](../../../pkg/iauthnz/authn-interface.go)
   - implement: return AuthnResult and error from Authenticate
+  - remove: unused NewDefaultAuthenticatorType and its obsolete signature comments
 
 - [x] update: [pkg/iauthnz/utils.go](../../../pkg/iauthnz/utils.go)
   - implement: use request-local System checks and shared synthetic Guest payload construction
@@ -234,19 +226,22 @@ References:
   - implement: update PutRequestSubject to accept PrincipalPayload
 
 - [x] update: [pkg/processors/types.go](../../../pkg/processors/types.go)
-  - implement: expose the shared result through the processor workpiece
+  - implement: expose the shared result through GetAuthnResult and remove the unused GetPrincipals accessor
 
 - [x] update: [pkg/processors/utils.go](../../../pkg/processors/utils.go)
   - implement: initialize anonymous-only results without adding grants
 
 - [x] update: [processors/command/impl.go](../../../pkg/processors/command/impl.go)
-  - implement: propagate and reset results, migrate System checks, and preserve legacy ACL decisions and log context
+  - implement: propagate and reset results, migrate System checks, and preserve legacy ACL decisions
+  - remove: unused GetPrincipals method; retain GetAuthnResult for consumers
+  - preserve: Verbose fallback-success logging without adding request context
 
 - [x] update: [processors/command/types.go](../../../pkg/processors/command/types.go)
   - implement: retain the result and wire its PrincipalPayload into reusable state
 
 - [x] update: [processors/query/impl.go](../../../pkg/processors/query/impl.go)
   - implement: propagate and reset the result across query v1 authorization and extension execution
+  - remove: unused GetPrincipals method
 
 - [x] update: [processors/query2/impl.go](../../../pkg/processors/query2/impl.go)
   - implement: propagate PrincipalPayload and Principals through query v2 authorization and state construction
@@ -255,16 +250,17 @@ References:
   - implement: route refresh requests and populate response ProfileWSID from the authentication result's PrincipalPayload
 
 - [x] update: [query2/impl_cdocs_handler.go](../../../pkg/processors/query2/impl_cdocs_handler.go), [query2/impl_docs_handler.go](../../../pkg/processors/query2/impl_docs_handler.go), and [query2/impl_view_handler.go](../../../pkg/processors/query2/impl_view_handler.go)
-  - implement: pass explicit request context and PrincipalPayload to legacy result authorization and retain profile context in fallback diagnostics
+  - implement: pass effective Principals and PrincipalPayload to legacy result authorization; retain existing Verbose fallback diagnostics
 
 - [x] update: [processors/query2/util.go](../../../pkg/processors/query2/util.go)
-  - implement: retain and reset the query v2 result and expose its fields
+  - implement: retain and reset the query v2 result and expose it through GetAuthnResult
+  - remove: unused GetPrincipals method and separate profileWSID field
 
 - [x] update: [processors/n10n/impl_subscribeandwatch.go](../../../pkg/processors/n10n/impl_subscribeandwatch.go)
   - implement: consume each subscription Workspace result independently
 
 - [x] update: [processors/oldacl/acl.go](../../../pkg/processors/oldacl/acl.go)
-  - implement: use explicit PrincipalPayload identity and request log context for Guest matching and diagnostics
+  - implement: use explicit PrincipalPayload identity for Guest matching; retain Verbose denial diagnostics without adding a context argument
 
 - [x] update: [processors/oldacl/impl.go](../../../pkg/processors/oldacl/impl.go)
   - implement: remove Principal WSID matching and preserve reserved Guest identity semantics
@@ -274,6 +270,7 @@ References:
 
 - [x] update: [sys/authnz/impl_enrichprincipaltoken.go](../../../pkg/sys/authnz/impl_enrichprincipaltoken.go)
   - implement: clone original payload roles and append only SubjectRoles using requestWSID and RoleScopeWorkspace; preserve API-token payloads without additions
+  - reuse: issuePrincipalTokenRR from refresh for the enrichment response and remove duplicate enrichPrincipalTokenRR
 
 ### Validation
 
@@ -304,3 +301,10 @@ References:
   - result: all root-module packages and tests compile with `go test ./... -run '^$'`
   - result: scoped lint reports no issues; formatting, root assertion setup, relative links, and whitespace checks pass
   - result: Gherkin structural checks pass for eight scenarios and thirteen cases; behavior coverage uses the mapped Go tests without executable Gherkin bindings
+
+- [x] review: consolidated tests and unused interfaces
+  - preserve: TestBasicUsage; move canonical and Alias contribution checks into TestAuthenticationPayload and remove overlapping authentication cases
+  - verify: repeat enrichment while the Subject still grants the role; retain one API-token preservation check and separate refresh response and access checks
+  - remove: obsolete lookup-count checks, unused GetPrincipals methods and factory type, and the duplicate token response type
+  - result: affected coreutils, authentication, processor, state provider, authnz, and storage package tests pass; teststate compiles with no test files; TestRefreshPrincipalToken and TestForeignAuthorization pass in VIT
+  - result: changed-file coverage, relative plan links, relevant Gherkin structure, and whitespace checks pass; direct workpiece accessor, release, and failure-cleanup tests are not claimed as coverage

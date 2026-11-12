@@ -171,7 +171,7 @@ N10n does not reuse an effective Principal set across subscription Workspaces. O
 
 Identity and enrichment semantics are owned by [AuthnResult](../auth/context.md#authnresult) and [PrincipalToken](../auth/context.md#principaltoken).
 
-Workpiece tests check result accessors and release directly. The query v1 integration test checks propagation through authorization and RequestSubject to the extension, and verifies that failed authentication prevents extension execution. Its sequential requests do not demonstrate workpiece reuse or directly observe internal clearing after authentication failure.
+TestAuthnResultAvailableInQuery checks one request through query v1 authorization and RequestSubject to the extension without a User or Device Principal. TestCommandStateRequestSubject checks callback freshness through command state and preserves previously returned identity values. TestRefreshPrincipalToken verifies refresh response identity and grants through VIT. These tests do not directly inspect workpiece release or authentication-failure cleanup.
 
 RequestSubject keeps its existing storage name, key, field names, and field types. `Kind`, `Name`, and `ProfileWSID` project PrincipalPayload's SubjectKind, canonical Login, and profile reference; `Token` continues to come from the request token provider. User and Device identity comes from validated claims, Guest uses the reserved identity, and API-token and System identity remains available even when composition omits User/Device Principals. A null profile reference remains null and is never replaced by the request Workspace. The storage does not decode the token or scan Principals to recover identity.
 
@@ -255,7 +255,7 @@ RequestSubject keeps its existing storage name, key, field names, and field type
 - Every such log that reports Workspace identity distinguishes the request Workspace from Subject ProfileWorkspace, using request context and PrincipalPayload respectively; Principal formatting no longer labels role or Subject applicability with Principal.WSID
 - Every authentication-result consumer excludes bearer-token contents from logs
 
-Legacy deny diagnostics retain Verbose severity and the existing `old-style ... -> deny` message structure. The fallback success diagnostic retains Verbose severity and `newACL not ok, but oldACL ok` wording. Both obtain Workspace and profile context explicitly rather than from Principal formatting.
+Legacy deny diagnostics retain Verbose severity and the existing `old-style ... -> deny` message structure. The fallback success diagnostic retains Verbose severity and `newACL not ok, but oldACL ok` wording. These diagnostics use the existing logger calls without adding request or profile context; Principal formatting no longer includes WSID.
 
 ### Testing
 
