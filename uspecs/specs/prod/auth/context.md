@@ -89,14 +89,14 @@ Downstream:
 
 Provider:
 
-- Contract: validates a presented `PrincipalToken`, or establishes the reserved Guest identity when no token is presented, and returns `AuthnResult` containing the original validated `PrincipalToken` payload and effective `Principal` values for the current request
+- Contract: validates a presented `PrincipalToken`, or establishes the reserved Guest identity when no token is presented, and returns `AuthnResult` containing the original payload, effective `Principal` values, and independently eligible enrichment roles for the current request
 - Context: the request supplies the target Application and Workspace; these identify the authorization context independently of the token identity and the Workspace references in `RoleGrant`
 - Supporting design: [auth context architecture](./arch.md)
 
 Consumers:
 
 - 📦 apps
-  - Uses effective `Principal` values for application ACL evaluation and System checks, the original payload for RequestSubject and identity logging, and the original payload plus captured Subject roles for token enrichment
+  - Uses effective `Principal` values for application ACL evaluation and System checks, the original payload for RequestSubject and identity logging, and the original payload plus eligible enrichment roles for token enrichment
 
 #### auth: authentication API (ohs)
 
@@ -151,7 +151,7 @@ References: an inviting workspace and, after acceptance, the canonical `Login` a
 Fields:
 
 | Field               | Type                                     | Description                                                        |
-|---------------------|------------------------------------------|--------------------------------------------------------------------|
+| ------------------- | ---------------------------------------- | ------------------------------------------------------------------ |
 | `invitation_id`     | `string`                                 | Stable identity of the Invitation                                  |
 | `workspace_id`      | `string`                                 | Workspace offering membership                                      |
 | `recipient`         | `SignInIdentifier`                       | Canonical or alias identifier to which the Invitation is addressed |
@@ -177,7 +177,7 @@ Referenced by: `WorkspaceMembership`.
 Fields:
 
 | Field                  | Type                       | Description                                                                                   |
-|------------------------|----------------------------|-----------------------------------------------------------------------------------------------|
+| ---------------------- | -------------------------- | --------------------------------------------------------------------------------------------- |
 | `login_id`             | `string`                   | Stable internal identity of the Login                                                         |
 | `canonical_identifier` | `SignInIdentifier`         | Primary sign-in identifier, reserved while the Login remains active                           |
 | `subject_kind`         | `enum(User, Device)`       | Kind of subject represented by the Login                                                      |
@@ -220,7 +220,7 @@ References: `Login`.
 Fields:
 
 | Field        | Type                     | Description                                                 |
-|--------------|--------------------------|-------------------------------------------------------------|
+| ------------ | ------------------------ | ----------------------------------------------------------- |
 | `alias_id`   | `string`                 | Stable identity of the LoginAlias record                    |
 | `login_id`   | `string`                 | Canonical Login resolved by the alias                       |
 | `identifier` | `SignInIdentifier`       | Alternative sign-in value                                   |
@@ -243,7 +243,7 @@ Controlled by: one joined `Invitation` while active.
 Fields:
 
 | Field           | Type                     | Description                                |
-|-----------------|--------------------------|--------------------------------------------|
+| --------------- | ------------------------ | ------------------------------------------ |
 | `membership_id` | `string`                 | Stable identity of the membership          |
 | `login_id`      | `string`                 | Canonical Login that holds the membership  |
 | `workspace_id`  | `string`                 | Workspace in which roles are granted       |
@@ -257,6 +257,9 @@ Invariants:
 - Canonical Login disablement does not change membership state or roles.
 - Access through an active LoginAlias or an existing PrincipalToken continues while the canonical Login is `Disabled`.
 - Re-enabling the canonical Login restores its canonical entry operations without recreating memberships.
+- Membership roles apply in `workspace_id`, the Workspace containing the assignment
+- `sys.Subject.ProfileWSID` references the member identity's ProfileWorkspace; it does not select a Workspace in which to grant a role
+- A membership in a foreign Workspace can authorize that Workspace without a carried grant; enrichment in another Workspace does not capture the foreign assignment
 
 ### ERD
 
@@ -299,11 +302,11 @@ erDiagram
 
 The request-local result of authentication, consumed within its target Application and Workspace.
 
-| Field | Type | Description |
-| --- | --- | --- |
-| `payload` | `PrincipalToken` payload | Validated original claims, including Subject identity and original RoleGrant values |
-| `principals` | `list<Principal>` | Effective authorization inputs for this request |
-| `subject_roles` | `list<QName>` | Distinct roles read from Subjects in the request Workspace for canonical Login and Alias |
+| Field              | Type                     | Description                                                                                                                      |
+| ------------------ | ------------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| `payload`          | `PrincipalToken` payload | Validated original claims, including Subject identity and original RoleGrant values                                              |
+| `principals`       | `list<Principal>`        | Effective authorization inputs for this request                                                                                  |
+| `enrichment_roles` | `RoleSet`                | Distinct qualified role names independently eligible for new grants under the [PrincipalToken enrichment rules](#principaltoken) |
 
 Invariants:
 
@@ -311,9 +314,10 @@ Invariants:
 - Subject kind, canonical Login, Alias, and ProfileWorkspace remain available even when API-token or System composition omits User or Device Principals
 - Anonymous requests use a Guest payload with User kind, canonical Login `sys.Guest`, ProfileWorkspace `GuestWSID`, and no token grants; this synthetic identity does not represent a validated bearer token
 - A LoginAlias may resolve Subject-role assignments but does not replace the canonical Login
-- Subject roles are retained separately even when the same role is also effective through GlobalRoles, token grants, or request context
-- API-token authentication skips Subject lookup and returns no Subject roles
-- The target Application and Workspace stay in request context; the ProfileWorkspace identifies the Subject and does not independently authorize an operation
+- Enrichment eligibility is recorded independently of effective-Principal deduplication, so a role shared by a carried grant and an eligible source remains eligible
+- A role supplied only by a carried `RoleGrant` can be effective for authorization without appearing in `enrichment_roles`
+- API-token authentication skips Subject lookup; API-token and synthetic Guest results have no enrichment roles
+- The target Application and Workspace stay in request context; ProfileWorkspace identifies the Subject, while profile and Workspace ownership rules determine the resulting effective roles
 - Failed authentication returns no usable partial result
 
 #### CanonicalLoginEnablement
@@ -332,7 +336,7 @@ Authentication evidence or stored verifier associated with a Login; secret value
 Fields:
 
 | Field      | Type                            | Description                                                     |
-|------------|---------------------------------|-----------------------------------------------------------------|
+| ---------- | ------------------------------- | --------------------------------------------------------------- |
 | `kind`     | `enum(Password, VerifiedValue)` | Proof mechanism used by an authentication or recovery operation |
 | `verifier` | `string`                        | Protected representation used to validate the presented proof   |
 
@@ -343,7 +347,7 @@ An effective authorization input evaluated only in the current request Applicati
 Fields:
 
 | Field  | Type                                    | Description                                            |
-|--------|-----------------------------------------|--------------------------------------------------------|
+| ------ | --------------------------------------- | ------------------------------------------------------ |
 | `kind` | `enum(User, Device, Role, Host, Group)` | Principal category                                     |
 | `name` | `string`                                | Login, qualified role name, or Host name when relevant |
 | `id`   | `string?`                               | Group identifier when relevant                         |
@@ -353,7 +357,7 @@ Invariants:
 - `Principal` has no Workspace identifier; neither a role's source Workspace nor a Subject's ProfileWorkspace forms part of its value or equality
 - Effective Principals are valid only within the request context that produced them and are not transferable authorization inputs for another Application or Workspace
 - The original token payload provides identity independently of whether composition emits a User or Device Principal
-- Effective Principals alone do not determine enrichment additions; only roles read from Subjects contribute new grants, while original grants remain in the payload
+- Effective Principals alone do not determine enrichment additions; `AuthnResult.enrichment_roles` supplies eligible role names while original grants remain in the payload
 
 #### PrincipalToken
 
@@ -362,7 +366,7 @@ An app-scoped bearer value carrying an immutable identity snapshot until expirat
 Fields:
 
 | Field                  | Type                 | Description                                                                                    |
-|------------------------|----------------------|------------------------------------------------------------------------------------------------|
+| ---------------------- | -------------------- | ---------------------------------------------------------------------------------------------- |
 | `canonical_login`      | `SignInIdentifier`   | Canonical Login captured when the token is issued                                              |
 | `alias`                | `SignInIdentifier?`  | Active LoginAlias captured when the token is issued                                            |
 | `subject_kind`         | `enum(User, Device)` | Subject kind captured from Login                                                               |
@@ -381,20 +385,37 @@ Invariants:
 - Regular User and Device tokens can carry both `RoleScopeWorkspace` and `RoleScopeWorkspacesOwnedBy` grants
 - API tokens retain restricted principal composition, applying only matching `RoleScopeWorkspace` grants alongside the authenticated-user role
 - Legacy tokens without explicit role scopes retain the scope implied by their original token kind
+- Renewal preserves the original identity claims, GlobalRoles, token kind, and every grant's scope and Workspace binding
 
 Enrichment rules:
 
 - Enrichment requires a valid bearer token and the endpoint's existing authorization
 - Enrichment copies the original payload and preserves all carried grants, including grants that did not apply to this request
-- Only roles read from Subjects in the request Workspace produce proposed grants with their qualified role name, `RoleScopeWorkspace`, and the request Workspace identifier
-- Roles supplied only by GlobalRoles, existing grants, built-in authentication roles, ownership, or Device eligibility do not produce new grants
-- A role that also comes from another source is still captured when a Subject grants it
-- A WorkspaceDevice role from a Subject in request Workspace `200` for ProfileWorkspace `100` adds an exact-Workspace grant bound to `200`; an already-carried grant bound to `100` remains unchanged
-- API-token enrichment preserves the existing grants without additions because API-token authentication does not read Subjects
-- Proposed additions are deduplicated using [RoleGrant equality](#rolegrant), and ACL inheritance or legacy ACL expansion does not independently add grants
-- Repeated enrichment in one Workspace with unchanged effective roles is idempotent
-- Added grants apply only in the request Workspace and grant no access to its owner, children, or siblings; initial grants retain their original applicability
-- Subject identity claims, Alias, GlobalRoles, and token kind are preserved
+- For a regular token, each role in `AuthnResult.enrichment_roles` proposes a grant with its qualified role name, `RoleScopeWorkspacesOwnedBy`, and the request Workspace identifier
+- A role supplied only by carried grants does not propose another grant, regardless of whether those grants have exact-Workspace or owned-by scope
+- Authorization to call the endpoint does not establish enrichment eligibility for each effective role
+- A role shared by a carried grant and an independently eligible source still proposes a grant
+- An eligible `sys.WorkspaceDevice` role uses the request Workspace for its new grant, not the Device's ProfileWorkspace; carried Device grants keep their original bindings
+- API-token enrichment preserves the original identity and grant claims without additions, regardless of effective roles or independent assignments
+- Proposed additions are appended only when absent under [RoleGrant equality](#rolegrant); existing duplicate entries are preserved, and a shared role name does not merge grants with different scopes or Workspace bindings
+- Repeated enrichment in one Workspace with unchanged independently eligible roles is idempotent
+- Re-enrichment in a child cannot extend a carried role to another ownership level unless an eligible source independently supplies that role in the child
+- Carried exact-Workspace grants retain their target when enrichment occurs elsewhere; they do not acquire access to the target's parent or children
+- Subject identity claims, canonical Login, Alias, GlobalRoles, and token kind are preserved
+
+For regular tokens, each role source contributes to enrichment eligibility as follows:
+
+| Role source                                                                                                | Eligible for a new grant |
+| ---------------------------------------------------------------------------------------------------------- | ------------------------ |
+| Subject assignment in the request Workspace resolved through canonical Login or the token's captured Alias | Yes                      |
+| `PrincipalToken.global_roles`                                                                              | Yes                      |
+| Profile ownership                                                                                          | Yes                      |
+| Workspace ownership, including ownership-derived `sys.WorkspaceOwner` without a Subject assignment         | Yes                      |
+| Device eligibility                                                                                         | Yes                      |
+| Derived `sys.System` role                                                                                  | Yes                      |
+| Matching carried `RoleGrant`                                                                               | No                       |
+| Automatically supplied authentication markers, including `sys.AuthenticatedUser` and `sys.Anonymous`       | No                       |
+| ACL inheritance or legacy role expansion alone                                                             | No                       |
 
 #### RoleGrant
 
@@ -403,7 +424,7 @@ An application role assignment whose applicability is determined by `RoleScope` 
 Fields:
 
 | Field          | Type        | Description                                                   |
-|----------------|-------------|---------------------------------------------------------------|
+| -------------- | ----------- | ------------------------------------------------------------- |
 | `scope`        | `RoleScope` | How the Workspace reference determines where the role applies |
 | `workspace_id` | `string`    | Workspace reference interpreted according to `scope`          |
 | `role`         | `string`    | Qualified application role name                               |
@@ -418,7 +439,7 @@ An integer discriminator defining the meaning of the Workspace reference carried
 
 Values:
 
-- `RoleScopeWorkspacesOwnedBy = 0` - the role is emitted in each Workspace whose immediate owner is the referenced Workspace
+- `RoleScopeWorkspacesOwnedBy = 0` - the role is emitted in each Workspace whose immediate owner is the referenced Workspace; applicability follows one ownership edge and does not recurse into grandchildren
 - `RoleScopeWorkspace = 1` - the role applies only to the referenced Workspace
 
 #### RoleSet
@@ -436,7 +457,7 @@ A short-lived, single-use Credential proving control of one verified value for a
 Fields:
 
 | Field        | Type        | Description                                   |
-|--------------|-------------|-----------------------------------------------|
+| ------------ | ----------- | --------------------------------------------- |
 | `value`      | `string`    | Verified value bound to the token             |
 | `purpose`    | `string`    | Operation for which the proof can be consumed |
 | `expires_at` | `timestamp` | Expiration boundary of the proof              |

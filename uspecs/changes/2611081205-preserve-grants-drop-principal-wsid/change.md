@@ -7,7 +7,7 @@ scope: [auth, apps]
 breaking: true
 ---
 
-# Change request: Preserve initial grants on token enrichment + drop Principal.WSID
+# Change request: Preserve enrichment grants and remove Principal.WSID
 
 Refs:
 
@@ -15,79 +15,85 @@ Refs:
 
 ## Why
 
-Token enrichment must preserve the initial grants, including their scope and Workspace binding, when adding roles from Subjects in the request Workspace. `Principal.WSID` cannot describe both: for roles it denotes the request Workspace, while for Users and Devices it denotes the Subject's profile Workspace. The original token payload must remain available separately so enrichment does not reconstruct or replace initial grants from effective Principals. Subject roles must also remain distinguishable from other role sources.
+`Principal.WSID` conflates role applicability with Subject identity: it denotes the request Workspace for a Role Principal and the ProfileWorkspace for a User or Device Principal. Authentication projects token grants into effective Principals without retaining each role's original Scope, WSID, or source.
 
-For example:
+Enrichment reconstructs grants from those effective Principals. A role supplied only by an existing grant can therefore become another grant bound to the request Workspace, expanding access to another ownership level. Retaining the original grant does not prevent this additional access.
 
-- Workspace `100` owns Workspace `200`, which owns Workspace `300`
-- A regular token contains `{Scope: WorkspacesOwnedBy, WSID: 100, QName: WorkspaceOwner}`, granting access to Workspace `200`
-- Authentication in Workspace `200` emits an effective `WorkspaceOwner` Principal; its request Workspace does not identify the initial grant's binding to `100`
-- The previous enrichment added `{Scope: WorkspacesOwnedBy, WSID: 200, QName: WorkspaceOwner}`, unintentionally allowing access to Workspace `300`
-- Enrichment must retain the initial grant without copying a role supplied only by the token into another grant
-- If a Subject in Workspace `200` also grants WorkspaceOwner, enrichment adds `{Scope: Workspace, WSID: 200, QName: WorkspaceOwner}`, which applies only in Workspace `200`
-- The initial owned-by grant bound to `100` must remain unchanged alongside any new Subject grant; rebuilding grants from effective Principals alone cannot recover the initial binding or identify a Subject assignment
+Problematic example:
 
-The following diagrams show WorkspaceOwner access for this example. Workspace `100` also owns Sibling `201`. The User has no other roles in these Workspaces, and a Subject in Target grants WorkspaceOwner to the User.
+- Workspace 100 owns Workspace 200, and Workspace 200 owns Workspace 300
+- A regular token contains `{Scope: RoleScopeWorkspacesOwnedBy, WSID: 100, QName: sys.WorkspaceOwner}`
+- That grant authorizes Workspace 200 but does not authorize Workspace 300
+- No Subject, ownership, or GlobalRole independently grants WorkspaceOwner to the User in Workspace 200
+- Authentication in Workspace 200 produces an effective WorkspaceOwner Principal from the carried grant
 
-On main, enrichment copies the effective role into another owned-by grant:
+| Request                                                        | Workspace | Actual result                                                                                                           |
+| -------------------------------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------- |
+| An operation requiring WorkspaceOwner using the original token | 300       | 403 Forbidden                                                                                                           |
+| q.sys.EnrichPrincipalToken using the original token            | 200       | 200 OK; EnrichedToken additionally contains `{Scope: RoleScopeWorkspacesOwnedBy, WSID: 200, QName: sys.WorkspaceOwner}` |
+| The same operation using EnrichedToken                         | 300       | 200 OK                                                                                                                  |
 
-```text
-Parent 100                  Initial grant: WorkspaceOwner, WorkspacesOwnedBy, WSID 100
-│                           Applies to Target and Sibling, not Parent itself
-├── Target 200              Enrichment adds: WorkspaceOwner, WorkspacesOwnedBy, WSID 200
-│   │                       Initial access retained
-│   └── Grandchild 300      NEW ACCESS through the added grant: unintended
-└── Sibling 201             Initial access retained
-```
-
-After the fix, enrichment preserves the initial grant and adds an exact grant only for the role read from the Subject in Target:
-
-```text
-Parent 100                  Initial grant: WorkspaceOwner, WorkspacesOwnedBy, WSID 100
-│                           Applies to Target and Sibling, not Parent itself
-├── Target 200              Enrichment adds: WorkspaceOwner, Workspace, WSID 200
-│   │                       Initial access + exact grant from the Subject in Target
-│   └── Grandchild 300      No WorkspaceOwner access
-└── Sibling 201             Initial access retained
-```
-
-Without the Subject assignment in Target, the fix adds no WorkspaceOwner grant. The initial grant still authorizes Target and Sibling. With the Subject assignment, the added exact grant continues to authorize Target after the Subject is deactivated.
-
-This change preserves initial access while preventing added grants from extending access to other Workspaces. It keeps initial grants separately from effective Principals and drops `Principal.WSID`, using request context for the target Workspace and the original payload for Subject identity.
+The original grant remains bound to Workspace 100, while the added grant opens access to Workspace 300. The effective role alone does not distinguish a carried grant from an independent role assignment in Workspace 200.
 
 ## What
 
-- AuthnResult contains PrincipalPayload, the original validated claims; Principals, effective authorization inputs; and SubjectRoles, distinct roles read from Subjects in the current Workspace
-- Effective Principals contain no WSID; request Application and Workspace remain in request context, and Subject identity comes from PrincipalPayload
-- Enrichment preserves original grants and adds only Subject roles with exact-Workspace scope using the request Workspace
-- GlobalRoles, token grants, built-in roles, ownership, and Device eligibility alone do not create additions; API-token enrichment has no additions because authentication skips Subjects
-- A WorkspaceDevice role is captured only when a Subject grants it, using the request Workspace rather than the Device profile; existing carried grants retain their original bindings
-- Regular-token authentication honors exact-Workspace grants as well as existing owned-by grants; API-token composition, early returns, endpoint permissions, token identity claims, refresh behavior, and enrichment lifetime remain unchanged
-- RequestSubject and identity logging obtain canonical Login, SubjectKind, and ProfileWSID even when API-token or System composition omits User or Device Principals
+- Preserve every existing grant tuple and identity claim, including unmatched grants, canonical Login, Alias, SubjectKind, ProfileWSID, GlobalRoles, and IsAPIToken
+- Preserve parent-to-child delegation for independently supplied roles, including Subject assignments and ownership-derived WorkspaceOwner without an owner Subject
+- Add regular-token grants with `{Scope: RoleScopeWorkspacesOwnedBy, WSID: requestWSID, QName: role}` only when an eligible source independently supplies the role in the request Workspace
+- Keep roles supplied only by carried grants effective for authorization without using them to create grants for another ownership level
+- Bind new grants to the request Workspace; retain all original scopes and Workspace bindings unchanged
+- Preserve API-token payloads without additions and retain their exact-Workspace authorization restrictions
+- Deduplicate additions by the complete `{Scope, WSID, QName}` tuple without changing or removing original entries
+- Separate request-local effective Principals, immutable token identity and grants, and roles eligible for enrichment; remove Principal.WSID
+- Preserve endpoint URLs, bearer authentication, Login argument, EnrichedToken response field, existing endpoint authorization, and issuance lifetime
+- Preserve complete payload and scope information through refresh
+- Preserve exact access to a foreign Workspace through enrichment and refresh without granting access to its parent or children; a Subject's ProfileWSID identifies an identity and does not define a grant target
 
 ## How
 
+Approaches considered:
+
+- Reconstruct new grants from all effective Principals: loses role origin and permits the ownership-level expansion in Why
+- Exclude every effective role whose QName occurs in a carried grant: suppresses legitimate enrichment when a Subject or another independent source grants the same role
+- Collect independently supplied enrichment roles during authentication alongside the original payload and effective Principals: selected because it preserves required delegation, distinguishes overlapping sources, and prevents carried-grant-only expansion without a full provenance model
+
 Decisions:
 
-- Retain PrincipalPayload, Principals, and a SubjectRoles snapshot in AuthnResult; use the existing PrincipalPayload type for state identity callbacks and test fixtures
-- Authentication retains the original validated payload, including normalized legacy scopes, and never prepares additional grants in it
-- Synthetic Guest payloads represent anonymous requests and anonymous-only function shortcuts without implying bearer-token validation
-- Enrichment copies PrincipalPayload and clones its Roles slice before appending complete grant tuples, preserving the result and any shared backing slice
-- Record distinct Subject roles during canonical Login and Alias lookups, even when another source already supplied the same effective Principal; use requestWSID for their new exact grants
-- Do not reconstruct role sources from effective Principals or reread Subjects during enrichment; ACL inheritance and legacy ACL expansion do not independently produce grants
-- Match regular-token exact grants against requestWSID, independently of the Workspace descriptor; retain descriptor-based matching for owned-by grants
-- Repeated enrichment within one Workspace is idempotent; added grants authorize only that Workspace, while initial grants retain their original applicability
-- Evaluate Device eligibility in its existing composition stage even when another source already supplied WorkspaceDevice; deduplicate effective Principals without recording sources
-- Migrate state callbacks, command/query processors, N10n, System checks, legacy Guest matching, and request logging together
+- Return one AuthnResult containing the original validated PrincipalPayload, effective Principals, and distinct EnrichmentRoles for the request
+- Keep effective Principals free of Workspace identifiers; use request context for applicability and PrincipalPayload for Subject identity
+- Record enrichment eligibility when a role source is evaluated, independently of whether effective-Principal deduplication already recorded the same role
+- Eligible sources are Subject assignments resolved through canonical Login and Alias, GlobalRoles, profile ownership, Workspace ownership, Device eligibility, and the existing derived System role
+- Matching carried grants contribute effective Principals only; they never contribute EnrichmentRoles by themselves, regardless of whether their scope is Workspace or WorkspacesOwnedBy
+- Automatically supplied authentication markers such as AuthenticatedUser and Anonymous do not contribute EnrichmentRoles; API-token and synthetic Guest results provide no enrichment roles
+- Keep role composition order and System short-circuits; collect eligible roles at their existing source stages, including before an early return where applicable
+- Keep one set of distinct role names for enrichment rather than tagging every Principal or retaining a separate source record per grant
+- Let authentication identify eligible role names and let enrichment construct the new owned-by tuples using requestWSID; authentication never changes payload grants
+- Clone the original Roles slice before appending additions, preserving the authentication result and its backing storage
+- Keep an explicit API-token guard that adds no grants, including grants for roles that are effective during API authentication
+- Read the authentication result from the request workpiece without reauthentication, repeated Subject reads, or repeated Device eligibility checks
+- Retain existing authorization inheritance and legacy ACL expansion; they do not independently materialize additional enrichment roles
+- Repeated enrichment in one Workspace with unchanged independent role sources is idempotent; existing duplicate payload entries are preserved
+- Re-enrichment in a child adds a role grant for its children only if an eligible source independently supplies that role there; authorization to call the endpoint alone does not establish eligibility for each new grant
+- Keep existing scope-aware validation, legacy scope normalization, exact-grant matching, and scope-preserving serialization; match owned-by grants against the immediate owner's WSID without recursive ownership matching
+- Preserve failure-result clearing, request isolation, canonical identity in RequestSubject, and identity availability when API-token or System composition omits a User or Device Principal
+- Mark exported Go interface changes and the restriction on carried-grant-only redelegation as breaking; preserve the endpoint protocol and independently sourced parent-to-child delegation
+- Express requirements, specifications, code, comments, and tests using platform concepts
 
-Acceptance criteria for the changed binding:
+Acceptance criteria:
 
-- Given a Device profile `100` making an authorized enrichment request in Workspace `200`, a WorkspaceDevice role read from its Subject produces `{Scope: Workspace, WSID: 200, QName: sys.WorkspaceDevice}`
-- If GlobalRoles or Device eligibility also supplies WorkspaceDevice, a Subject assignment still produces that exact grant without rereading eligibility or Subjects during enrichment
-- If no Subject grants WorkspaceDevice, enrichment does not add it even when it is effective through GlobalRoles or Device eligibility
-- Any previously carried WorkspaceDevice grant bound to `100` remains unchanged
-- New Subject-role grants use `{Scope: Workspace, WSID: requestWSID, QName: role}` and never introduce owned-by scope; API tokens retain their existing grants without additions
-- A VIT integration test removes the source Subject role after enrichment and proves that the token still permits writes in the target Workspace, denies writes in its owner, child, and sibling, and preserves initial read access to the sibling through refresh
+- A freshly signed-in owner of Workspace 100 with ProfileWSID 42, no carried grants, and no matching Subject enriches at 100 and gains access to its immediate child 200
+- A Subject-assigned role in Workspace 100 can be delegated to its children without separate Subject assignments in those children
+- A token with only an owned-by WorkspaceOwner grant bound to 100 can use Workspace 200 but gains no WorkspaceOwner grant bound to 200 when enriched there, leaving access to child 300 forbidden
+- If a Subject independently grants the same WorkspaceOwner role in 200, enrichment there adds an owned-by grant bound to 200 and access to 300 succeeds
+- The same distinction applies to roles carried with exact-Workspace scope; their original tuples remain unchanged
+- A role shared by a carried grant and an eligible source remains eligible, and each new tuple is added at most once
+- A Device role independently supplied by Subjects, GlobalRoles, or eligibility uses requestWSID for its new grant even when ProfileWSID differs
+- Original mixed-scope and unmatched grants and all identity fields remain unchanged, and refresh preserves the enriched payload and its access boundaries
+- With ProfileWorkspace 100 owning 200 and ProfileWorkspace 300 owning 400, which owns 500, an original exact WorkspaceOwner grant for 400 survives enrichment in 100 and refresh: operations in 400 succeed while the same operations in 300 and 500 remain forbidden
+- A matching Subject stored in 400 for the User with ProfileWSID 100 permits operations in 400 without a carried grant, while 300 and 500 remain forbidden; enrichment in 100 does not read that Subject or materialize its role into the token
+- A Subject stored in 100 does not define an exact grant for the Workspace named by its ProfileWSID; absent separate authority for 400, the stored record alone cannot make operations in 400 succeed
+- API-token enrichment adds no grants and creates no child access
+- Missing bearer tokens fail without publishing a token, and normal endpoint authorization remains required
 
 Assumptions:
 
@@ -95,242 +101,252 @@ Assumptions:
 
 Out of scope:
 
-- Restricting the entire returned token to one Workspace by removing initial grants or changing ordinary GlobalRoles, Subject, ownership, or Device role derivation
-- Tagging effective Principals with source metadata or introducing separate enrichment candidate types
-- Reworking ACL inheritance or legacy authorization policies
+- New endpoint parameters, a separate delegation API, or per-role grant revocation
+- Changes to role inheritance, legacy authorization policy, or token expiration policy
+- A general role-provenance model beyond the enrichment eligibility snapshot
 
 References:
 
 - [Authentication boundary](../../../pkg/iauthnz/authn-interface.go)
-- [Authentication composition](../../../pkg/iauthnzimpl/impl.go)
-- [Token enrichment](../../../pkg/sys/authnz/impl_enrichprincipaltoken.go)
-- [Auth model and enrichment rules](../../specs/prod/auth/context.md)
+- [Principal and identity types](../../../pkg/iauthnz/authn-types.go)
+- [Role source composition](../../../pkg/iauthnzimpl/impl.go)
+- [Token enrichment endpoint](../../../pkg/sys/authnz/impl_enrichprincipaltoken.go)
+- [Principal payload and grant scopes](../../../pkg/itokens-payloads/types.go)
+- [Scope validation and legacy normalization](../../../pkg/itokens-payloads/impl_principalpayload.go)
+- [Child Workspace authorization tests](../../../pkg/sys/it/impl_childworkspace_test.go)
+- [Endpoint declaration and authorization](../../../pkg/sys/sys.vsql)
+- [Authorization role expansion](../../../pkg/processors/oldacl/utils.go)
 
 ## Domain design
 
 - [x] update: [prod/domain.md](../../specs/prod/domain.md)
-  - distinguish: request-scoped Principal authorization from Subject identity and token-carried RoleGrant values
+  - distinguish: request-local Principal authorization from Subject identity and token-carried RoleGrant values
 
 - [x] update: [prod/auth/context.md](../../specs/prod/auth/context.md)
-  - define: AuthnResult with original PrincipalPayload, effective Principals, and SubjectRoles, including synthetic Guest identity and early-return availability
-  - define: exact request-Workspace additions only from Subjects, API-token preservation without additions, tuple equality, WorkspaceDevice source filtering, and repeated enrichment
+  - define: WSID-free effective Principals and identity obtained from the immutable original token payload
+  - define: enrichment eligibility from independent role sources, original grant preservation, owned-by additions bound to the request Workspace, unchanged API-token payloads, and full tuple equality
+  - distinguish: effective authorization from eligibility to create another grant, including roles shared by carried grants and independent assignments
+  - specify: immediate-owner applicability, idempotent repeated enrichment, and prevention of carried-grant-only propagation to another ownership level
+  - distinguish: Subject identity and the Workspace containing its assignment from a RoleGrant target; Subject.ProfileWSID is never interpreted as a target binding
 
 ## Functional design
 
 - [x] create: [auth/token-enrichment.feature](../../specs/prod/auth/token-enrichment.feature)
-  - Feature specification derived from enrichment unit tests and TestForeignAuthorization, retaining one dedicated Rule and Scenario for request-Workspace binding without Principal.WSID and covering initial-grant preservation, Subject-only additions, unchanged API-token payloads, repeated regular-token enrichment, Device source filtering, Workspace isolation, and missing bearer tokens
-  - trace: claim and grant preservation, canonical and Alias Subject roles, API-token non-expansion, issued Application and lifetime, and repeated enrichment to TestEnrichmentPreservesInitialGrantsAndAddsOnlySubjectRoles
-  - trace: Device roles captured only from Subjects, including roles shared with GlobalRoles and eligibility, to TestDeviceRolesAreCapturedOnlyFromSubjects
-  - trace: retained original access, target-only added roles after Subject deactivation, and repeated requests to TestForeignAuthorization
-  - trace: missing-bearer-token rejection without an issued token to TestEnrichmentRejectsMissingBearerToken; this executor-level error scenario does not specify an HTTP status
+  - Feature specification implementing every case in [Required enrichment scenarios](#required-enrichment-scenarios), including exact foreign-Workspace access, Subject placement, parent-to-child delegation, source-dependent further delegation, claims and grant preservation, API-token restrictions, repetition, refresh, and authentication failures
 
 - [x] update: [auth/authn.feature](../../specs/prod/auth/authn.feature)
-  - merge: refresh scenarios into one Scenario Outline for tokens with no grants or with owned-by and exact Workspace grants
-  - verify: complete PrincipalPayload, Application, and issued lifetime preservation, along with refresh response fields and Content-Type, in TestRefreshPrincipalToken
-  - trace: grant applicability after refresh to TestForeignAuthorization
+  - specify: refresh with no grants or mixed owned-by and exact grants preserves the complete PrincipalPayload, Application, issued lifetime, response ProfileWSID, expiration, and Content-Type
+
+### Required enrichment scenarios
+
+Cover every row with a Scenario or meaningful Examples rows. Combine groups that share a coherent history and behavior, retaining their coverage tags; do not require a separate Scenario for each group. Start each behavior group with basic usage and give every Scenario exactly one When and one Then. Multi-request behaviors use ordered request and response tables with automatic retries disabled for access checks. Denial cases exclude other applicable ownership, Subjects, GlobalRoles, System authority, and carried grants.
+
+| ID  | Required behavior                                                         | Required cases and observable outcomes                                                                                                                                                                                                                                                                                                               |
+| --- | -------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| E1  | A parent owner delegates access to immediate children                      | ProfileWorkspace 42 owns 100, which owns 200; without carried grants or matching Subjects, enrichment at 100 adds the owned-by WorkspaceOwner grant bound to 100 and changes a protected operation in 200 from 403 Forbidden to 200 OK                                                                                                               |
+| E2  | A Subject-assigned role grants access to children of its Workspace         | A foreign User has a Subject assignment in 100 through canonical Login or active Alias; enrichment at 100 permits the corresponding child operation without a Subject in the child                                                                                                                                                                   |
+| E3  | Enrichment captures roles from independent non-Subject sources             | Meaningful Examples cover GlobalRoles, profile ownership, and the derived System role; assert the precise added grant tuples, unchanged identity, and absence of grants for automatically supplied authentication markers                                                                                                                            |
+| E4  | An independently supplied Device role uses the request Workspace           | Examples cover a Subject, GlobalRoles, and Device eligibility, including overlap with a carried role; with ProfileWSID 100 and request Workspace 200, add one eligible owned-by grant bound to 200 without rebinding carried grants                                                                                                                  |
+| E5  | Enrichment creates a further grant only from an independent assignment     | For both exact and owned-by carried WorkspaceOwner grants authorizing 200, enrichment at 200 alone leaves 300 forbidden; an independent Subject assignment in 200 permits the new grant bound to 200 and changes access to 300 to 200 OK; refresh preserves the applicable boundary                                                                  |
+| E6  | Enrichment and refresh preserve an exact grant to a foreign Workspace      | ProfileWorkspace 100 owns 200, and ProfileWorkspace 300 owns 400, which owns 500; the token for ProfileWSID 100 already carries an exact WorkspaceOwner grant for 400; after enrichment in 100 and refresh, 400 returns 200 OK while 300 and 500 return 403 Forbidden; enrichment in 400 without an independent source must also leave 500 forbidden |
+| E7  | A Subject identity reference does not select a grant target                | A Subject stored in 100 contributes roles only through the matching Login or Alias in 100; its ProfileWSID never creates a target grant for 400; with no original grant or separate membership authorizing 400, enrichment in 100 leaves operations in 400 forbidden                                                                                 |
+| E8  | Membership in a foreign Workspace authorizes only that Workspace           | For the E6 hierarchy, a Subject stored in 400 grants WorkspaceOwner to the User whose ProfileWSID is 100, and the token carries no grant for 400; after enrichment in 100, membership lookup in 400 permits access there while 300 and 500 remain forbidden, without a grant for 400 appearing in the returned token                                 |
+| E9  | Enrichment preserves identity and original grant tuples                    | User and Device Examples preserve Login, Alias, SubjectKind, ProfileWSID, GlobalRoles, IsAPIToken, and every original mixed-scope and unmatched tuple; legacy missing scopes retain regular-token owned-by semantics; assert the exact allowed additions, Application binding, and DefaultPrincipalTokenExpiration                                   |
+| E10 | Repeated enrichment preserves the payload without duplicate additions      | Enrich twice in one Workspace with unchanged independent sources; the returned payloads match, additions occur once, original duplicate entries remain unchanged, and grants sharing a QName remain distinct when Scope or WSID differs                                                                                                              |
+| E11 | An issued delegation remains valid after its Subject assignment is removed | After enriching a Subject-assigned role at 100 and removing that Subject, the carried grant still permits the child operation in 200; it does not authorize an unrelated branch or grandchild 300 owned by 200                                                                                                                                       |
+| E12 | API-token enrichment preserves its payload and exact access boundaries     | An API token authorized to enrich in its exact Workspace retains its complete payload despite effective roles and independent Subject assignments; legacy missing scopes retain API-token exact-Workspace semantics; no new grants or child access appear                                                                                            |
+| E13 | Enrichment refuses to issue a token without a bearer token                 | Executor invocation with synthetic Guest identity and no bearer returns ErrInvalidToken and publishes no token; keep this error assertion separate from HTTP authorization outcomes                                                                                                                                                                  |
+| E14 | Enrichment rejects a caller without authority in the request Workspace     | A valid enrichment request with a valid token but no applicable role authorizing the endpoint receives 403 Forbidden and no EnrichedToken                                                                                                                                                                                                            |
+| E15 | Enrichment rejects an invalid bearer token                                 | For valid request bodies, meaningful Examples cover invalid signature, expiration, wrong Application audience, and invalid explicit role scopes; each receives 401 Unauthorized and no EnrichedToken                                                                                                                                                 |
+
+Reuse the refresh response and payload Scenario Outline in [Authentication](../../specs/prod/auth/authn.feature) rather than duplicating it. E5 and E6 cover access boundaries after refresh; they must verify authorization as well as decoded claims. Preserve Subject identity semantics in E7 and E8 instead of introducing a target field or treating ProfileWSID as a RoleGrant.
+
+Map every Scenario and Examples row to named production-path Go tests with verbatim step and Examples comments. Source-read counts, Roles slice backing-storage isolation, authentication-result reset, and other internal invariants remain Go test responsibilities; Gherkin outcomes use returned token claims, response fields, errors, and authorization results.
 
 ## Technical design
 
-- [x] update: [prod/auth/arch.md](../../specs/prod/auth/arch.md) and [prod/auth/arch-authz.md](../../specs/prod/auth/arch-authz.md)
-  - document: original PrincipalPayload retention, WSID-free effective Principals, SubjectRoles capture, regular-token exact-grant matching, existing source composition stages, Device eligibility, and atomic failure results
+- [ ] update: [prod/auth/arch.md](../../specs/prod/auth/arch.md) and [prod/auth/arch-authz.md](../../specs/prod/auth/arch-authz.md)
+  - define: AuthnResult with original PrincipalPayload, effective Principals, and EnrichmentRoles, including Guest, API-token, System, and error paths
+  - document: eligible role collection at source stages independently of effective-role deduplication; carried grants contribute only to authorization
+  - document: canonical Login and Alias lookups, ownership and Device-derived roles, exact-grant matching without a descriptor, existing System short-circuits, and atomic failure results
 
-- [x] update: [prod/auth/arch-tokens.md](../../specs/prod/auth/arch-tokens.md)
-  - document: copying the original payload and adding exact grants only from SubjectRoles without source reconstruction or payload mutation; API-token non-expansion; require scope-aware validators and scope-preserving refresh
+- [ ] update: [prod/auth/arch-tokens.md](../../specs/prod/auth/arch-tokens.md)
+  - document: immutable payload copying and new owned-by tuples from EnrichmentRoles using requestWSID, with complete tuple deduplication and an explicit API-token guard
+  - specify: re-enrichment preserves carried bindings and cannot create a further grant from a carried role alone; independent assignments remain eligible even when the role is already effective
+  - document: existing endpoint authorization, response shape, DefaultPrincipalTokenExpiration, no additional source reads, scope-aware validation, legacy scope normalization, and scope-preserving refresh and serialization
 
 - [x] update: [prod/auth/authn--td.md](../../specs/prod/auth/authn--td.md)
-  - document: principal-token refresh preserves the complete PrincipalPayload, including RoleGrants, along with Application and issued lifetime
+  - document: refresh preserves the complete PrincipalPayload, including grant scopes and bindings, Application, and issued lifetime
 
-- [x] update: [prod/apps/arch-processing.md](../../specs/prod/apps/arch-processing.md)
-  - document: result propagation, request isolation, PrincipalPayload identity projection, System and Guest checks, diagnostics, and verification ownership
+- [ ] update: [prod/apps/arch-processing.md](../../specs/prod/apps/arch-processing.md)
+  - document: authentication-result propagation and reset across command, query v1/v2, and subscription processing
+  - define: PrincipalPayload for identity, Principals for authorization, and EnrichmentRoles for endpoint grant construction
+  - document: RequestSubject identity projection, System and Guest checks, diagnostics, and verification ownership
 
 ## Construction
 
 ### Tests
 
 - [x] update: [pkg/iauthnz/utils_test.go](../../../pkg/iauthnz/utils_test.go)
-  - verify: System role checks without Principal.WSID
+  - verify: request-local System role checks without Principal.WSID
 
-- [x] update: [pkg/iauthnzimpl/impl_test.go](../../../pkg/iauthnzimpl/impl_test.go)
-  - verify: original PrincipalPayload preservation, User/Device/Guest/API/System identity, legacy scopes, effective-role deduplication, Device eligibility, and empty results on failure
-  - reuse: merged MockAppStructs and MockRecords with descriptor fixtures; remove unused local app, record, view, and key implementations and unrelated fixture records
-  - verify: source-specific Global, Subject, and token roles detect skipped composition stages while shared roles remain deduplicated; normalized legacy grants also produce effective Principals
-  - verify: regular-token exact grants match only the request Workspace even without a descriptor, and coexist with owned-by grants for User and Device tokens
-  - verify: SubjectRoles retains distinct canonical and Alias assignments shared with other role sources, remains empty for API tokens, and is discarded with partial results on lookup failure
+- [ ] update: [pkg/iauthnzimpl/impl_test.go](../../../pkg/iauthnzimpl/impl_test.go)
+  - verify: original payload preservation, User/Device/Guest/API/System identity, explicit and legacy scopes, role deduplication, and empty results on failure
+  - verify: independent expected Principals and EnrichmentRoles for canonical Login, Alias, GlobalRoles, profile ownership, Workspace ownership, Device eligibility, and System paths
+  - verify: carried exact and owned-by roles remain effective without becoming enrichment candidates; roles shared with independent sources remain candidates
+  - verify: authentication markers and synthetic Guest and API-token results supply no enrichment candidates
+  - reuse: shared MockAppStructs, MockRecords, and TestObject descriptors; retain explicit source reads and Device eligibility expectations
 
 - [x] remove: `pkg/sys/storages/impl_subject_storage_test.go`
-  - consolidate: identity projection, storage key equality, and callback freshness coverage into TestCommandStateRequestSubject
+  - consolidate: RequestSubject identity projection, storage-key equality, and callback freshness checks into state-provider tests
 
 - [x] update: [state/stateprovide/impl_host_state_test.go](../../../pkg/state/stateprovide/impl_host_state_test.go)
-  - verify: command state PrincipalPayload callbacks with request Workspace different from ProfileWSID, key equality, Token retrieval, and fresh callback values without changing prior results
+  - verify: PrincipalPayload-based identity with request Workspace different from ProfileWSID, Token retrieval, key equality, and fresh callback values
 
 - [x] update: [pkg/processors/utils_test.go](../../../pkg/processors/utils_test.go)
-  - verify: anonymous-only result replacement and synthetic Guest PrincipalPayload
+  - verify: anonymous-only result replacement and synthetic Guest identity
 
 - [x] update: [processors/query/impl_test.go](../../../pkg/processors/query/impl_test.go)
-  - verify: TestAuthnResultAvailableInQuery exposes authenticated Login, SubjectKind, ProfileWSID, and the original Token through RequestSubject to a real query extension without User or Device Principals
-  - consolidate: retain one request through the processor pipeline; this test does not directly verify failure cleanup, sequential requests, or workpiece release
+  - verify: a real query extension reads Login, SubjectKind, ProfileWSID, and Token through RequestSubject when no User or Device Principal is emitted
 
 - [x] update: [processors/n10n/impl_test.go](../../../pkg/processors/n10n/impl_test.go)
-  - verify: per-Workspace subscription authorization and existing unauthorized/forbidden mapping
-  - reuse: coreutils.MockAppStructs, MockRecords, and TestObject for subscription Workspace descriptors
+  - verify: per-Workspace subscription authorization and unauthorized/forbidden response mapping using shared descriptor mocks
 
-- [x] update: [processors/oldacl/impl_test.go](../../../pkg/processors/oldacl/impl_test.go)
-  - verify: reserved Guest identity matching, authorization role ancestry, and Verbose denial diagnostics with suppression below Verbose severity
-  - verify: explicit legacy role enrichment and unchanged input independently of authorization ancestry lookup
-  - remove: token-exclusion assertions without token input and duplicated System-principal checks covered in iauthnz
+- [x] create: [processors/oldacl/impl_test.go](../../../pkg/processors/oldacl/impl_test.go)
+  - Test reserved Guest identity matching against all identity fields
+  - Verify authorization role ancestry and explicit legacy role expansion without changing the input
+  - Verify Verbose denial diagnostics and suppression below Verbose severity
 
-- [x] update: [sys/authnz/impl_enrichprincipaltoken_test.go](../../../pkg/sys/authnz/impl_enrichprincipaltoken_test.go)
-  - verify: Subject-only exact additions for User and Device tokens, unchanged API-token grants, original/unmatched grant retention, duplicate-role exclusion, shared-slice immutability, and idempotent repeated enrichment
-  - verify: GlobalRoles and Device eligibility alone produce no additions, while overlapping Subject assignments still produce exact grants without a second eligibility check
-  - verify: a missing bearer token returns ErrInvalidToken without invoking the result callback
-  - reuse: coreutils state, key, value, app, and records mocks with explicit expectations and TestObject descriptors; keep the workpiece double local to avoid an import cycle
-  - remove: redundant assertions and revalidation of the unchanged original input token; retain tests that execute production enrichment and authentication
-
-- [x] update: [itokens-payloads/impl_test.go](../../../pkg/itokens-payloads/impl_test.go)
-  - verify: explicit scope round trips, legacy scope normalization for both token kinds, and rejection of null, malformed, or unknown scope values
+- [ ] create: [sys/authnz/impl_enrichprincipaltoken_test.go](../../../pkg/sys/authnz/impl_enrichprincipaltoken_test.go)
+  - Exercise production authentication and enrichment with real JWTs and shared state, app, records, key, and value mocks
+  - Verify independent expected owned-by tuples from eligible sources, including ownership-derived WorkspaceOwner without a Subject and canonical and Alias Subject roles
+  - Verify carried-grant-only roles produce no additions while overlapping independent assignments remain eligible
+  - Verify mixed-scope and unmatched original grants, distinct tuples sharing a QName, unchanged identity, Application, and endpoint lifetime
+  - Verify original workpiece payload and spare backing capacity remain unchanged, and reauthentication followed by repeated enrichment creates no duplicate tuples
+  - Verify request-bound Device grants from each eligible source and no repeated Subject reads or eligibility checks
+  - Verify API-token payload equality despite effective roles and missing-bearer rejection without publishing a token
+  - Keep the workpiece double local only to avoid an import cycle; reuse shared mocks for general dependency boundaries
+  - Map E3, E4, E9, E10, E12, and E13 to named production-path cases; coordinate E1, E2, and E5 with authentication-source and VIT assertions rather than duplicating complete fixtures
 
 - [x] update: [sys/it/impl_authn_feature_test.go](../../../pkg/sys/it/impl_authn_feature_test.go)
-  - consolidate: principal-token refresh into TestRefreshPrincipalToken with no-grants and mixed-scope grant cases using shared request and assertion logic
-  - verify: full payload, Application, issued lifetime, response ProfileWSID, expiration, Content-Type, and a newly issued token through the real refresh API
+  - verify: complete refresh payload, Application, lifetime, ProfileWSID, expiration, Content-Type, and new issuance through the real endpoint with no grants and mixed-scope grants
 
-- [x] update: [sys/it/impl_childworkspace_test.go](../../../pkg/sys/it/impl_childworkspace_test.go)
-  - verify: exact added grant tuples, writes in the target after source Subject removal, denied writes in its owner, child, and sibling, retained initial read access to its sibling, repeated enrichment, identity preservation, refresh, and API-token isolation
+- [ ] update: [sys/it/impl_childworkspace_test.go](../../../pkg/sys/it/impl_childworkspace_test.go)
+  - verify: successful parent enrichment and child access separately for an ownership-derived owner without a Subject and a foreign User with a Subject-assigned role
+  - verify: a fresh regular token has no carried grants, child access is initially forbidden, and the enriched token permits the child operation without child membership
+  - verify: an owned-by grant bound to 100 permits Workspace 200, but enrichment at 200 without an independent role source leaves Workspace 300 forbidden
+  - verify: adding an independent Subject assignment in 200 enables its new owned-by grant and access to 300 while preserving the grant bound to 100
+  - verify: the carried-grant-only restriction also applies to exact grants; existing exact-grant isolation and immediate-owner matching remain valid
+  - verify: complete expected tuples, independently expected identity, unmatched-grant preservation, same-Workspace idempotency, and unchanged access boundaries after refresh
+  - verify: API-token enrichment preserves exact scope and creates no new child access
+  - verify: E6 and E8 through one foreign-access outline covering exact grants and live membership; check the 400/300/500 boundary after enrichment, unchanged claims through refresh, and source-dependent child access after re-enrichment in 400
+  - verify: E7 does not infer foreign authority from Subject.ProfileWSID, and E8 obtains authority from a matching Subject stored in 400 without adding a token grant for 400
+  - verify: E11 preserves issued child access after source Subject removal; do not mistake the carried grant for authority in its source Workspace
+  - map: E1, E2, E5, E6, E7, E8, E11, E12, E14, and E15 to named endpoint-level cases, reusing existing scope and authentication checks where their setup and assertions prove the complete Scenario
+  - use: shared VIT setup, explicit expected HTTP statuses, no automatic retries for access checks, and feature-to-test traceability with verbatim steps and Examples rows
 
 - [x] update: [tests/wasm/main_test.go](../../../pkg/iextengine/wazero/_testdata/tests/wasm/main_test.go)
-  - verify: extension-visible SubjectKind, Login, ProfileWSID, and Token through the PrincipalPayload test-state fixture
+  - verify: extension-visible SubjectKind, Login, ProfileWSID, and Token through PrincipalPayload-based test-state fixtures
 
-### Authentication and consumers
+### Authentication and request state
 
 - [x] update: [pkg/coreutils/mock.go](../../../pkg/coreutils/mock.go)
-  - extend: the merged MockAppStructs with ClusterAppID and nil-safe AppTokens expectations, retaining its existing IAppStructs compliance check in coreutils/mock_test.go
-  - reuse: shared MockRecords and other interface mocks supplied by AIR-5221 instead of duplicate local implementations
+  - extend: shared MockAppStructs with ClusterAppID and nil-safe AppTokens expectations, retaining existing interface compliance checks
+  - reuse: shared records and other interface mocks instead of duplicating general dependency boundaries
 
-- [x] update: [itokens-payloads/consts.go](../../../pkg/itokens-payloads/consts.go) and [itokens-payloads/types.go](../../../pkg/itokens-payloads/types.go)
-  - implement: RoleScopeWorkspacesOwnedBy and RoleScopeWorkspace and explicit Scope in RoleType
-
-- [x] create: [itokens-payloads/impl_principalpayload.go](../../../pkg/itokens-payloads/impl_principalpayload.go)
-  - define: raw role scope claims used to distinguish missing claims from explicit values
-  - implement: ValidateTokenClaims distinguishes absent legacy scope from explicit zero and rejects invalid scope claims
-
-- [x] update: [pkg/itokensjwt/impl.go](../../../pkg/itokensjwt/impl.go)
-  - implement: invoke optional payload claim validation after successful JWT verification and payload decoding
-
-- [x] update: [pkg/iauthnzimpl/utils.go](../../../pkg/iauthnzimpl/utils.go)
-  - implement: clone existing grants and bind carried and newly issued API-token grants to exact-Workspace scope
-
-- [x] update: [pkg/iauthnz/authn-types.go](../../../pkg/iauthnz/authn-types.go)
-  - implement: remove Principal.WSID and add AuthnResult with PrincipalPayload, Principals, and distinct SubjectRoles
+- [ ] update: [pkg/iauthnz/authn-types.go](../../../pkg/iauthnz/authn-types.go)
+  - remove: Principal.WSID
+  - define: AuthnResult with PrincipalPayload, Principals, and distinct EnrichmentRoles
 
 - [x] update: [pkg/iauthnz/authn-interface.go](../../../pkg/iauthnz/authn-interface.go)
-  - implement: return AuthnResult and error from Authenticate
-  - remove: unused NewDefaultAuthenticatorType and its obsolete signature comments
+  - return: AuthnResult and error from Authenticate
+  - remove: the unused NewDefaultAuthenticatorType declaration
 
 - [x] update: [pkg/iauthnz/utils.go](../../../pkg/iauthnz/utils.go)
-  - implement: use request-local System checks and shared synthetic Guest payload construction
+  - implement: request-local System checks and shared synthetic Guest identity construction
 
-- [x] update: [pkg/iauthnzimpl/impl.go](../../../pkg/iauthnzimpl/impl.go)
-  - implement: return original PrincipalPayload and deduplicated Principals while preserving composition order and clearing failed results
-  - implement: match exact-Workspace grants for regular tokens in addition to existing owned-by matching
-  - implement: retain distinct Subject roles independently of effective Principal deduplication using existing canonical Login and Alias lookups
+- [ ] update: [pkg/iauthnzimpl/impl.go](../../../pkg/iauthnzimpl/impl.go)
+  - implement: original payload retention, WSID-free effective-role deduplication, source-stage EnrichmentRoles collection, and complete result clearing on failure
+  - collect: eligible roles from canonical and Alias Subjects, GlobalRoles, profile and Workspace ownership, Device eligibility, and the existing derived System role
+  - separate: eligible-role insertion from effective-role deduplication so overlapping sources cannot suppress legitimate candidates
+  - apply: carried exact and owned-by grants to effective Principals without adding enrichment candidates; provide no candidates for API tokens, synthetic Guest, or authentication markers
+  - preserve: source evaluation order and System short-circuits; evaluate Device eligibility at its source stage independently of already-effective role values
+  - match: exact grants by requestWSID independently of a descriptor and owned-by grants by immediate OwnerWSID
 
 - [x] update: [pkg/state/types.go](../../../pkg/state/types.go)
-  - implement: replace Principal callbacks with PrincipalPayload callbacks for command/query state
+  - replace: Principal callbacks with PrincipalPayload callbacks for command and query identity
 
-- [x] update: [state/stateprovide/impl_command_processor_state.go](../../../pkg/state/stateprovide/impl_command_processor_state.go)
-  - implement: wire the PrincipalPayload provider into RequestSubject
-
-- [x] update: [state/stateprovide/impl_query_processor_state.go](../../../pkg/state/stateprovide/impl_query_processor_state.go)
-  - implement: wire the PrincipalPayload provider into RequestSubject
+- [x] update: [state/stateprovide/impl_command_processor_state.go](../../../pkg/state/stateprovide/impl_command_processor_state.go) and [state/stateprovide/impl_query_processor_state.go](../../../pkg/state/stateprovide/impl_query_processor_state.go)
+  - wire: PrincipalPayload providers into RequestSubject
 
 - [x] update: [sys/storages/impl_subject_storage.go](../../../pkg/sys/storages/impl_subject_storage.go)
-  - implement: project identity from original PrincipalPayload while retaining storage fields and Token callback
+  - project: identity from PrincipalPayload while retaining storage fields and the Token callback
 
-- [x] update: [state/teststate/impl.go](../../../pkg/state/teststate/impl.go)
-  - implement: accept explicit PrincipalPayload fixtures for RequestSubject and wire state providers
+- [x] update: [state/teststate/impl.go](../../../pkg/state/teststate/impl.go) and [state/teststate/interface.go](../../../pkg/state/teststate/interface.go)
+  - accept: explicit PrincipalPayload fixtures in PutRequestSubject and wire them into state providers
 
-- [x] update: [state/teststate/interface.go](../../../pkg/state/teststate/interface.go)
-  - implement: update PutRequestSubject to accept PrincipalPayload
+### Request processors and authorization
 
 - [x] update: [pkg/processors/types.go](../../../pkg/processors/types.go)
-  - implement: expose the shared result through GetAuthnResult and remove the unused GetPrincipals accessor
+  - expose: the shared authentication result through GetAuthnResult in place of GetPrincipals
 
 - [x] update: [pkg/processors/utils.go](../../../pkg/processors/utils.go)
-  - implement: initialize anonymous-only results without adding grants
+  - initialize: anonymous-only authentication results with synthetic Guest identity and no enrichment authority
 
-- [x] update: [processors/command/impl.go](../../../pkg/processors/command/impl.go)
-  - implement: propagate and reset results, migrate System checks, and preserve legacy ACL decisions
-  - remove: unused GetPrincipals method; retain GetAuthnResult for consumers
-  - preserve: Verbose fallback-success logging without adding request context
-
-- [x] update: [processors/command/types.go](../../../pkg/processors/command/types.go)
-  - implement: retain the result and wire its PrincipalPayload into reusable state
+- [x] update: [processors/command/impl.go](../../../pkg/processors/command/impl.go) and [processors/command/types.go](../../../pkg/processors/command/types.go)
+  - propagate: authentication results, reset request state, project PrincipalPayload identity, and migrate System checks and legacy authorization
+  - preserve: existing Verbose fallback-success diagnostics
 
 - [x] update: [processors/query/impl.go](../../../pkg/processors/query/impl.go)
-  - implement: propagate and reset the result across query v1 authorization and extension execution
-  - remove: unused GetPrincipals method
+  - propagate: authentication results through query v1 authorization and extension execution; expose GetAuthnResult and reset the result on release
 
-- [x] update: [processors/query2/impl.go](../../../pkg/processors/query2/impl.go)
-  - implement: propagate PrincipalPayload and Principals through query v2 authorization and state construction
+- [x] update: [processors/query2/impl.go](../../../pkg/processors/query2/impl.go) and [processors/query2/util.go](../../../pkg/processors/query2/util.go)
+  - propagate: authentication results through query v2 authorization and state construction, expose GetAuthnResult, and reset results on release
 
 - [x] update: [query2/impl_auth_refresh_handler.go](../../../pkg/processors/query2/impl_auth_refresh_handler.go)
-  - implement: route refresh requests and populate response ProfileWSID from the authentication result's PrincipalPayload
+  - populate: refresh response ProfileWSID from PrincipalPayload
 
 - [x] update: [query2/impl_cdocs_handler.go](../../../pkg/processors/query2/impl_cdocs_handler.go), [query2/impl_docs_handler.go](../../../pkg/processors/query2/impl_docs_handler.go), and [query2/impl_view_handler.go](../../../pkg/processors/query2/impl_view_handler.go)
-  - implement: pass effective Principals and PrincipalPayload to legacy result authorization; retain existing Verbose fallback diagnostics
-
-- [x] update: [processors/query2/util.go](../../../pkg/processors/query2/util.go)
-  - implement: retain and reset the query v2 result and expose it through GetAuthnResult
-  - remove: unused GetPrincipals method and separate profileWSID field
+  - pass: effective Principals and PrincipalPayload to legacy result authorization while retaining existing diagnostics
 
 - [x] update: [processors/n10n/impl_subscribeandwatch.go](../../../pkg/processors/n10n/impl_subscribeandwatch.go)
-  - implement: consume each subscription Workspace result independently
+  - use: each subscription Workspace's authentication result independently
 
-- [x] update: [processors/oldacl/acl.go](../../../pkg/processors/oldacl/acl.go)
-  - implement: use explicit PrincipalPayload identity for Guest matching; retain Verbose denial diagnostics without adding a context argument
+- [x] update: [processors/oldacl/acl.go](../../../pkg/processors/oldacl/acl.go), [processors/oldacl/impl.go](../../../pkg/processors/oldacl/impl.go), and [processors/oldacl/utils.go](../../../pkg/processors/oldacl/utils.go)
+  - match: Guest access using PrincipalPayload identity, and role access using request-local Principals without WSID
+  - preserve: authorization ancestry and legacy role expansion, input immutability, and Verbose diagnostics
+  - remove: WSID from Principal formatting
 
-- [x] update: [processors/oldacl/impl.go](../../../pkg/processors/oldacl/impl.go)
-  - implement: remove Principal WSID matching and preserve reserved Guest identity semantics
+### Token enrichment
 
-- [x] update: [processors/oldacl/utils.go](../../../pkg/processors/oldacl/utils.go)
-  - implement: remove WSID-bearing role expansion and Principal formatting
-
-- [x] update: [sys/authnz/impl_enrichprincipaltoken.go](../../../pkg/sys/authnz/impl_enrichprincipaltoken.go)
-  - implement: clone original payload roles and append only SubjectRoles using requestWSID and RoleScopeWorkspace; preserve API-token payloads without additions
-  - reuse: issuePrincipalTokenRR from refresh for the enrichment response and remove duplicate enrichPrincipalTokenRR
+- [ ] update: [sys/authnz/impl_enrichprincipaltoken.go](../../../pkg/sys/authnz/impl_enrichprincipaltoken.go)
+  - require: a nonempty bearer token and obtain the existing authentication result from IProcessorWorkpiece
+  - copy: PrincipalPayload and clone its Roles slice
+  - append: only regular-token EnrichmentRoles as `{Scope: RoleScopeWorkspacesOwnedBy, WSID: args.WSID, QName: role}` when the full tuple is absent
+  - preserve: all original tuples and identity fields, add no API-token grants, and do not reconstruct candidates from effective Principals
+  - issue: with the existing Application binding and DefaultPrincipalTokenExpiration, without further source reads or validation
+  - reuse: issuePrincipalTokenRR from refresh for EnrichedToken and remove the duplicate enrichPrincipalTokenRR type
 
 ### Validation
 
-- [x] verify: scoped regressions and contract migration
-  - run: focused tests for iauthnz, iauthnzimpl, authnz, storages, state providers, processors, command/query v1/v2, oldacl, and N10n
-  - run: `go test ./pkg/sys/it -run '^TestForeignAuthorization$' -count=1`
+- [ ] verify: enrichment sources and ownership boundaries
+  - run: `go test ./pkg/iauthnz ./pkg/iauthnzimpl ./pkg/sys/authnz -count=1`
+  - run: `go test ./pkg/sys/it -run '^TestForeignAuthorization$|^TestRoleScopedToOneForeignWorkspace$|^TestRefreshPrincipalToken$' -count=1`
+  - verify: direct parent ownership and Subject roles enable child access, carried roles alone cannot enable another ownership level, and independent overlapping sources remain eligible
+  - verify: original payload immutability, complete tuple deduplication, API-token non-expansion, and scope-preserving refresh
+
+- [ ] verify: authentication-result integration
+  - run: focused tests for coreutils, itokens-payloads, itokensjwt, processors, command, query, query2, oldacl, N10n, stateprovide, and storages without repeating packages already validated unless changes or failures require it
   - run: `go -C pkg/iextengine/wazero/_testdata test ./tests/wasm -run '^Test_CommandStorages$' -count=1`
-  - run: `go test ./... -run '^$'` to compile all root-module packages and tests without executing unrelated suites
-  - run: scoped golangci-lint and `git diff --check`
-  - review: original PrincipalPayload immutability, Subject-only WorkspaceDevice capture, unchanged initial grant scopes, exact added grants, and request isolation
-  - previous validation: scoped unit tests, TestForeignAuthorization, nested WASM Test_CommandStorages, root-module compilation, scoped lint, formatting, relative file links, and whitespace checks passed before the latest test refactors
+  - run: `go test ./... -run '^$'` to compile root-module packages and tests without executing unrelated suites
+  - verify: canonical identity, API and System identity, Guest matching, request isolation, explicit scope semantics, legacy normalization, and existing endpoint authorization
 
-- [x] review: latest test refactors
-  - verify: root assertion initialization, independent expected grants, shared mock expectations, removed vacuous checks, and retained production behavior coverage
-  - run: focused package regressions and documentation link, changed-file coverage, and whitespace checks during synchronization
-  - result: tests pass for coreutils, iauthnz, iauthnzimpl, itokens-payloads, itokensjwt, processors, command, query, query2, oldacl, N10n, stateprovide, authnz, and storages; teststate compiles with no test files
-  - result: every changed source and specification file outside change folders is linked in the plan, relative file links resolve, and git diff --check passes
-
-- [x] review: reuse merged AIR-5210 and AIR-5221 changes after rebasing onto main
-  - verify: production retains the merged role-scope validation and issuance contracts; tests use the merged shared mocks without duplicating their implementations
-  - verify: assertion setup follows AGENTS.md in all 28 changed root tests that use assertions; local doubles remain only where dependency cycles prevent sharing
-  - result: focused package tests, full TestForeignAuthorization, nested WASM Test_CommandStorages, and lint for changes since main pass
-
-- [x] review: preserve initial grants and capture only Subject roles in the request Workspace
-  - result: affected authentication, token, processor, state, and storage package tests pass; TestForeignAuthorization passes with explicit HTTP status checks and no retries for the access checks
-  - result: temporary Go overlays confirm that the VIT test detects owned-by additions, ignored regular-token exact grants, and exact grants incorrectly applied to child Workspaces
-  - result: production-path tests detect temporary regressions that capture every effective role or drop a Subject assignment already effective from another source
-  - result: all root-module packages and tests compile with `go test ./... -run '^$'`
-  - result: scoped lint reports no issues; formatting, root assertion setup, relative links, and whitespace checks pass
-  - result: Gherkin structural checks pass for eight scenarios and thirteen cases; behavior coverage uses the mapped Go tests without executable Gherkin bindings
-
-- [x] review: consolidated tests and unused interfaces
-  - preserve: TestBasicUsage; move canonical and Alias contribution checks into TestAuthenticationPayload and remove overlapping authentication cases
-  - verify: repeat enrichment while the Subject still grants the role; retain one API-token preservation check and separate refresh response and access checks
-  - remove: obsolete lookup-count checks, unused GetPrincipals methods and factory type, and the duplicate token response type
-  - result: affected coreutils, authentication, processor, state provider, authnz, and storage package tests pass; teststate compiles with no test files; TestRefreshPrincipalToken and TestForeignAuthorization pass in VIT
-  - result: changed-file coverage, relative plan links, relevant Gherkin structure, and whitespace checks pass; direct workpiece accessor, release, and failure-cleanup tests are not claimed as coverage
+- [ ] review: platform design and implementation
+  - compare: the complete change against main and the requirements in What, including the grandchild failure in Why and required parent-to-child delegation
+  - verify: one authoritative enrichment eligibility snapshot, no duplicated source lookups or candidate abstractions, and no dependence on Principal.WSID
+  - verify: specifications share canonical grant and eligibility rules and contain no consumer-specific names or dependencies
+  - verify: every modified root test initializes require once as its first statement; shared mocks and independent expectations exercise production behavior
+  - verify: feature Scenario names, verbatim step and Examples mappings, exactly one When and Then per Scenario, and precise observable outcomes
+  - verify: every E1-E15 case and every acceptance criterion has a written Scenario or Examples row and mapped production assertions; token-claim checks alone do not prove the required 400/300/500 or parent/child/grandchild access boundaries
+  - run: formatting, scoped lint, relative-link and changed-file coverage checks, and `git diff --check`
+  - report: only the unit, VIT, compilation, and source-review checks actually performed

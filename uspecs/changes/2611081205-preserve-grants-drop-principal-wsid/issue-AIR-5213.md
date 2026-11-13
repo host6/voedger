@@ -1,4 +1,4 @@
-# Reseller access, voedger: remove Principal.WSID and separate effective principals from enrichment grants
+# Remove Principal.WSID and separate effective principals from enrichment grants
 
 - URL: https://untill.atlassian.net/browse/AIR-5213
 - ID: AIR-5213
