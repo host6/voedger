@@ -97,7 +97,7 @@ Four sources by origin contribute to a request's principal set; each is enumerat
 
 - `[Token-carried]`
   - Composition: regular tokens emit GlobalRoles and matching exact-Workspace or owned-by roles; API tokens emit matching exact-Workspace roles, with all source grants retained unchanged in PrincipalPayload
-  - Origin: `[[Authentication]]` snapshots `GlobalRoles` at sign-in, including updates made through `[c.registry.UpdateGlobalRoles]`; see [arch-authn.md](./arch-authn.md). Token role grants are populated by API-token issuance and `[q.sys.EnrichPrincipalToken]`; their lifecycle and scope encoding are defined in [Token management](./arch-tokens.md)
+  - Origin: `[[Authentication]]` snapshots `GlobalRoles` at sign-in, including updates made through `[c.registry.UpdateGlobalRoles]`; see [arch-authn.md](./arch-authn.md). Token role grants are populated by trusted application-bound issuance, API-token issuance, and `[q.sys.EnrichPrincipalToken]`; their lifecycle and scope encoding are defined in [Token management](./arch-tokens.md)
   - API tokens process exact-Workspace grants before returning, while regular User/Device tokens process exact-Workspace and owned-by grants after their existing System short-circuits and descriptor-based role derivation. Exact matching does not require a Workspace descriptor; owned-by matching requires its OwnerWSID
 
 - `[Request-context]`
@@ -115,6 +115,9 @@ Token-carried role matching:
 | `RoleScopeWorkspace`         | `role.WSID == RequestWSID`                                                      | API or regular User/Device token |
 | `RoleScopeWorkspacesOwnedBy` | The request Workspace descriptor exists and `role.WSID == descriptor.OwnerWSID` | Regular User/Device token        |
 
+The [auth model](./context.md#rolescope) defines scope meanings. Missing scopes, explicit zero, and invalid scope claims are handled by the [principal payload validation contract](./arch-tokens.md#payload-contract) before composition. Matching grants emit WSID-free Role Principals, deduplicated against the other effective role sources; original grant scopes and Workspace bindings remain in PrincipalPayload.
+
+An exact-Workspace grant limits only that grant's applicability. A regular token can still authorize requests elsewhere through its other role sources; API-token restricted composition remains controlled by `IsAPIToken`.
 
 VSQL role inheritance (e.g., `ProfileOwner -> WorkspaceOwner`) is expanded later by the ACL engine, not during composition; see `[Role inheritance map]` above.
 

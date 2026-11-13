@@ -10,7 +10,7 @@ Roles:
   - Caller obtaining or refreshing a principal token through the registry and sys APIs.
 
 - `@System`
-  - Caller issuing tokens with API-token semantics (`IsAPIToken=true`) for backend integrations and trusted internal callers.
+  - Trusted caller issuing application-bound Principal Tokens with scoped grants or converting payloads to API tokens for backend integrations
 
 ## Scenarios overview
 
@@ -19,6 +19,9 @@ Roles:
 
 - **`Issue API token`**
   - `@System` uses `[API-token issuer]` to convert the supplied principal payload into an API token with exact-Workspace role grants
+
+- **`Issue regular token with an exact-Workspace grant`**
+  - `@System` uses `[IAppTokens]` to preserve a regular token's identity and existing grants while adding an exact-Workspace grant, as detailed in the issuance flow below
 
 - **`Refresh principal token`**
   - `@Client` calls `[q.sys.RefreshPrincipalToken]` with the current `[Principal Token]`; the payload is decoded, the same identity (including the captured `Login` and `Alias`) is re-encoded with the same TTL/AppQName by `[ITokens].IssueToken`, and the new token is returned. Refresh never re-resolves the login or alias and never updates the captured values.
@@ -138,6 +141,22 @@ Payload contract
   -> @System: API token
 ```
 
+### Issue regular token with an exact-Workspace grant
+
+```text
+@System
+  -> [IAppTokens].ValidateToken(current regular Principal Token, &payload)
+       -> verify application binding, signature, audience, expiry, and payload claims
+  -> require payload.IsAPIToken == false
+  -> retain Login, Alias, SubjectKind, ProfileWSID, GlobalRoles, and existing Roles
+  -> append RoleType{Scope: RoleScopeWorkspace, WSID: target Workspace, QName: granted role}
+  -> [IAppTokens].IssueToken(requested lifetime, &payload)
+       -> [ITokens]: sign for the bound application and requested lifetime
+  -> @System: regular Principal Token with IsAPIToken still false
+```
+
+This flow uses the trusted in-process token service; it adds no public issuance endpoint or Subject membership. Effective grant matching and the additional permissions retained by regular tokens are defined in [Authorization](./arch-authz.md#role-sources).
+
 ### Refresh principal token
 
 ```text
@@ -190,6 +209,7 @@ The `IsAPIToken` branch of principal composition is documented in [arch-authz.md
 ### Versioning and compatibility
 
 - Every enrichment request preserves initial grants and emits only exact-Workspace additions from the request's SubjectRoles snapshot; API-token enrichment has no additions
+- Every trusted issuer of regular tokens with exact-Workspace grants requires all relevant authentication nodes to honor explicit scopes and refresh and enrichment nodes to preserve them before issuance begins
 - Every principal-token validation path uses the shared payload validation hook, including authentication, refresh, and enrichment
 
-Regular tokens with exact-Workspace grants require validators that honor explicit scope. Older validators may ignore these grants or interpret them as owned-by grants, and older refresh nodes that drop Scope can turn exact grants into owned-by grants through legacy inference. Deploy scope-aware authentication and scope-preserving refresh before relying on exact-Workspace enrichment. Legacy tokens without Scope retain their original defaults
+Legacy tokens without Scope retain the token-kind defaults in the payload contract. Omitting Scope remains compatible with API-token exact-Workspace grants and regular-token owned-by grants. Older validators may ignore regular-token exact grants or interpret them as owned-by grants, and older refresh or enrichment nodes that drop Scope can turn exact grants into owned-by grants through legacy inference. Scope-aware authentication and scope-preserving serialization are both required; enrichment nodes must also apply the Subject-only policy above to avoid introducing delegated owned-by grants. Incompatible nodes must not process these tokens while they remain valid, including during rollback.

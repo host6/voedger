@@ -378,7 +378,8 @@ Invariants:
 - PrincipalToken validation and renewal do not read `CanonicalLoginEnablement`.
 - LoginAlias or canonical enablement changes do not rewrite an already-issued PrincipalToken.
 - `api_token` selects restricted principal composition, while each `RoleGrant` carries its applicability through `RoleScope`
-- Regular User and Device tokens apply both exact-Workspace and owned-by grants; API tokens apply only exact-Workspace grants
+- Regular User and Device tokens can carry both `RoleScopeWorkspace` and `RoleScopeWorkspacesOwnedBy` grants
+- API tokens retain restricted principal composition, applying only matching `RoleScopeWorkspace` grants alongside the authenticated-user role
 - Legacy tokens without explicit role scopes retain the scope implied by their original token kind
 
 Enrichment rules:
